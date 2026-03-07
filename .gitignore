@@ -1,0 +1,24 @@
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Generated assets
+icon.ico
+icon.png
+
+# Config (user-specific)
+config.json
+
+# IDE
+.vscode/
+.idea/
+
+# PyInstaller
+*.manifest
+*.log

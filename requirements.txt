@@ -1,0 +1,6 @@
+winsdk
+pypresence
+requests
+Pillow
+pystray
+pywebview
