@@ -222,7 +222,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
 </div>
 
-<!-- Discord Client ID -->
 <div class="card">
   <div class="card-title">Discord Client ID</div>
   <div class="row">
@@ -239,28 +238,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
 </div>
 
-<!-- Settings -->
 <div class="card">
   <div class="card-title">Settings</div>
-
-  <div class="row">
-    <div class="row-labels"><span class="row-label">Poll interval (seconds)</span></div>
-    <input type="number" id="pollInterval" min="1" max="30" value="5">
-  </div>
-  <div class="separator"></div>
-
-  <div class="row">
-    <div class="row-labels">
-      <span class="row-label">Show when paused</span>
-      <div class="row-desc">Display presence while music is paused</div>
-    </div>
-    <label class="toggle">
-      <input type="checkbox" id="showPaused">
-      <div class="toggle-track"></div>
-      <div class="toggle-knob"></div>
-    </label>
-  </div>
-  <div class="separator"></div>
 
   <div class="row">
     <div class="row-labels">
@@ -315,8 +294,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     const data = {
       use_custom: mode === 'custom',
       client_id: customId,
-      poll_interval: parseInt(document.getElementById('pollInterval').value) || 5,
-      show_paused: document.getElementById('showPaused').checked,
       start_on_startup: document.getElementById('startOnStartup').checked,
       start_minimized: document.getElementById('startMinimized').checked
     };
@@ -324,7 +301,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     await pywebview.api.save_settings(data);
   }
 
-  // Load initial values from Python
   async function init() {
     const cfg = await pywebview.api.get_config();
     if (cfg.use_custom_client_id) {
@@ -332,8 +308,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       document.getElementById('customIdGroup').classList.add('visible');
     }
     document.getElementById('clientId').value = cfg.discord_client_id || '';
-    document.getElementById('pollInterval').value = cfg.poll_interval_seconds || 5;
-    document.getElementById('showPaused').checked = !!cfg.show_when_paused;
     document.getElementById('startOnStartup').checked = !!cfg.start_on_startup;
     document.getElementById('startMinimized').checked = !!cfg.start_minimized;
   }
@@ -361,8 +335,6 @@ class _Api:
         config = {
             "discord_client_id": client_id,
             "use_custom_client_id": use_custom,
-            "poll_interval_seconds": max(1, min(30, int(data.get("poll_interval", 5)))),
-            "show_when_paused": bool(data.get("show_paused")),
             "start_on_startup": bool(data.get("start_on_startup")),
             "start_minimized": bool(data.get("start_minimized")),
         }
@@ -372,7 +344,6 @@ class _Api:
         if self._on_save:
             self._on_save(config)
 
-        # Close the window
         window = self._window_ref()
         if window:
             window.destroy()
@@ -394,7 +365,7 @@ class SettingsWindow:
             html=html,
             js_api=api,
             width=460,
-            height=580,
+            height=470,
             resizable=False,
             background_color="#202020",
         )

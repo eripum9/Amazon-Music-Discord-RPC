@@ -19,7 +19,6 @@ async def _get_amazon_session(manager):
         source = session.source_app_user_model_id.lower()
         if "amazon" in source and "music" in source:
             return session
-    # Fallback: some installs report as just "Amazon.Music"
     for session in sessions:
         source = session.source_app_user_model_id.lower()
         if "amazon" in source:
@@ -51,7 +50,6 @@ async def _get_media_info(session):
 
 
 async def get_current_track():
-    """Returns a dict with track info or None if Amazon Music isn't playing."""
     manager = await SessionManager.request_async()
     session = await _get_amazon_session(manager)
     if session is None:
@@ -60,12 +58,10 @@ async def get_current_track():
 
 
 def get_track_sync():
-    """Synchronous wrapper for get_current_track."""
     return asyncio.run(get_current_track())
 
 
 if __name__ == "__main__":
-    # Quick test: run this file while Amazon Music is playing
     track = get_track_sync()
     if track:
         print(f"Title:    {track['title']}")

@@ -34,11 +34,11 @@ class DiscordRPC:
             self.connect()
         return self.connected
 
-    def update(self, title, artist, album_art_url=None, album_name=None, start_ts=None, duration=0, is_paused=False, position=None):
+    def update(self, title, artist, album_art_url=None, album_name=None, start_ts=None, duration=0):
         if not self._ensure_connected():
             return
 
-        track_key = f"{title}|{artist}|{'paused' if is_paused else 'playing'}"
+        track_key = f"{title}|{artist}"
 
         kwargs = {
             "activity_type": ActivityType.LISTENING,
@@ -47,17 +47,10 @@ class DiscordRPC:
             "large_text": album_name if album_name else f"{title}",
         }
 
-        if is_paused:
-            # Show paused position in state
-            if position is not None and duration > 0:
-                pos_m, pos_s = divmod(int(position), 60)
-                dur_m, dur_s = divmod(int(duration), 60)
-                kwargs["state"] = f"by {artist}  ⏸ {pos_m}:{pos_s:02d}/{dur_m}:{dur_s:02d}"
-        else:
-            if start_ts:
-                kwargs["start"] = start_ts
-                if duration > 0:
-                    kwargs["end"] = int(start_ts + duration)
+        if start_ts:
+            kwargs["start"] = start_ts
+            if duration > 0:
+                kwargs["end"] = int(start_ts + duration)
 
         if album_art_url:
             kwargs["large_image"] = album_art_url

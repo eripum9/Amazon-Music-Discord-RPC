@@ -5,16 +5,14 @@ _cache = {}
 
 
 def _clean_title(title):
-    """Remove common suffixes like [Explicit], (feat. X), etc. for better search."""
     import re
-    title = re.sub(r'\s*\[.*?\]', '', title)  # [Explicit], [Deluxe], etc.
+    title = re.sub(r'\s*\[.*?\]', '', title)
     title = re.sub(r'\s*\(feat\..*?\)', '', title, flags=re.IGNORECASE)
     title = re.sub(r'\s*\(ft\..*?\)', '', title, flags=re.IGNORECASE)
     return title.strip()
 
 
 def _search_deezer(title, artist):
-    """Search Deezer for album art. Returns (cover_url, album_name) or (None, None)."""
     clean = _clean_title(title)
     primary_artist = artist.split(' feat.')[0].split(' ft.')[0].strip()
     query = f'artist:"{primary_artist}" track:"{clean}"'
@@ -35,7 +33,6 @@ def _search_deezer(title, artist):
 
 
 def _search_itunes(title, artist):
-    """Fallback: search iTunes for album art. Returns (cover_url, album_name) or (None, None)."""
     clean = _clean_title(title)
     primary_artist = artist.split(' feat.')[0].split(' ft.')[0].strip()
     query = f"{clean} {primary_artist}"
@@ -55,8 +52,6 @@ def _search_itunes(title, artist):
 
 
 def get_album_art(title, artist):
-    """Get album art URL and album name for a song. Uses cache.
-    Returns (art_url, album_name). Either can be None."""
     cache_key = f"{title}|{artist}".lower()
     if cache_key in _cache:
         return _cache[cache_key]

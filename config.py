@@ -8,7 +8,6 @@ DEFAULT_CLIENT_ID = "1479925587697995857"
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", ""), APP_NAME)
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
-# Fallback: if running from source, use the project directory
 if not os.environ.get("APPDATA") or getattr(sys, "frozen", False) is False:
     CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
     CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
@@ -16,8 +15,6 @@ if not os.environ.get("APPDATA") or getattr(sys, "frozen", False) is False:
 DEFAULTS = {
     "discord_client_id": DEFAULT_CLIENT_ID,
     "use_custom_client_id": False,
-    "poll_interval_seconds": 5,
-    "show_when_paused": True,
     "start_on_startup": False,
     "start_minimized": True,
 }
@@ -29,7 +26,6 @@ def load_config():
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "r") as f:
             saved = json.load(f)
-        # Merge with defaults for any missing keys
         config = {**DEFAULTS, **saved}
     else:
         config = dict(DEFAULTS)
@@ -43,7 +39,6 @@ def save_config(config):
 
 
 def get_exe_path():
-    """Get the path to the current executable (works for both .py and frozen .exe)."""
     if getattr(sys, "frozen", False):
         return sys.executable
     return os.path.abspath(sys.argv[0])
