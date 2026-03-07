@@ -42,7 +42,7 @@ Download `AmazonMusicRPC_Setup.exe` from [Releases](../../releases), run it, and
 ### From Source
 
 ```bash
-git clone https://github.com/eripum9/AmazonMusic_rpc.git
+git clone https://github.com/eripum9/Amazon-Music-Discord-RPC.git
 cd AmazonMusic_rpc
 pip install -r requirements.txt
 python main.py
