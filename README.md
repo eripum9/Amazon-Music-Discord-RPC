@@ -5,6 +5,16 @@ Discord Rich Presence for Amazon Music on Windows. Shows what you're listening t
 ![Windows](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-yellow)
 
+## Preview
+
+### Discord Rich Presence
+
+![Discord Rich Presence](example1.png)
+
+### Settings UI
+
+![Settings UI](example2.png)
+
 ## Features
 
 - **Live track display** — title, artist, album name, and elapsed time
@@ -32,7 +42,7 @@ Download `AmazonMusicRPC_Setup.exe` from [Releases](../../releases), run it, and
 ### From Source
 
 ```bash
-git clone https://github.com/youruser/AmazonMusic_rpc.git
+git clone https://github.com/eripum9/AmazonMusic_rpc.git
 cd AmazonMusic_rpc
 pip install -r requirements.txt
 python main.py
