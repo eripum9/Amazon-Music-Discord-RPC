@@ -311,6 +311,7 @@ def open_settings(icon=None, item=None):
             creationflags=0x08000000
         )
     def _reload_after_delay():
+        global current_config
         time.sleep(2)
         old_config = dict(current_config)
         for _ in range(120):
@@ -355,7 +356,7 @@ def wrong_song_handler(icon=None, item=None):
             else:
                 cmd = [sys.executable, os.path.join(SCRIPT_DIR, "track_picker.py"), tmp.name]
 
-            subprocess.run(cmd, timeout=60, creationflags=0x08000000)
+            subprocess.run(cmd, timeout=60)
 
             with open(tmp.name, "r", encoding="utf-8") as f:
                 response = json.load(f)
