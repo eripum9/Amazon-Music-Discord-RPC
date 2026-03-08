@@ -1,8 +1,11 @@
 # MIT License - Copyright (c) 2026 eripum9
 
 import asyncio
+import re
 from winsdk.windows.media.control import GlobalSystemMediaTransportControlsSessionManager as SessionManager
 from winsdk.windows.media.control import GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus
+
+_EXPLICIT_RE = re.compile(r'\s*\[Explicit\]\s*$', re.IGNORECASE)
 
 
 PLAYBACK_STATUS_MAP = {
@@ -33,6 +36,7 @@ async def _get_media_info(session):
     playback = session.get_playback_info()
 
     title = info.title or ""
+    title = _EXPLICIT_RE.sub("", title)
     artist = info.artist or ""
     album = info.album_title or ""
     status = PLAYBACK_STATUS_MAP.get(playback.playback_status, "stopped")

@@ -98,7 +98,7 @@ def _run_picker_async(request_data, raw_key, callback):
             else:
                 cmd = [sys.executable, os.path.join(SCRIPT_DIR, "track_picker.py"), tmp.name]
 
-            subprocess.run(cmd, timeout=120, creationflags=0x08000000)
+            subprocess.run(cmd, timeout=120)
 
             with open(tmp.name, "r", encoding="utf-8") as f:
                 response = json.load(f)
@@ -174,7 +174,7 @@ def _resolve_missing_title(title, artist, raw_key):
 
 
 def rpc_loop():
-    global rpc_running
+    global rpc_running, _current_track_raw
 
     config = current_config
     if config.get("use_custom_client_id") and config.get("discord_client_id"):
