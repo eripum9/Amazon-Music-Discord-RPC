@@ -54,7 +54,7 @@ python main.py
 - **Amazon Music** desktop app
 - **Discord** desktop app (running)
 
-No Python installation needed if using the installer.
+No Python installation needed if using the Installer.
 
 ## Building
 
