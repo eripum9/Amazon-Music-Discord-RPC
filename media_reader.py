@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 import asyncio
 from winsdk.windows.media.control import GlobalSystemMediaTransportControlsSessionManager as SessionManager
 from winsdk.windows.media.control import GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus

@@ -17,6 +17,7 @@ a = Analysis(
         'webview',
         'clr',
         'pythonnet',
+        'track_picker',
     ],
     hookspath=[],
     hooksconfig={},

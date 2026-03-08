@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 import requests
 from urllib.parse import quote
 
@@ -10,6 +12,49 @@ def _clean_title(title):
     title = re.sub(r'\s*\(feat\..*?\)', '', title, flags=re.IGNORECASE)
     title = re.sub(r'\s*\(ft\..*?\)', '', title, flags=re.IGNORECASE)
     return title.strip()
+
+
+def search_tracks(query, limit=5):
+    url = f"https://api.deezer.com/search?q={quote(query)}&limit={limit}"
+    try:
+        resp = requests.get(url, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+        results = []
+        for track in data.get("data", []):
+            album = track.get("album", {})
+            art = album.get("cover_xl") or album.get("cover_big") or album.get("cover_medium")
+            results.append({
+                "title": track.get("title", ""),
+                "artist": track.get("artist", {}).get("name", ""),
+                "album": album.get("title", ""),
+                "art_url": art or "",
+            })
+        if results:
+            return results
+    except (requests.RequestException, KeyError, ValueError):
+        pass
+
+    url = f"https://itunes.apple.com/search?term={quote(query)}&media=music&limit={limit}"
+    try:
+        resp = requests.get(url, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+        results = []
+        for r in data.get("results", []):
+            art_url = r.get("artworkUrl100", "")
+            if art_url:
+                art_url = art_url.replace("100x100bb", "600x600bb")
+            results.append({
+                "title": r.get("trackName", ""),
+                "artist": r.get("artistName", ""),
+                "album": r.get("collectionName", ""),
+                "art_url": art_url,
+            })
+        return results
+    except (requests.RequestException, KeyError, ValueError):
+        pass
+    return []
 
 
 def _search_deezer(title, artist):

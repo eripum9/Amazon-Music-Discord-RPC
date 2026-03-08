@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 import os
 import sys
 import base64

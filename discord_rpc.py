@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 import time
 import traceback
 from pypresence import Presence

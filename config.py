@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 import json
 import os
 import sys
@@ -17,6 +19,7 @@ DEFAULTS = {
     "use_custom_client_id": False,
     "start_on_startup": False,
     "start_minimized": True,
+    "track_mappings": {},
 }
 
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
