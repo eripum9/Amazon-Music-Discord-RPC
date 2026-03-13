@@ -9,11 +9,11 @@ Discord Rich Presence for Amazon Music on Windows. Shows what you're listening t
 
 ### Discord Rich Presence
 
-![Discord Rich Presence](images/example1.png)
+![Discord Rich Presence](Images/example1.png)
 
 ### Settings UI
 
-![Settings UI](images/example2.png)
+![Settings UI](Images/example2.png)
 
 ## Features
 
