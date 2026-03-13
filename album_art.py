@@ -71,10 +71,10 @@ def _search_deezer(title, artist):
                 album = track.get("album", {})
                 art = album.get("cover_xl") or album.get("cover_big") or album.get("cover_medium")
                 if art:
-                    return art, album.get("title", "")
+                    return art, album.get("title", ""), track.get("link", "")
     except (requests.RequestException, KeyError, IndexError, ValueError):
         pass
-    return None, None
+    return None, None, None
 
 
 def _search_itunes(title, artist):
@@ -101,11 +101,12 @@ def get_album_art(title, artist):
     if cache_key in _cache:
         return _cache[cache_key]
 
-    art_url, album_name = _search_deezer(title, artist)
+    art_url, album_name, track_link = _search_deezer(title, artist)
     if not art_url:
         art_url, album_name = _search_itunes(title, artist)
+        track_link = None
 
-    result = (art_url, album_name or "")
+    result = (art_url, album_name or "", track_link or "")
     _cache[cache_key] = result
     return result
 

@@ -188,7 +188,10 @@ def rpc_loop():
     last_album_name = None
     last_art_fetch_key = None
     last_start_ts = None
+    last_track_link = None
     presence_visible = False
+
+    song_link_enabled = config.get("song_link_enabled", False)
 
     print("[RPC] Started.")
 
@@ -206,6 +209,7 @@ def rpc_loop():
                     last_album_name = None
                     last_art_fetch_key = None
                     last_start_ts = None
+                    last_track_link = None
                 time.sleep(5)
                 continue
 
@@ -228,6 +232,7 @@ def rpc_loop():
                 last_album_name = None
                 last_art_fetch_key = None
                 last_start_ts = None
+                last_track_link = None
                 time.sleep(5)
                 continue
 
@@ -236,7 +241,7 @@ def rpc_loop():
             track_art_key = f"{title}|{artist}"
 
             if raw_key != last_track_key:
-                last_art_url, last_album_name = get_album_art(title, artist)
+                last_art_url, last_album_name, last_track_link = get_album_art(title, artist)
                 if not last_album_name and track["album"]:
                     last_album_name = track["album"]
                 last_start_ts = int(time.time() - track["position"]) if track["position"] else int(time.time())
@@ -247,11 +252,15 @@ def rpc_loop():
                 last_track_key = raw_key
                 last_art_fetch_key = track_art_key
             elif raw_key in _resolved_cache and last_art_fetch_key != track_art_key:
-                last_art_url, last_album_name = get_album_art(title, artist)
+                last_art_url, last_album_name, last_track_link = get_album_art(title, artist)
                 if not last_album_name and track["album"]:
                     last_album_name = track["album"]
                 last_art_fetch_key = track_art_key
                 print(f"[Art] Refreshed after resolve: '{last_album_name}' for '{title}'")
+
+            buttons = None
+            if song_link_enabled and last_track_link:
+                buttons = [{"label": "Listen on Deezer", "url": last_track_link}]
 
             rpc.update(
                 title=title,
@@ -260,6 +269,7 @@ def rpc_loop():
                 album_name=last_album_name,
                 start_ts=last_start_ts,
                 duration=track["duration"],
+                buttons=buttons,
             )
             presence_visible = True
             time.sleep(5)

@@ -36,7 +36,7 @@ class DiscordRPC:
             self.connect()
         return self.connected
 
-    def update(self, title, artist, album_art_url=None, album_name=None, start_ts=None, duration=0):
+    def update(self, title, artist, album_art_url=None, album_name=None, start_ts=None, duration=0, buttons=None):
         if not self._ensure_connected():
             return
 
@@ -56,6 +56,9 @@ class DiscordRPC:
 
         if album_art_url:
             kwargs["large_image"] = album_art_url
+
+        if buttons:
+            kwargs["buttons"] = buttons
 
         try:
             resp = self.rpc.update(**kwargs)

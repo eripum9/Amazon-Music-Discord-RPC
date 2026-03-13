@@ -20,6 +20,7 @@ DEFAULTS = {
     "start_on_startup": False,
     "start_minimized": True,
     "track_mappings": {},
+    "song_link_enabled": False,
 }
 
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"

@@ -269,6 +269,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
 </div>
 
+<div class="card">
+  <div class="card-title">Song Link</div>
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Show "Listen on Deezer" button</span>
+      <div class="row-desc">Adds a clickable link button on your Discord presence</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="songLinkEnabled">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+</div>
+
 <button class="save-btn" onclick="save()">Save Changes</button>
 
 <script>
@@ -297,7 +312,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       use_custom: mode === 'custom',
       client_id: customId,
       start_on_startup: document.getElementById('startOnStartup').checked,
-      start_minimized: document.getElementById('startMinimized').checked
+      start_minimized: document.getElementById('startMinimized').checked,
+      song_link_enabled: document.getElementById('songLinkEnabled').checked
     };
 
     await pywebview.api.save_settings(data);
@@ -312,6 +328,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     document.getElementById('clientId').value = cfg.discord_client_id || '';
     document.getElementById('startOnStartup').checked = !!cfg.start_on_startup;
     document.getElementById('startMinimized').checked = !!cfg.start_minimized;
+    document.getElementById('songLinkEnabled').checked = !!cfg.song_link_enabled;
   }
 
   window.addEventListener('pywebviewready', init);
@@ -330,6 +347,10 @@ class _Api:
         cfg["start_on_startup"] = is_startup_enabled()
         return cfg
 
+    def open_url(self, url):
+        import webbrowser
+        webbrowser.open(url)
+
     def save_settings(self, data):
         use_custom = data.get("use_custom", False)
         client_id = data.get("client_id", "").strip() if use_custom else DEFAULT_CLIENT_ID
@@ -339,6 +360,7 @@ class _Api:
             "use_custom_client_id": use_custom,
             "start_on_startup": bool(data.get("start_on_startup")),
             "start_minimized": bool(data.get("start_minimized")),
+            "song_link_enabled": bool(data.get("song_link_enabled")),
         }
         save_config(config)
         set_startup(config["start_on_startup"])
@@ -367,7 +389,7 @@ class SettingsWindow:
             html=html,
             js_api=api,
             width=460,
-            height=470,
+            height=520,
             resizable=False,
             background_color="#202020",
         )
