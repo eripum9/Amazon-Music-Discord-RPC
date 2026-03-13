@@ -71,10 +71,10 @@ def _search_deezer(title, artist):
                 album = track.get("album", {})
                 art = album.get("cover_xl") or album.get("cover_big") or album.get("cover_medium")
                 if art:
-                    return art, album.get("title", ""), track.get("link", "")
+                    return art, album.get("title", ""), track.get("link", ""), track.get("duration", 0)
     except (requests.RequestException, KeyError, IndexError, ValueError):
         pass
-    return None, None, None
+    return None, None, None, 0
 
 
 def _search_itunes(title, artist):
@@ -101,12 +101,13 @@ def get_album_art(title, artist):
     if cache_key in _cache:
         return _cache[cache_key]
 
-    art_url, album_name, track_link = _search_deezer(title, artist)
+    art_url, album_name, track_link, track_duration = _search_deezer(title, artist)
     if not art_url:
         art_url, album_name = _search_itunes(title, artist)
         track_link = None
+        track_duration = 0
 
-    result = (art_url, album_name or "", track_link or "")
+    result = (art_url, album_name or "", track_link or "", track_duration or 0)
     _cache[cache_key] = result
     return result
 
@@ -114,10 +115,11 @@ def get_album_art(title, artist):
 if __name__ == "__main__":
     test_title = "Blinding Lights"
     test_artist = "The Weeknd"
-    url, album = get_album_art(test_title, test_artist)
+    url, album, link, dur = get_album_art(test_title, test_artist)
     if url:
         print(f"Album art for '{test_title}' by {test_artist}:")
-        print(f"  URL:   {url}")
-        print(f"  Album: {album}")
+        print(f"  URL:      {url}")
+        print(f"  Album:    {album}")
+        print(f"  Duration: {dur}s")
     else:
         print("No album art found.")

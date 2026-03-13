@@ -17,6 +17,7 @@ from media_reader import get_track_sync
 from album_art import get_album_art, search_tracks
 from discord_rpc import DiscordRPC
 from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID
+from updater import check_for_update, RELEASES_PAGE
 
 if getattr(sys, 'frozen', False):
     BUNDLE_DIR = sys._MEIPASS
@@ -192,6 +193,26 @@ def rpc_loop():
     presence_visible = False
 
     song_link_enabled = config.get("song_link_enabled", False)
+    show_paused = config.get("show_paused", True)
+
+    scrobbler = None
+    if config.get("lastfm_enabled") and config.get("lastfm_session_key"):
+        try:
+            from lastfm import LastFMScrobbler
+            scrobbler = LastFMScrobbler(
+                config["lastfm_api_key"],
+                config["lastfm_api_secret"],
+                config["lastfm_session_key"],
+            )
+            print("[Last.fm] Scrobbler active.")
+        except Exception as e:
+            print(f"[Last.fm] Init failed: {e}")
+
+    scrobble_track_key = None
+    scrobble_start_time = None
+    scrobble_duration = 0
+    scrobbled = False
+    last_deezer_duration = 0
 
     print("[RPC] Started.")
 
@@ -199,17 +220,38 @@ def rpc_loop():
         try:
             track = get_track_sync()
 
-            if track is None or track["status"] == "paused":
+            if track is None:
                 if presence_visible:
                     rpc.clear()
                     presence_visible = False
-                if track is None:
-                    last_track_key = None
-                    last_art_url = None
-                    last_album_name = None
-                    last_art_fetch_key = None
-                    last_start_ts = None
-                    last_track_link = None
+                last_track_key = None
+                last_art_url = None
+                last_album_name = None
+                last_art_fetch_key = None
+                last_start_ts = None
+                last_track_link = None
+                time.sleep(5)
+                continue
+
+            if track["status"] == "paused":
+                if show_paused and last_track_key:
+                    buttons = None
+                    if song_link_enabled and last_track_link:
+                        buttons = [{"label": "Listen on Deezer", "url": last_track_link}]
+                    title_parts = last_track_key.split("|", 1)
+                    rpc.update(
+                        title=title_parts[0],
+                        artist=title_parts[1] if len(title_parts) > 1 else "",
+                        album_art_url=last_art_url,
+                        album_name=last_album_name,
+                        buttons=buttons,
+                        small_image="https://cdn-icons-png.flaticon.com/512/16/16427.png",
+                        small_text="Paused",
+                    )
+                    presence_visible = True
+                elif presence_visible:
+                    rpc.clear()
+                    presence_visible = False
                 time.sleep(5)
                 continue
 
@@ -241,7 +283,21 @@ def rpc_loop():
             track_art_key = f"{title}|{artist}"
 
             if raw_key != last_track_key:
-                last_art_url, last_album_name, last_track_link = get_album_art(title, artist)
+                if scrobbler and not scrobbled and scrobble_track_key and scrobble_start_time:
+                    prev_title, prev_artist = scrobble_track_key.split("|", 1)
+                    if prev_title:  # only scrobble if we had a resolved title
+                        elapsed = time.time() - scrobble_start_time
+                        duration = scrobble_duration
+                        if elapsed >= 30 and (duration > 0 and elapsed >= duration * 0.5 or elapsed >= 240):
+                            try:
+                                scrobbler.scrobble(prev_title, prev_artist, int(scrobble_start_time), last_album_name, duration)
+                                scrobbled = True
+                            except Exception as e:
+                                print(f"[Last.fm] Scrobble on track change failed: {e}")
+                        else:
+                            print(f"[Last.fm] Previous track not eligible: {elapsed:.0f}s elapsed, {duration:.0f}s duration")
+
+                last_art_url, last_album_name, last_track_link, last_deezer_duration = get_album_art(title, artist)
                 if not last_album_name and track["album"]:
                     last_album_name = track["album"]
                 last_start_ts = int(time.time() - track["position"]) if track["position"] else int(time.time())
@@ -251,12 +307,32 @@ def rpc_loop():
                     print(f"[Art] No album art found for '{title}'")
                 last_track_key = raw_key
                 last_art_fetch_key = track_art_key
+
+                if scrobbler:
+                    scrobble_track_key = track_art_key
+                    scrobble_start_time = time.time()
+                    scrobbled = False
+                    scrobble_duration = last_deezer_duration or track["duration"] or 0
+                    print(f"[Last.fm] Track duration: {scrobble_duration:.0f}s (deezer={last_deezer_duration}, smtc={track['duration']})")
+                    if title:  # only send now_playing if title is resolved
+                        try:
+                            scrobbler.update_now_playing(title, artist, last_album_name, scrobble_duration)
+                        except Exception:
+                            pass
             elif raw_key in _resolved_cache and last_art_fetch_key != track_art_key:
-                last_art_url, last_album_name, last_track_link = get_album_art(title, artist)
+                last_art_url, last_album_name, last_track_link, last_deezer_duration = get_album_art(title, artist)
                 if not last_album_name and track["album"]:
                     last_album_name = track["album"]
                 last_art_fetch_key = track_art_key
                 print(f"[Art] Refreshed after resolve: '{last_album_name}' for '{title}'")
+                if scrobbler and scrobble_start_time and not scrobbled:
+                    scrobble_track_key = track_art_key
+                    scrobble_duration = last_deezer_duration or track["duration"] or scrobble_duration
+                    print(f"[Last.fm] Updated scrobble key after resolve: {title}")
+                    try:
+                        scrobbler.update_now_playing(title, artist, last_album_name, scrobble_duration)
+                    except Exception:
+                        pass
 
             buttons = None
             if song_link_enabled and last_track_link:
@@ -272,6 +348,19 @@ def rpc_loop():
                 buttons=buttons,
             )
             presence_visible = True
+
+            if scrobbler and not scrobbled and scrobble_track_key and scrobble_start_time:
+                scrobble_title, scrobble_artist = scrobble_track_key.split("|", 1)
+                if scrobble_title:  # only check if we have a resolved title
+                    elapsed = time.time() - scrobble_start_time
+                    duration = scrobble_duration
+                    if elapsed >= 30 and (duration > 0 and elapsed >= duration * 0.5 or elapsed >= 240):
+                        try:
+                            scrobbler.scrobble(scrobble_title, scrobble_artist, int(scrobble_start_time), last_album_name, duration)
+                            scrobbled = True
+                        except Exception:
+                            pass
+
             time.sleep(5)
 
         except Exception as e:
@@ -324,14 +413,21 @@ def open_settings(icon=None, item=None):
         global current_config
         time.sleep(2)
         old_config = dict(current_config)
-        for _ in range(120):
+        for _ in range(300):
             time.sleep(1)
+            if settings_proc and settings_proc.poll() is not None:
+                new_config = load_config()
+                if new_config != old_config:
+                    current_config = new_config
+                    restart_rpc()
+                    print("[Settings] Config updated, RPC restarted.")
+                break
             new_config = load_config()
             if new_config != old_config:
                 current_config = new_config
+                old_config = dict(new_config)
                 restart_rpc()
                 print("[Settings] Config updated, RPC restarted.")
-                break
     threading.Thread(target=_reload_after_delay, daemon=True).start()
 
 
@@ -435,6 +531,7 @@ def build_menu():
         pystray.MenuItem("Stop RPC", lambda icon, item: stop_rpc(),
                          visible=lambda item: rpc_running),
         pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Check for Updates", lambda icon, item: __import__('webbrowser').open(RELEASES_PAGE)),
         pystray.MenuItem("Quit", on_quit),
     )
 
@@ -505,6 +602,19 @@ def main():
     )
 
     start_rpc()
+
+    def _check_update():
+        has_update, latest_ver, _ = check_for_update()
+        if has_update:
+            print(f"[Update] New version {latest_ver} available!")
+            try:
+                tray_icon.notify(
+                    f"Version {latest_ver} is available.\nRight-click tray \u2192 Check for Updates",
+                    "Amazon Music RPC - Update Available",
+                )
+            except Exception:
+                pass
+    threading.Thread(target=_check_update, daemon=True).start()
 
     if not is_startup_launch:
         open_settings()

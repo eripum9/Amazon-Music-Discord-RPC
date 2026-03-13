@@ -158,6 +158,64 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     margin-bottom: 4px;
   }
 
+  .lastfm-fields {
+    margin-top: 10px;
+    overflow: hidden;
+    max-height: 0;
+    opacity: 0;
+    transition: max-height 0.3s ease, opacity 0.2s ease;
+  }
+  .lastfm-fields.visible {
+    max-height: 300px;
+    opacity: 1;
+  }
+  .lastfm-fields label {
+    font-size: 11px;
+    color: #888;
+    display: block;
+    margin-bottom: 4px;
+  }
+  .lastfm-fields input {
+    margin-bottom: 10px;
+  }
+  .lastfm-hint {
+    font-size: 11px;
+    color: #888;
+    margin-top: 6px;
+    line-height: 1.4;
+  }
+  .lastfm-hint a {
+    color: #5865f2;
+    text-decoration: none;
+  }
+  .lastfm-hint a:hover {
+    text-decoration: underline;
+  }
+  .lastfm-status {
+    font-size: 12px;
+    margin-top: 8px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: #383838;
+  }
+  .lastfm-status.connected { color: #43b581; }
+  .lastfm-status.disconnected { color: #f04747; }
+  .auth-btn {
+    padding: 7px 14px;
+    background: #d51007;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s;
+    margin-top: 4px;
+  }
+  .auth-btn:hover { background: #b30d06; }
+  .auth-btn:disabled { background: #555; cursor: default; }
+
   /* Toggle switch */
   .toggle {
     position: relative;
@@ -267,6 +325,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <div class="toggle-knob"></div>
     </label>
   </div>
+  <div class="separator"></div>
+
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Show paused state</span>
+      <div class="row-desc">Keep presence visible when music is paused</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="showPaused">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
 </div>
 
 <div class="card">
@@ -284,6 +355,28 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
 </div>
 
+<div class="card">
+  <div class="card-title">Last.fm</div>
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Enable Last.fm Scrobbling</span>
+      <div class="row-desc">Scrobble tracks and send now playing updates</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="lastfmEnabled" onchange="onLastfmToggle()">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <div class="lastfm-fields" id="lastfmFields">
+    <div style="margin-top: 4px;">
+      <button class="auth-btn" id="authBtn" onclick="lastfmAuth()">Authenticate with Last.fm</button>
+      <button class="auth-btn" id="completeAuthBtn" onclick="lastfmCompleteAuth()" style="display:none; margin-left:6px; background:#43b581;">Complete Authentication</button>
+    </div>
+    <div class="lastfm-status" id="lastfmStatus" style="display:none;"></div>
+  </div>
+</div>
+
 <button class="save-btn" onclick="save()">Save Changes</button>
 
 <script>
@@ -295,6 +388,52 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     } else {
       group.classList.remove('visible');
       document.getElementById('idError').style.display = 'none';
+    }
+  }
+
+  function onLastfmToggle() {
+    const fields = document.getElementById('lastfmFields');
+    if (document.getElementById('lastfmEnabled').checked) {
+      fields.classList.add('visible');
+    } else {
+      fields.classList.remove('visible');
+    }
+  }
+
+  async function lastfmAuth() {
+    document.getElementById('authBtn').disabled = true;
+    document.getElementById('authBtn').textContent = 'Opening browser...';
+    const result = await pywebview.api.lastfm_auth();
+    document.getElementById('authBtn').disabled = false;
+    document.getElementById('authBtn').textContent = 'Authenticate with Last.fm';
+    if (result && result.ok) {
+      document.getElementById('completeAuthBtn').style.display = 'inline-block';
+      const status = document.getElementById('lastfmStatus');
+      status.style.display = 'block';
+      status.className = 'lastfm-status disconnected';
+      status.textContent = 'Approve in your browser, then click Complete Authentication.';
+    } else {
+      alert(result ? result.error : 'Authentication failed.');
+    }
+  }
+
+  async function lastfmCompleteAuth() {
+    document.getElementById('completeAuthBtn').disabled = true;
+    document.getElementById('completeAuthBtn').textContent = 'Verifying...';
+    const result = await pywebview.api.lastfm_complete_auth();
+    document.getElementById('completeAuthBtn').disabled = false;
+    document.getElementById('completeAuthBtn').textContent = 'Complete Authentication';
+    if (result && result.ok) {
+      document.getElementById('completeAuthBtn').style.display = 'none';
+      const status = document.getElementById('lastfmStatus');
+      status.style.display = 'block';
+      status.className = 'lastfm-status connected';
+      status.textContent = '\u2713 Connected as: ' + result.username;
+    } else {
+      const status = document.getElementById('lastfmStatus');
+      status.style.display = 'block';
+      status.className = 'lastfm-status disconnected';
+      status.textContent = '\u2717 ' + (result ? result.error : 'Failed. Did you approve in the browser?');
     }
   }
 
@@ -313,7 +452,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       client_id: customId,
       start_on_startup: document.getElementById('startOnStartup').checked,
       start_minimized: document.getElementById('startMinimized').checked,
-      song_link_enabled: document.getElementById('songLinkEnabled').checked
+      show_paused: document.getElementById('showPaused').checked,
+      song_link_enabled: document.getElementById('songLinkEnabled').checked,
+      lastfm_enabled: document.getElementById('lastfmEnabled').checked
     };
 
     await pywebview.api.save_settings(data);
@@ -328,7 +469,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     document.getElementById('clientId').value = cfg.discord_client_id || '';
     document.getElementById('startOnStartup').checked = !!cfg.start_on_startup;
     document.getElementById('startMinimized').checked = !!cfg.start_minimized;
+    document.getElementById('showPaused').checked = cfg.show_paused !== false;
     document.getElementById('songLinkEnabled').checked = !!cfg.song_link_enabled;
+    document.getElementById('lastfmEnabled').checked = !!cfg.lastfm_enabled;
+    if (cfg.lastfm_enabled) {
+      document.getElementById('lastfmFields').classList.add('visible');
+    }
+    if (cfg.lastfm_username) {
+      const status = document.getElementById('lastfmStatus');
+      status.style.display = 'block';
+      status.className = 'lastfm-status connected';
+      status.textContent = '\u2713 Connected as: ' + cfg.lastfm_username;
+    }
   }
 
   window.addEventListener('pywebviewready', init);
@@ -351,6 +503,41 @@ class _Api:
         import webbrowser
         webbrowser.open(url)
 
+    def lastfm_auth(self):
+        try:
+            from lastfm import get_auth_url
+            config = load_config()
+            url, skg = get_auth_url(config["lastfm_api_key"], config["lastfm_api_secret"])
+            _Api._skg = skg
+            _Api._auth_url = url
+            import webbrowser
+            webbrowser.open(url)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    _skg = None
+    _auth_url = None
+
+    def lastfm_complete_auth(self):
+        try:
+            if not _Api._skg or not _Api._auth_url:
+                return {"ok": False, "error": "No auth in progress. Click Authenticate first."}
+            from lastfm import complete_auth
+            session_key, username = complete_auth(_Api._skg, _Api._auth_url)
+            _Api._skg = None
+            _Api._auth_url = None
+
+            config = load_config()
+            config["lastfm_session_key"] = session_key
+            config["lastfm_username"] = username
+            config["lastfm_enabled"] = True
+            save_config(config)
+
+            return {"ok": True, "username": username}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def save_settings(self, data):
         use_custom = data.get("use_custom", False)
         client_id = data.get("client_id", "").strip() if use_custom else DEFAULT_CLIENT_ID
@@ -360,8 +547,15 @@ class _Api:
             "use_custom_client_id": use_custom,
             "start_on_startup": bool(data.get("start_on_startup")),
             "start_minimized": bool(data.get("start_minimized")),
+            "show_paused": bool(data.get("show_paused", True)),
             "song_link_enabled": bool(data.get("song_link_enabled")),
+            "lastfm_enabled": bool(data.get("lastfm_enabled")),
         }
+        existing = load_config()
+        config["lastfm_api_key"] = existing.get("lastfm_api_key", "")
+        config["lastfm_api_secret"] = existing.get("lastfm_api_secret", "")
+        config["lastfm_session_key"] = existing.get("lastfm_session_key", "")
+        config["lastfm_username"] = existing.get("lastfm_username", "")
         save_config(config)
         set_startup(config["start_on_startup"])
 
@@ -389,7 +583,7 @@ class SettingsWindow:
             html=html,
             js_api=api,
             width=460,
-            height=520,
+            height=680,
             resizable=False,
             background_color="#202020",
         )

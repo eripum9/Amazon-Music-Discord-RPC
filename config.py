@@ -14,6 +14,8 @@ if not os.environ.get("APPDATA") or getattr(sys, "frozen", False) is False:
     CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
     CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
+APP_VERSION = "1.2.0"
+
 DEFAULTS = {
     "discord_client_id": DEFAULT_CLIENT_ID,
     "use_custom_client_id": False,
@@ -21,6 +23,12 @@ DEFAULTS = {
     "start_minimized": True,
     "track_mappings": {},
     "song_link_enabled": False,
+    "show_paused": True,
+    "lastfm_enabled": False,
+    "lastfm_api_key": "2c2d97048ae5546831b1b1a025a8f9ec",
+    "lastfm_api_secret": "5d9fecd9d4836815d5c1f05cde9a611c",
+    "lastfm_session_key": "",
+    "lastfm_username": "",
 }
 
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
