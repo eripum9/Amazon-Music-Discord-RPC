@@ -245,13 +245,14 @@ def rpc_loop():
                         album_art_url=last_art_url,
                         album_name=last_album_name,
                         buttons=buttons,
-                        small_image="https://cdn-icons-png.flaticon.com/512/16/16427.png",
+                        small_image="https://raw.githubusercontent.com/eripum9/Amazon-Music-Discord-RPC/master/images/pause_icon.png",
                         small_text="Paused",
                     )
                     presence_visible = True
                 elif presence_visible:
                     rpc.clear()
                     presence_visible = False
+                last_start_ts = None
                 time.sleep(5)
                 continue
 
@@ -333,6 +334,9 @@ def rpc_loop():
                         scrobbler.update_now_playing(title, artist, last_album_name, scrobble_duration)
                     except Exception:
                         pass
+
+            if track["position"] is not None:
+                last_start_ts = int(time.time() - track["position"])
 
             buttons = None
             if song_link_enabled and last_track_link:
