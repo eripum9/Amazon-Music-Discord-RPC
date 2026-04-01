@@ -17,7 +17,7 @@ from media_reader import get_track_sync
 from album_art import get_album_art, search_tracks
 from discord_rpc import DiscordRPC
 from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID
-from updater import check_for_update, RELEASES_PAGE
+from updater import check_for_update, download_installer
 
 if getattr(sys, 'frozen', False):
     BUNDLE_DIR = sys._MEIPASS
@@ -502,6 +502,47 @@ def wrong_song_handler(icon=None, item=None):
     threading.Thread(target=_worker, daemon=True).start()
 
 
+def _prompt_and_install_update(latest_ver, download_url):
+    MB_YESNO = 0x04
+    MB_ICONQUESTION = 0x20
+    MB_TOPMOST = 0x40000
+    IDYES = 6
+    result = ctypes.windll.user32.MessageBoxW(
+        0,
+        f"A new version (v{latest_ver}) is available.\nWould you like to update now?",
+        "Amazon Music RPC — Update Available",
+        MB_YESNO | MB_ICONQUESTION | MB_TOPMOST,
+    )
+    if result != IDYES:
+        return
+    print(f"[Update] Downloading installer...")
+    try:
+        installer_path = download_installer(download_url)
+        print(f"[Update] Downloaded to {installer_path}, launching installer...")
+        subprocess.Popen([installer_path], creationflags=0x08000000)
+        on_quit(tray_icon, None)
+    except Exception as e:
+        print(f"[Update] Download/install failed: {e}")
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            f"Update failed:\n{e}",
+            "Amazon Music RPC — Update Error",
+            0x10 | MB_TOPMOST,
+        )
+
+
+def _check_for_update_and_prompt():
+    try:
+        has_update, latest_ver, download_url = check_for_update()
+        if has_update and download_url:
+            print(f"[Update] New version {latest_ver} available!")
+            _prompt_and_install_update(latest_ver, download_url)
+        elif has_update:
+            print(f"[Update] New version {latest_ver} found but no installer asset.")
+    except Exception as e:
+        print(f"[Update] Check failed: {e}")
+
+
 def on_quit(icon, item):
     global rpc_running, settings_proc, console_proc
     rpc_running = False
@@ -535,7 +576,7 @@ def build_menu():
         pystray.MenuItem("Stop RPC", lambda icon, item: stop_rpc(),
                          visible=lambda item: rpc_running),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Check for Updates", lambda icon, item: __import__('webbrowser').open(RELEASES_PAGE)),
+        pystray.MenuItem("Check for Updates", lambda icon, item: threading.Thread(target=_check_for_update_and_prompt, daemon=True).start()),
         pystray.MenuItem("Quit", on_quit),
     )
 
@@ -608,16 +649,7 @@ def main():
     start_rpc()
 
     def _check_update():
-        has_update, latest_ver, _ = check_for_update()
-        if has_update:
-            print(f"[Update] New version {latest_ver} available!")
-            try:
-                tray_icon.notify(
-                    f"Version {latest_ver} is available.\nRight-click tray \u2192 Check for Updates",
-                    "Amazon Music RPC - Update Available",
-                )
-            except Exception:
-                pass
+        _check_for_update_and_prompt()
     threading.Thread(target=_check_update, daemon=True).start()
 
     if not is_startup_launch:
