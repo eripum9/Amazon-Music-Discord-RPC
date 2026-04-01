@@ -11,7 +11,7 @@ class LastFMScrobbler:
             api_secret=api_secret,
             session_key=session_key,
         )
-        self._pending = []  # cached scrobbles for retry on network failure
+        self._pending = []
 
     def update_now_playing(self, title, artist, album=None, duration=None):
         try:
@@ -57,7 +57,7 @@ class LastFMScrobbler:
                 print(f"[Last.fm] Flushed cached scrobble: {entry['title']} by {entry['artist']}")
             except (pylast.NetworkError, pylast.MalformedResponseError):
                 remaining.append(entry)
-                break  # network still down, keep the rest
+                break
         if remaining:
             idx = self._pending.index(remaining[0])
             self._pending = self._pending[idx:]

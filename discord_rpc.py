@@ -1,5 +1,6 @@
 # MIT License - Copyright (c) 2026 eripum9
 
+import os
 import time
 import traceback
 from pypresence import Presence
@@ -42,31 +43,45 @@ class DiscordRPC:
 
         track_key = f"{title}|{artist}"
 
-        kwargs = {
-            "activity_type": ActivityType.LISTENING,
+        activity = {
+            "type": ActivityType.LISTENING.value,
             "details": title[:128] if title else "Unknown Title",
             "state": f"by {artist}" if artist else "Unknown Artist",
-            "large_text": album_name if album_name else f"{title}",
+            "assets": {
+                "large_text": album_name if album_name else f"{title}",
+            },
+            "instance": True,
         }
 
         if start_ts:
-            kwargs["start"] = start_ts
+            start_ms = int(start_ts) * 1000
+            activity["timestamps"] = {"start": start_ms}
             if duration > 0:
-                kwargs["end"] = int(start_ts + duration)
+                end_ms = int(start_ts + duration) * 1000
+                activity["timestamps"]["end"] = end_ms
 
         if album_art_url:
-            kwargs["large_image"] = album_art_url
+            activity["assets"]["large_image"] = album_art_url
 
         if small_image:
-            kwargs["small_image"] = small_image
+            activity["assets"]["small_image"] = small_image
             if small_text:
-                kwargs["small_text"] = small_text
+                activity["assets"]["small_text"] = small_text
 
         if buttons:
-            kwargs["buttons"] = buttons
+            activity["buttons"] = buttons
+
+        payload = {
+            "cmd": "SET_ACTIVITY",
+            "args": {
+                "pid": os.getpid(),
+                "activity": activity,
+            },
+            "nonce": f"{time.time():.20f}",
+        }
 
         try:
-            resp = self.rpc.update(**kwargs)
+            resp = self.rpc.update(payload_override=payload)
             if track_key != self._last_track_key:
                 print(f"[RPC] Now showing: {title} by {artist} | {album_name or 'no album'}")
                 print(f"[RPC] Response: {resp}")

@@ -264,6 +264,49 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .save-btn:hover { background: #4752c4; }
   .save-btn:active { background: #3c45a5; transform: scale(0.99); }
 
+  .update-btn {
+    width: 100%;
+    padding: 10px;
+    background: #383838;
+    color: #e4e4e4;
+    border: 1px solid #4a4a4a;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    margin-top: 8px;
+  }
+  .update-btn:hover { background: #404040; border-color: #5865f2; }
+  .update-btn:disabled { color: #888; cursor: default; }
+  .update-status {
+    font-size: 12px;
+    margin-top: 8px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    display: none;
+    text-align: center;
+  }
+  .update-status.up-to-date {
+    display: block;
+    background: #2d3d2d;
+    color: #43b581;
+    border: 1px solid #3d5d3d;
+  }
+  .update-status.update-available {
+    display: block;
+    background: #3d3020;
+    color: #faa61a;
+    border: 1px solid #5d4d2d;
+  }
+  .update-status.update-error {
+    display: block;
+    background: #3d2020;
+    color: #f04747;
+    border: 1px solid #5d2d2d;
+  }
+
   .error-msg {
     color: #f04747;
     font-size: 12px;
@@ -295,6 +338,34 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <label>Application ID</label>
     <input type="text" id="clientId" placeholder="Enter your Discord Application ID">
     <div class="error-msg" id="idError">Please enter a valid Client ID or switch back to Default.</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">Notification Enrichment</div>
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Enable notification enrichment</span>
+      <div class="row-desc">Use Windows notifications for more accurate track info</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="notifEnrichEnabled" onchange="onNotifEnrichToggle()">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <div class="lastfm-fields" id="notifEnrichInfo">
+    <div style="margin-top:6px; font-size:11px; color:#bbb; line-height:1.5;">
+      <strong style="color:#e4e4e4;">Requirements:</strong><br>
+      &bull; Notifications must be enabled in Amazon Music settings<br>
+      &bull; Amazon Music must be <strong>minimized</strong> for notifications to appear
+    </div>
+    <div style="margin-top:8px;">
+      <a href="#" onclick="pywebview.api.open_url('https://eripum9.github.io/Amazon-Music-Discord-RPC/notification-setup'); return false;"
+         style="color:#5865f2; font-size:12px; text-decoration:none; font-weight:600;">
+        Learn how to enable it &rarr;
+      </a>
+    </div>
   </div>
 </div>
 
@@ -391,19 +462,25 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </label>
   </div>
   <div class="lastfm-fields" id="lbFields">
-    <div style="margin-top: 4px;">
-      <label style="font-size:13px; color:#aaa;">User Token</label>
-      <input type="text" id="lbToken" placeholder="Paste your ListenBrainz token"
-        style="width:100%; padding:7px 10px; margin-top:4px; border-radius:6px; border:1px solid #444; background:#2b2b2b; color:#fff; font-size:13px; box-sizing:border-box;">
-    </div>
-    <div style="margin-top:8px;">
-      <a href="#" onclick="pywebview.api.open_url('https://listenbrainz.org/profile/')" style="color:#5865f2; font-size:12px; text-decoration:none;">Get your token from listenbrainz.org &rarr;</a>
+    <div style="margin-top: 6px;">
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+        <button class="auth-btn" style="background:#353070;" onclick="lbGetToken()">1. Get Token</button>
+        <span style="font-size:11px; color:#888;">Opens listenbrainz.org to copy your token</span>
+      </div>
+      <label style="font-size:11px; color:#888; display:block; margin-bottom:4px;">2. Paste your token below</label>
+      <div style="display:flex; gap:8px;">
+        <input type="text" id="lbToken" placeholder="Paste your ListenBrainz user token" style="flex:1;">
+        <button class="auth-btn" id="lbValidateBtn" style="background:#43b581; white-space:nowrap;" onclick="lbValidate()">Validate</button>
+      </div>
     </div>
     <div class="lastfm-status" id="lbStatus" style="display:none;"></div>
   </div>
 </div>
 
 <button class="save-btn" onclick="save()">Save Changes</button>
+
+<button class="update-btn" id="updateBtn" onclick="checkForUpdates()">↑ Check for Updates</button>
+<div class="update-status" id="updateStatus"></div>
 
 <script>
   function onModeChange() {
@@ -426,12 +503,51 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
   }
 
+  function onNotifEnrichToggle() {
+    const fields = document.getElementById('notifEnrichInfo');
+    if (document.getElementById('notifEnrichEnabled').checked) {
+      fields.classList.add('visible');
+    } else {
+      fields.classList.remove('visible');
+    }
+  }
+
   function onLbToggle() {
     const fields = document.getElementById('lbFields');
     if (document.getElementById('lbEnabled').checked) {
       fields.classList.add('visible');
     } else {
       fields.classList.remove('visible');
+    }
+  }
+
+  function lbGetToken() {
+    pywebview.api.open_url('https://listenbrainz.org/settings/');
+  }
+
+  async function lbValidate() {
+    const token = document.getElementById('lbToken').value.trim();
+    if (!token) {
+      const s = document.getElementById('lbStatus');
+      s.style.display = 'block';
+      s.className = 'lastfm-status disconnected';
+      s.textContent = '\u2717 Please paste a token first.';
+      return;
+    }
+    const btn = document.getElementById('lbValidateBtn');
+    btn.disabled = true;
+    btn.textContent = 'Checking...';
+    const result = await pywebview.api.validate_lb_token(token);
+    btn.disabled = false;
+    btn.textContent = 'Validate';
+    const s = document.getElementById('lbStatus');
+    s.style.display = 'block';
+    if (result && result.valid) {
+      s.className = 'lastfm-status connected';
+      s.textContent = '\u2713 Connected as: ' + result.user_name;
+    } else {
+      s.className = 'lastfm-status disconnected';
+      s.textContent = '\u2717 ' + (result ? result.error : 'Validation failed.');
     }
   }
 
@@ -489,6 +605,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       start_minimized: document.getElementById('startMinimized').checked,
       show_paused: document.getElementById('showPaused').checked,
       song_link_enabled: document.getElementById('songLinkEnabled').checked,
+      notification_enrichment_enabled: document.getElementById('notifEnrichEnabled').checked,
       lastfm_enabled: document.getElementById('lastfmEnabled').checked,
       listenbrainz_enabled: document.getElementById('lbEnabled').checked,
       listenbrainz_token: document.getElementById('lbToken').value.trim()
@@ -508,6 +625,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     document.getElementById('startMinimized').checked = !!cfg.start_minimized;
     document.getElementById('showPaused').checked = cfg.show_paused !== false;
     document.getElementById('songLinkEnabled').checked = !!cfg.song_link_enabled;
+    document.getElementById('notifEnrichEnabled').checked = !!cfg.notification_enrichment_enabled;
+    if (cfg.notification_enrichment_enabled) {
+      document.getElementById('notifEnrichInfo').classList.add('visible');
+    }
     document.getElementById('lastfmEnabled').checked = !!cfg.lastfm_enabled;
     if (cfg.lastfm_enabled) {
       document.getElementById('lastfmFields').classList.add('visible');
@@ -524,11 +645,39 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       document.getElementById('lbFields').classList.add('visible');
     }
     if (cfg.listenbrainz_enabled && cfg.listenbrainz_token) {
-      const status = document.getElementById('lbStatus');
-      status.style.display = 'block';
-      status.className = 'lastfm-status connected';
-      status.textContent = '\u2713 Token configured';
+      lbValidate();
     }
+  }
+
+  async function checkForUpdates() {
+    const btn = document.getElementById('updateBtn');
+    const status = document.getElementById('updateStatus');
+    btn.disabled = true;
+    btn.textContent = 'Checking...';
+    status.style.display = 'none';
+    status.className = 'update-status';
+    try {
+      const result = await pywebview.api.check_for_updates();
+      if (result.has_update) {
+        status.className = 'update-status update-available';
+        status.textContent = '\u2191 Update available: v' + result.version;
+        status.style.display = 'block';
+      } else if (result.error) {
+        status.className = 'update-status update-error';
+        status.textContent = '\u2717 ' + result.error;
+        status.style.display = 'block';
+      } else {
+        status.className = 'update-status up-to-date';
+        status.textContent = '\u2713 You are up to date!';
+        status.style.display = 'block';
+      }
+    } catch (e) {
+      status.className = 'update-status update-error';
+      status.textContent = '\u2717 Could not check for updates.';
+      status.style.display = 'block';
+    }
+    btn.disabled = false;
+    btn.textContent = '\u2191 Check for Updates';
   }
 
   window.addEventListener('pywebviewready', init);
@@ -550,6 +699,22 @@ class _Api:
     def open_url(self, url):
         import webbrowser
         webbrowser.open(url)
+
+    def validate_lb_token(self, token):
+        try:
+            import urllib.request
+            import json
+            req = urllib.request.Request(
+                "https://api.listenbrainz.org/1/validate-token",
+                headers={"Authorization": f"Token {token}"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            if data.get("valid"):
+                return {"valid": True, "user_name": data.get("user_name", "")}
+            return {"valid": False, "error": "Invalid token. Please check and try again."}
+        except Exception as e:
+            return {"valid": False, "error": f"Could not validate: {e}"}
 
     def lastfm_auth(self):
         try:
@@ -586,6 +751,16 @@ class _Api:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    def check_for_updates(self):
+        try:
+            from updater import check_for_update
+            has_update, version, download_url = check_for_update()
+            if has_update:
+                return {"has_update": True, "version": version}
+            return {"has_update": False}
+        except Exception as e:
+            return {"has_update": False, "error": f"Could not check: {e}"}
+
     def save_settings(self, data):
         use_custom = data.get("use_custom", False)
         client_id = data.get("client_id", "").strip() if use_custom else DEFAULT_CLIENT_ID
@@ -597,6 +772,7 @@ class _Api:
             "start_minimized": bool(data.get("start_minimized")),
             "show_paused": bool(data.get("show_paused", True)),
             "song_link_enabled": bool(data.get("song_link_enabled")),
+            "notification_enrichment_enabled": bool(data.get("notification_enrichment_enabled")),
             "lastfm_enabled": bool(data.get("lastfm_enabled")),
             "listenbrainz_enabled": bool(data.get("listenbrainz_enabled")),
             "listenbrainz_token": data.get("listenbrainz_token", "").strip(),
@@ -633,7 +809,7 @@ class SettingsWindow:
             html=html,
             js_api=api,
             width=460,
-            height=680,
+            height=800,
             resizable=False,
             background_color="#202020",
         )

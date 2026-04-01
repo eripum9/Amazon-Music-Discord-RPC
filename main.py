@@ -14,6 +14,7 @@ from PIL import Image
 import pystray
 
 from media_reader import get_track_sync
+from notification_reader import get_notification_track_sync, is_new_notification
 from album_art import get_album_art, search_tracks
 from discord_rpc import DiscordRPC
 from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID
@@ -195,6 +196,10 @@ def rpc_loop():
 
     song_link_enabled = config.get("song_link_enabled", False)
     show_paused = config.get("show_paused", True)
+    notification_enrichment_enabled = config.get("notification_enrichment_enabled", False)
+    _last_notif_album = None
+    _last_notif_artist = None
+    _notif_art_fetched_for = None
 
     scrobbler = None
     if config.get("lastfm_enabled") and config.get("lastfm_session_key"):
@@ -230,6 +235,28 @@ def rpc_loop():
         try:
             track = get_track_sync()
 
+            _notif_album = None
+            if notification_enrichment_enabled and track and track["status"] == "playing":
+                try:
+                    notif = get_notification_track_sync()
+                except Exception:
+                    notif = None
+                if notif:
+                    smtc_title = (track["title"] or "").lower().strip()
+                    notif_title = (notif["title"] or "").lower().strip()
+                    if smtc_title and notif_title and (smtc_title == notif_title or smtc_title in notif_title or notif_title in smtc_title):
+                        if notif["artist"]:
+                            track["artist"] = notif["artist"]
+                            if _last_notif_artist != notif["artist"]:
+                                print(f"[Notif] Using artist from notification: {notif['artist']}")
+                                _last_notif_artist = notif["artist"]
+                        if notif["album"]:
+                            track["album"] = notif["album"]
+                            _notif_album = notif["album"]
+                            if _last_notif_album != notif["album"]:
+                                print(f"[Notif] Using album from notification: {notif['album']}")
+                                _last_notif_album = notif["album"]
+
             if track is None:
                 if presence_visible:
                     rpc.clear()
@@ -240,20 +267,33 @@ def rpc_loop():
                 last_art_fetch_key = None
                 last_start_ts = None
                 last_track_link = None
-                time.sleep(5)
+                _last_notif_album = None
+                _last_notif_artist = None
+                _notif_art_fetched_for = None
+                time.sleep(3)
                 continue
 
             if track["status"] == "paused":
                 if show_paused and last_track_key:
+                    if last_start_ts is not None:
+                        paused_position = time.time() - last_start_ts
+                        last_start_ts = None
                     buttons = None
                     if song_link_enabled and last_track_link:
                         buttons = [{"label": "Listen on Deezer", "url": last_track_link}]
                     title_parts = last_track_key.split("|", 1)
+                    pause_start_ts = None
+                    pause_duration = 0
+                    if paused_position is not None:
+                        pause_start_ts = int(time.time() - paused_position)
+                        pause_duration = last_deezer_duration or (track["duration"] if track["duration"] else 0)
                     rpc.update(
                         title=title_parts[0],
                         artist=title_parts[1] if len(title_parts) > 1 else "",
                         album_art_url=last_art_url,
                         album_name=last_album_name,
+                        start_ts=pause_start_ts,
+                        duration=pause_duration,
                         buttons=buttons,
                         small_image="https://raw.githubusercontent.com/eripum9/Amazon-Music-Discord-RPC/master/Images/pause_icon.png",
                         small_text="Paused",
@@ -262,10 +302,7 @@ def rpc_loop():
                 elif presence_visible:
                     rpc.clear()
                     presence_visible = False
-                if last_start_ts is not None:
-                    paused_position = time.time() - last_start_ts
-                last_start_ts = None
-                time.sleep(5)
+                time.sleep(3)
                 continue
 
             title = track["title"]
@@ -288,7 +325,7 @@ def rpc_loop():
                 last_art_fetch_key = None
                 last_start_ts = None
                 last_track_link = None
-                time.sleep(5)
+                time.sleep(3)
                 continue
 
             _current_track_raw = raw_key
@@ -298,7 +335,7 @@ def rpc_loop():
             if raw_key != last_track_key:
                 if (scrobbler or lb_scrobbler) and not scrobbled and scrobble_track_key and scrobble_start_time:
                     prev_title, prev_artist = scrobble_track_key.split("|", 1)
-                    if prev_title:  # only scrobble if we had a resolved title
+                    if prev_title:
                         elapsed = time.time() - scrobble_start_time
                         duration = scrobble_duration
                         if elapsed >= 30 and (duration > 0 and elapsed >= duration * 0.5 or elapsed >= 240):
@@ -317,7 +354,9 @@ def rpc_loop():
                             print(f"[Scrobble] Previous track not eligible: {elapsed:.0f}s elapsed, {duration:.0f}s duration")
 
                 last_art_url, last_album_name, last_track_link, last_deezer_duration = get_album_art(title, artist)
-                if not last_album_name and track["album"]:
+                if _notif_album:
+                    last_album_name = _notif_album
+                elif not last_album_name and track["album"]:
                     last_album_name = track["album"]
                 last_start_ts = int(time.time() - track["position"]) if track["position"] else int(time.time())
                 if last_art_url:
@@ -333,7 +372,7 @@ def rpc_loop():
                     scrobbled = False
                     scrobble_duration = last_deezer_duration or track["duration"] or 0
                     print(f"[Scrobble] Track duration: {scrobble_duration:.0f}s (deezer={last_deezer_duration}, smtc={track['duration']})")
-                    if title:  # only send now_playing if title is resolved
+                    if title:
                         if scrobbler:
                             try:
                                 scrobbler.update_now_playing(title, artist, last_album_name, scrobble_duration)
@@ -346,7 +385,9 @@ def rpc_loop():
                                 pass
             elif raw_key in _resolved_cache and last_art_fetch_key != track_art_key:
                 last_art_url, last_album_name, last_track_link, last_deezer_duration = get_album_art(title, artist)
-                if not last_album_name and track["album"]:
+                if _notif_album:
+                    last_album_name = _notif_album
+                elif not last_album_name and track["album"]:
                     last_album_name = track["album"]
                 last_art_fetch_key = track_art_key
                 print(f"[Art] Refreshed after resolve: '{last_album_name}' for '{title}'")
@@ -372,6 +413,20 @@ def rpc_loop():
                 elif track["position"] is not None:
                     last_start_ts = int(time.time() - track["position"])
 
+            if _notif_album:
+                last_album_name = _notif_album
+                notif_art_key = f"{title}|{artist}|{_notif_album}".lower()
+                if _notif_art_fetched_for != notif_art_key:
+                    _notif_art, _notif_aname, _notif_link, _notif_dur = get_album_art(title, f"{artist} {_notif_album}")
+                    if _notif_art:
+                        last_art_url = _notif_art
+                        if _notif_link:
+                            last_track_link = _notif_link
+                        if _notif_dur:
+                            last_deezer_duration = _notif_dur
+                        print(f"[Art] Re-fetched art for notification album: '{_notif_album}'")
+                    _notif_art_fetched_for = notif_art_key
+
             buttons = None
             if song_link_enabled and last_track_link:
                 buttons = [{"label": "Listen on Deezer", "url": last_track_link}]
@@ -389,7 +444,7 @@ def rpc_loop():
 
             if (scrobbler or lb_scrobbler) and not scrobbled and scrobble_track_key and scrobble_start_time:
                 scrobble_title, scrobble_artist = scrobble_track_key.split("|", 1)
-                if scrobble_title:  # only check if we have a resolved title
+                if scrobble_title:
                     elapsed = time.time() - scrobble_start_time
                     duration = scrobble_duration
                     if elapsed >= 30 and (duration > 0 and elapsed >= duration * 0.5 or elapsed >= 240):
@@ -405,11 +460,11 @@ def rpc_loop():
                                 pass
                         scrobbled = True
 
-            time.sleep(5)
+            time.sleep(3)
 
         except Exception as e:
             print(f"[RPC] Loop error: {e}")
-            time.sleep(5)
+            time.sleep(3)
 
     try:
         rpc.clear()

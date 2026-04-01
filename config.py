@@ -14,7 +14,7 @@ if not os.environ.get("APPDATA") or getattr(sys, "frozen", False) is False:
     CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
     CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "2.0.0"
 
 DEFAULTS = {
     "discord_client_id": DEFAULT_CLIENT_ID,
@@ -31,6 +31,7 @@ DEFAULTS = {
     "lastfm_username": "",
     "listenbrainz_enabled": False,
     "listenbrainz_token": "",
+    "notification_enrichment_enabled": False,
 }
 
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
