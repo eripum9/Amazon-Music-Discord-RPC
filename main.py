@@ -335,7 +335,7 @@ def rpc_loop():
                     except Exception:
                         pass
 
-            if track["position"] is not None:
+            if last_start_ts is None and track["position"] is not None:
                 last_start_ts = int(time.time() - track["position"])
 
             buttons = None
