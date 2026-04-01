@@ -5,3 +5,4 @@ Pillow
 pystray
 pywebview
 pylast
+liblistenbrainz

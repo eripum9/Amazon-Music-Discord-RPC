@@ -1,5 +1,5 @@
 #define MyAppName "Amazon Music RPC"
-#define MyAppVersion "1.2.2"
+#define MyAppVersion "1.3.0"
 #define MyAppPublisher "PumpgunStudios"
 #define MyAppExeName "AmazonMusicRPC.exe"
 

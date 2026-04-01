@@ -21,6 +21,8 @@ a = Analysis(
         'updater',
         'lastfm',
         'pylast',
+        'listenbrainz_scrobbler',
+        'liblistenbrainz',
     ],
     hookspath=[],
     hooksconfig={},

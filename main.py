@@ -209,6 +209,15 @@ def rpc_loop():
         except Exception as e:
             print(f"[Last.fm] Init failed: {e}")
 
+    lb_scrobbler = None
+    if config.get("listenbrainz_enabled") and config.get("listenbrainz_token"):
+        try:
+            from listenbrainz_scrobbler import ListenBrainzScrobbler
+            lb_scrobbler = ListenBrainzScrobbler(config["listenbrainz_token"])
+            print("[ListenBrainz] Scrobbler active.")
+        except Exception as e:
+            print(f"[ListenBrainz] Init failed: {e}")
+
     scrobble_track_key = None
     scrobble_start_time = None
     scrobble_duration = 0
@@ -287,19 +296,25 @@ def rpc_loop():
             track_art_key = f"{title}|{artist}"
 
             if raw_key != last_track_key:
-                if scrobbler and not scrobbled and scrobble_track_key and scrobble_start_time:
+                if (scrobbler or lb_scrobbler) and not scrobbled and scrobble_track_key and scrobble_start_time:
                     prev_title, prev_artist = scrobble_track_key.split("|", 1)
                     if prev_title:  # only scrobble if we had a resolved title
                         elapsed = time.time() - scrobble_start_time
                         duration = scrobble_duration
                         if elapsed >= 30 and (duration > 0 and elapsed >= duration * 0.5 or elapsed >= 240):
-                            try:
-                                scrobbler.scrobble(prev_title, prev_artist, int(scrobble_start_time), last_album_name, duration)
-                                scrobbled = True
-                            except Exception as e:
-                                print(f"[Last.fm] Scrobble on track change failed: {e}")
+                            if scrobbler:
+                                try:
+                                    scrobbler.scrobble(prev_title, prev_artist, int(scrobble_start_time), last_album_name, duration)
+                                except Exception as e:
+                                    print(f"[Last.fm] Scrobble on track change failed: {e}")
+                            if lb_scrobbler:
+                                try:
+                                    lb_scrobbler.scrobble(prev_title, prev_artist, int(scrobble_start_time), last_album_name, duration)
+                                except Exception as e:
+                                    print(f"[ListenBrainz] Scrobble on track change failed: {e}")
+                            scrobbled = True
                         else:
-                            print(f"[Last.fm] Previous track not eligible: {elapsed:.0f}s elapsed, {duration:.0f}s duration")
+                            print(f"[Scrobble] Previous track not eligible: {elapsed:.0f}s elapsed, {duration:.0f}s duration")
 
                 last_art_url, last_album_name, last_track_link, last_deezer_duration = get_album_art(title, artist)
                 if not last_album_name and track["album"]:
@@ -312,31 +327,43 @@ def rpc_loop():
                 last_track_key = raw_key
                 last_art_fetch_key = track_art_key
 
-                if scrobbler:
+                if scrobbler or lb_scrobbler:
                     scrobble_track_key = track_art_key
                     scrobble_start_time = time.time()
                     scrobbled = False
                     scrobble_duration = last_deezer_duration or track["duration"] or 0
-                    print(f"[Last.fm] Track duration: {scrobble_duration:.0f}s (deezer={last_deezer_duration}, smtc={track['duration']})")
+                    print(f"[Scrobble] Track duration: {scrobble_duration:.0f}s (deezer={last_deezer_duration}, smtc={track['duration']})")
                     if title:  # only send now_playing if title is resolved
-                        try:
-                            scrobbler.update_now_playing(title, artist, last_album_name, scrobble_duration)
-                        except Exception:
-                            pass
+                        if scrobbler:
+                            try:
+                                scrobbler.update_now_playing(title, artist, last_album_name, scrobble_duration)
+                            except Exception:
+                                pass
+                        if lb_scrobbler:
+                            try:
+                                lb_scrobbler.update_now_playing(title, artist, last_album_name, scrobble_duration)
+                            except Exception:
+                                pass
             elif raw_key in _resolved_cache and last_art_fetch_key != track_art_key:
                 last_art_url, last_album_name, last_track_link, last_deezer_duration = get_album_art(title, artist)
                 if not last_album_name and track["album"]:
                     last_album_name = track["album"]
                 last_art_fetch_key = track_art_key
                 print(f"[Art] Refreshed after resolve: '{last_album_name}' for '{title}'")
-                if scrobbler and scrobble_start_time and not scrobbled:
+                if (scrobbler or lb_scrobbler) and scrobble_start_time and not scrobbled:
                     scrobble_track_key = track_art_key
                     scrobble_duration = last_deezer_duration or track["duration"] or scrobble_duration
-                    print(f"[Last.fm] Updated scrobble key after resolve: {title}")
-                    try:
-                        scrobbler.update_now_playing(title, artist, last_album_name, scrobble_duration)
-                    except Exception:
-                        pass
+                    print(f"[Scrobble] Updated scrobble key after resolve: {title}")
+                    if scrobbler:
+                        try:
+                            scrobbler.update_now_playing(title, artist, last_album_name, scrobble_duration)
+                        except Exception:
+                            pass
+                    if lb_scrobbler:
+                        try:
+                            lb_scrobbler.update_now_playing(title, artist, last_album_name, scrobble_duration)
+                        except Exception:
+                            pass
 
             if last_start_ts is None:
                 if paused_position is not None:
@@ -355,22 +382,28 @@ def rpc_loop():
                 album_art_url=last_art_url,
                 album_name=last_album_name,
                 start_ts=last_start_ts,
-                duration=track["duration"],
+                duration=track["duration"] or last_deezer_duration,
                 buttons=buttons,
             )
             presence_visible = True
 
-            if scrobbler and not scrobbled and scrobble_track_key and scrobble_start_time:
+            if (scrobbler or lb_scrobbler) and not scrobbled and scrobble_track_key and scrobble_start_time:
                 scrobble_title, scrobble_artist = scrobble_track_key.split("|", 1)
                 if scrobble_title:  # only check if we have a resolved title
                     elapsed = time.time() - scrobble_start_time
                     duration = scrobble_duration
                     if elapsed >= 30 and (duration > 0 and elapsed >= duration * 0.5 or elapsed >= 240):
-                        try:
-                            scrobbler.scrobble(scrobble_title, scrobble_artist, int(scrobble_start_time), last_album_name, duration)
-                            scrobbled = True
-                        except Exception:
-                            pass
+                        if scrobbler:
+                            try:
+                                scrobbler.scrobble(scrobble_title, scrobble_artist, int(scrobble_start_time), last_album_name, duration)
+                            except Exception:
+                                pass
+                        if lb_scrobbler:
+                            try:
+                                lb_scrobbler.scrobble(scrobble_title, scrobble_artist, int(scrobble_start_time), last_album_name, duration)
+                            except Exception:
+                                pass
+                        scrobbled = True
 
             time.sleep(5)
 

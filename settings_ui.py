@@ -377,6 +377,32 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
 </div>
 
+<div class="card">
+  <div class="card-title">ListenBrainz</div>
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Enable ListenBrainz Scrobbling</span>
+      <div class="row-desc">Scrobble tracks and send now playing updates</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="lbEnabled" onchange="onLbToggle()">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <div class="lastfm-fields" id="lbFields">
+    <div style="margin-top: 4px;">
+      <label style="font-size:13px; color:#aaa;">User Token</label>
+      <input type="text" id="lbToken" placeholder="Paste your ListenBrainz token"
+        style="width:100%; padding:7px 10px; margin-top:4px; border-radius:6px; border:1px solid #444; background:#2b2b2b; color:#fff; font-size:13px; box-sizing:border-box;">
+    </div>
+    <div style="margin-top:8px;">
+      <a href="#" onclick="pywebview.api.open_url('https://listenbrainz.org/profile/')" style="color:#5865f2; font-size:12px; text-decoration:none;">Get your token from listenbrainz.org &rarr;</a>
+    </div>
+    <div class="lastfm-status" id="lbStatus" style="display:none;"></div>
+  </div>
+</div>
+
 <button class="save-btn" onclick="save()">Save Changes</button>
 
 <script>
@@ -394,6 +420,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   function onLastfmToggle() {
     const fields = document.getElementById('lastfmFields');
     if (document.getElementById('lastfmEnabled').checked) {
+      fields.classList.add('visible');
+    } else {
+      fields.classList.remove('visible');
+    }
+  }
+
+  function onLbToggle() {
+    const fields = document.getElementById('lbFields');
+    if (document.getElementById('lbEnabled').checked) {
       fields.classList.add('visible');
     } else {
       fields.classList.remove('visible');
@@ -454,7 +489,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       start_minimized: document.getElementById('startMinimized').checked,
       show_paused: document.getElementById('showPaused').checked,
       song_link_enabled: document.getElementById('songLinkEnabled').checked,
-      lastfm_enabled: document.getElementById('lastfmEnabled').checked
+      lastfm_enabled: document.getElementById('lastfmEnabled').checked,
+      listenbrainz_enabled: document.getElementById('lbEnabled').checked,
+      listenbrainz_token: document.getElementById('lbToken').value.trim()
     };
 
     await pywebview.api.save_settings(data);
@@ -480,6 +517,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       status.style.display = 'block';
       status.className = 'lastfm-status connected';
       status.textContent = '\u2713 Connected as: ' + cfg.lastfm_username;
+    }
+    document.getElementById('lbEnabled').checked = !!cfg.listenbrainz_enabled;
+    document.getElementById('lbToken').value = cfg.listenbrainz_token || '';
+    if (cfg.listenbrainz_enabled) {
+      document.getElementById('lbFields').classList.add('visible');
+    }
+    if (cfg.listenbrainz_enabled && cfg.listenbrainz_token) {
+      const status = document.getElementById('lbStatus');
+      status.style.display = 'block';
+      status.className = 'lastfm-status connected';
+      status.textContent = '\u2713 Token configured';
     }
   }
 
@@ -550,6 +598,8 @@ class _Api:
             "show_paused": bool(data.get("show_paused", True)),
             "song_link_enabled": bool(data.get("song_link_enabled")),
             "lastfm_enabled": bool(data.get("lastfm_enabled")),
+            "listenbrainz_enabled": bool(data.get("listenbrainz_enabled")),
+            "listenbrainz_token": data.get("listenbrainz_token", "").strip(),
         }
         existing = load_config()
         config["lastfm_api_key"] = existing.get("lastfm_api_key", "")
