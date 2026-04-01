@@ -16,3 +16,5 @@ config.json
 
 *.manifest
 *.log
+
+build.bat

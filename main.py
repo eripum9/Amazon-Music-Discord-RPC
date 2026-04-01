@@ -245,7 +245,7 @@ def rpc_loop():
                         album_art_url=last_art_url,
                         album_name=last_album_name,
                         buttons=buttons,
-                        small_image="https://raw.githubusercontent.com/eripum9/Amazon-Music-Discord-RPC/master/images/pause_icon.png",
+                        small_image="https://raw.githubusercontent.com/eripum9/Amazon-Music-Discord-RPC/master/Images/pause_icon.png",
                         small_text="Paused",
                     )
                     presence_visible = True
