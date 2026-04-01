@@ -191,6 +191,7 @@ def rpc_loop():
     last_start_ts = None
     last_track_link = None
     presence_visible = False
+    paused_position = None
 
     song_link_enabled = config.get("song_link_enabled", False)
     show_paused = config.get("show_paused", True)
@@ -252,6 +253,8 @@ def rpc_loop():
                 elif presence_visible:
                     rpc.clear()
                     presence_visible = False
+                if last_start_ts is not None:
+                    paused_position = time.time() - last_start_ts
                 last_start_ts = None
                 time.sleep(5)
                 continue
@@ -335,8 +338,12 @@ def rpc_loop():
                     except Exception:
                         pass
 
-            if last_start_ts is None and track["position"] is not None:
-                last_start_ts = int(time.time() - track["position"])
+            if last_start_ts is None:
+                if paused_position is not None:
+                    last_start_ts = int(time.time() - paused_position)
+                    paused_position = None
+                elif track["position"] is not None:
+                    last_start_ts = int(time.time() - track["position"])
 
             buttons = None
             if song_link_enabled and last_track_link:

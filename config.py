@@ -14,7 +14,7 @@ if not os.environ.get("APPDATA") or getattr(sys, "frozen", False) is False:
     CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
     CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 
 DEFAULTS = {
     "discord_client_id": DEFAULT_CLIENT_ID,
