@@ -197,8 +197,7 @@ def rpc_loop():
     song_link_enabled = config.get("song_link_enabled", False)
     show_paused = config.get("show_paused", True)
     notification_enrichment_enabled = config.get("notification_enrichment_enabled", False)
-    _last_notif_album = None
-    _last_notif_artist = None
+    _current_notif_data = None
     _notif_art_fetched_for = None
 
     scrobbler = None
@@ -241,21 +240,22 @@ def rpc_loop():
                     notif = get_notification_track_sync()
                 except Exception:
                     notif = None
-                if notif:
+                if notif and is_new_notification(notif):
+                    _current_notif_data = notif
+                    print(f"[Notif] New notification: '{notif['title']}' by '{notif['artist']}' — {notif['album']}")
+                if _current_notif_data:
+                    notif_title = (_current_notif_data["title"] or "").lower().strip()
                     smtc_title = (track["title"] or "").lower().strip()
-                    notif_title = (notif["title"] or "").lower().strip()
-                    if smtc_title and notif_title and (smtc_title == notif_title or smtc_title in notif_title or notif_title in smtc_title):
-                        if notif["artist"]:
-                            track["artist"] = notif["artist"]
-                            if _last_notif_artist != notif["artist"]:
-                                print(f"[Notif] Using artist from notification: {notif['artist']}")
-                                _last_notif_artist = notif["artist"]
-                        if notif["album"]:
-                            track["album"] = notif["album"]
-                            _notif_album = notif["album"]
-                            if _last_notif_album != notif["album"]:
-                                print(f"[Notif] Using album from notification: {notif['album']}")
-                                _last_notif_album = notif["album"]
+                    if notif_title and (not smtc_title or smtc_title == notif_title or smtc_title in notif_title or notif_title in smtc_title):
+                        if _current_notif_data["title"]:
+                            track["title"] = _current_notif_data["title"]
+                        if _current_notif_data["artist"]:
+                            track["artist"] = _current_notif_data["artist"]
+                        if _current_notif_data["album"]:
+                            track["album"] = _current_notif_data["album"]
+                            _notif_album = _current_notif_data["album"]
+                    else:
+                        _current_notif_data = None
 
             if track is None:
                 if presence_visible:
@@ -267,8 +267,7 @@ def rpc_loop():
                 last_art_fetch_key = None
                 last_start_ts = None
                 last_track_link = None
-                _last_notif_album = None
-                _last_notif_artist = None
+                _current_notif_data = None
                 _notif_art_fetched_for = None
                 time.sleep(3)
                 continue
@@ -459,6 +458,14 @@ def rpc_loop():
                             except Exception:
                                 pass
                         scrobbled = True
+
+            song_duration = last_deezer_duration or (track["duration"] if track["duration"] else 0)
+            if song_duration > 0 and last_start_ts and (time.time() - last_start_ts) >= song_duration:
+                last_start_ts = int(time.time())
+                if scrobbler or lb_scrobbler:
+                    scrobble_start_time = time.time()
+                    scrobbled = False
+                print(f"[RPC] Song ended, restarting: {title}")
 
             time.sleep(3)
 
