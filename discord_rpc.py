@@ -13,16 +13,21 @@ class DiscordRPC:
         self.rpc = Presence(client_id)
         self.connected = False
         self._last_track_key = None
+        self._backoff = 3
+        self._next_retry = 0
 
     def connect(self):
         try:
             self.rpc.connect()
             self.connected = True
+            self._backoff = 3
+            self._next_retry = 0
             print("[RPC] Connected to Discord.")
         except Exception as e:
             self.connected = False
-            print(f"[RPC] Failed to connect to Discord: {e}")
-            traceback.print_exc()
+            self._next_retry = time.time() + self._backoff
+            print(f"[RPC] Failed to connect (retry in {self._backoff:.0f}s): {e}")
+            self._backoff = min(self._backoff * 1.5, 60)
 
     def disconnect(self):
         if self.connected:
@@ -34,6 +39,8 @@ class DiscordRPC:
 
     def _ensure_connected(self):
         if not self.connected:
+            if time.time() < self._next_retry:
+                return False
             self.connect()
         return self.connected
 

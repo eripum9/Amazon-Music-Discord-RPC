@@ -175,6 +175,25 @@ def _resolve_missing_title(title, artist, raw_key):
     return title, artist
 
 
+def _try_scrobble(scrobbler, lb_scrobbler, title, artist, start_time, album, duration):
+    if not title or not start_time:
+        return False
+    elapsed = time.time() - start_time
+    if not (elapsed >= 30 and (duration > 0 and elapsed >= duration * 0.5 or elapsed >= 240)):
+        return False
+    if scrobbler:
+        try:
+            scrobbler.scrobble(title, artist, int(start_time), album, duration)
+        except Exception as e:
+            print(f"[Last.fm] Scrobble failed: {e}")
+    if lb_scrobbler:
+        try:
+            lb_scrobbler.scrobble(title, artist, int(start_time), album, duration)
+        except Exception as e:
+            print(f"[ListenBrainz] Scrobble failed: {e}")
+    return True
+
+
 def rpc_loop():
     global rpc_running, _current_track_raw
 
@@ -246,7 +265,7 @@ def rpc_loop():
                 if _current_notif_data:
                     notif_title = (_current_notif_data["title"] or "").lower().strip()
                     smtc_title = (track["title"] or "").lower().strip()
-                    if notif_title and (not smtc_title or smtc_title == notif_title or smtc_title in notif_title or notif_title in smtc_title):
+                    if smtc_title and notif_title and (smtc_title == notif_title or smtc_title in notif_title or notif_title in smtc_title):
                         if _current_notif_data["title"]:
                             track["title"] = _current_notif_data["title"]
                         if _current_notif_data["artist"]:
@@ -334,23 +353,14 @@ def rpc_loop():
             if raw_key != last_track_key:
                 if (scrobbler or lb_scrobbler) and not scrobbled and scrobble_track_key and scrobble_start_time:
                     prev_title, prev_artist = scrobble_track_key.split("|", 1)
-                    if prev_title:
+                    if _try_scrobble(scrobbler, lb_scrobbler, prev_title, prev_artist, scrobble_start_time, last_album_name, scrobble_duration):
+                        scrobbled = True
+                    else:
                         elapsed = time.time() - scrobble_start_time
-                        duration = scrobble_duration
-                        if elapsed >= 30 and (duration > 0 and elapsed >= duration * 0.5 or elapsed >= 240):
-                            if scrobbler:
-                                try:
-                                    scrobbler.scrobble(prev_title, prev_artist, int(scrobble_start_time), last_album_name, duration)
-                                except Exception as e:
-                                    print(f"[Last.fm] Scrobble on track change failed: {e}")
-                            if lb_scrobbler:
-                                try:
-                                    lb_scrobbler.scrobble(prev_title, prev_artist, int(scrobble_start_time), last_album_name, duration)
-                                except Exception as e:
-                                    print(f"[ListenBrainz] Scrobble on track change failed: {e}")
-                            scrobbled = True
-                        else:
-                            print(f"[Scrobble] Previous track not eligible: {elapsed:.0f}s elapsed, {duration:.0f}s duration")
+                        print(f"[Scrobble] Previous track not eligible: {elapsed:.0f}s elapsed, {scrobble_duration:.0f}s duration")
+
+                _current_notif_data = None
+                _notif_art_fetched_for = None
 
                 last_art_url, last_album_name, last_track_link, last_deezer_duration = get_album_art(title, artist)
                 if _notif_album:
@@ -443,25 +453,15 @@ def rpc_loop():
 
             if (scrobbler or lb_scrobbler) and not scrobbled and scrobble_track_key and scrobble_start_time:
                 scrobble_title, scrobble_artist = scrobble_track_key.split("|", 1)
-                if scrobble_title:
-                    elapsed = time.time() - scrobble_start_time
-                    duration = scrobble_duration
-                    if elapsed >= 30 and (duration > 0 and elapsed >= duration * 0.5 or elapsed >= 240):
-                        if scrobbler:
-                            try:
-                                scrobbler.scrobble(scrobble_title, scrobble_artist, int(scrobble_start_time), last_album_name, duration)
-                            except Exception:
-                                pass
-                        if lb_scrobbler:
-                            try:
-                                lb_scrobbler.scrobble(scrobble_title, scrobble_artist, int(scrobble_start_time), last_album_name, duration)
-                            except Exception:
-                                pass
-                        scrobbled = True
+                if _try_scrobble(scrobbler, lb_scrobbler, scrobble_title, scrobble_artist, scrobble_start_time, last_album_name, scrobble_duration):
+                    scrobbled = True
 
             song_duration = last_deezer_duration or (track["duration"] if track["duration"] else 0)
             if song_duration > 0 and last_start_ts and (time.time() - last_start_ts) >= song_duration:
-                last_start_ts = int(time.time())
+                if track["position"] is not None:
+                    last_start_ts = int(time.time() - track["position"])
+                else:
+                    last_start_ts = int(time.time())
                 if scrobbler or lb_scrobbler:
                     scrobble_start_time = time.time()
                     scrobbled = False

@@ -4,7 +4,7 @@ import os
 import sys
 import base64
 import webview
-from config import load_config, save_config, is_startup_enabled, set_startup, DEFAULT_CLIENT_ID
+from config import load_config, save_config, is_startup_enabled, set_startup, DEFAULT_CLIENT_ID, APP_VERSION
 
 if getattr(sys, 'frozen', False):
     _BUNDLE_DIR = sys._MEIPASS
@@ -263,6 +263,29 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
   .save-btn:hover { background: #4752c4; }
   .save-btn:active { background: #3c45a5; transform: scale(0.99); }
+  .save-btn:disabled { background: #4752c4; cursor: default; }
+  .save-btn.saved { background: #43b581; }
+  .save-btn.error { background: #f04747; }
+
+  .btn-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+  }
+  .close-btn {
+    flex: 0 0 auto;
+    padding: 11px 20px;
+    background: #383838;
+    color: #e4e4e4;
+    border: 1px solid #4a4a4a;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .close-btn:hover { background: #404040; }
 
   .update-btn {
     width: 100%;
@@ -313,6 +336,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     margin-top: 4px;
     display: none;
   }
+
+  .version-badge {
+    font-size: 11px;
+    color: #888;
+    background: #383838;
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    padding: 2px 8px;
+    margin-left: auto;
+  }
 </style>
 </head>
 <body>
@@ -323,13 +356,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <h1>Amazon Music RPC</h1>
     <p>Discord Rich Presence for Amazon Music</p>
   </div>
+  <span class="version-badge">v{version}</span>
 </div>
 
 <div class="card">
   <div class="card-title">Discord Client ID</div>
   <div class="row">
     <div class="row-labels"><span class="row-label">Mode</span></div>
-    <select id="idMode" onchange="onModeChange()">
+    <select id="idMode" aria-label="Client ID mode" onchange="onModeChange()">
       <option value="default">Default</option>
       <option value="custom">Custom</option>
     </select>
@@ -349,7 +383,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <div class="row-desc">Use Windows notifications for more accurate track info</div>
     </div>
     <label class="toggle">
-      <input type="checkbox" id="notifEnrichEnabled" onchange="onNotifEnrichToggle()">
+      <input type="checkbox" id="notifEnrichEnabled" aria-label="Enable notification enrichment" onchange="onNotifEnrichToggle()">
       <div class="toggle-track"></div>
       <div class="toggle-knob"></div>
     </label>
@@ -378,7 +412,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <div class="row-desc">Launch automatically when you log in</div>
     </div>
     <label class="toggle">
-      <input type="checkbox" id="startOnStartup">
+      <input type="checkbox" id="startOnStartup" aria-label="Start on Windows startup">
       <div class="toggle-track"></div>
       <div class="toggle-knob"></div>
     </label>
@@ -391,7 +425,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <div class="row-desc">Start hidden in the system tray</div>
     </div>
     <label class="toggle">
-      <input type="checkbox" id="startMinimized">
+      <input type="checkbox" id="startMinimized" aria-label="Start minimized">
       <div class="toggle-track"></div>
       <div class="toggle-knob"></div>
     </label>
@@ -404,7 +438,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <div class="row-desc">Keep presence visible when music is paused</div>
     </div>
     <label class="toggle">
-      <input type="checkbox" id="showPaused">
+      <input type="checkbox" id="showPaused" aria-label="Show paused state">
       <div class="toggle-track"></div>
       <div class="toggle-knob"></div>
     </label>
@@ -419,7 +453,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <div class="row-desc">Adds a clickable link button on your Discord presence</div>
     </div>
     <label class="toggle">
-      <input type="checkbox" id="songLinkEnabled">
+      <input type="checkbox" id="songLinkEnabled" aria-label="Show listen on Deezer button">
       <div class="toggle-track"></div>
       <div class="toggle-knob"></div>
     </label>
@@ -434,7 +468,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <div class="row-desc">Scrobble tracks and send now playing updates</div>
     </div>
     <label class="toggle">
-      <input type="checkbox" id="lastfmEnabled" onchange="onLastfmToggle()">
+      <input type="checkbox" id="lastfmEnabled" aria-label="Enable Last.fm scrobbling" onchange="onLastfmToggle()">
       <div class="toggle-track"></div>
       <div class="toggle-knob"></div>
     </label>
@@ -456,7 +490,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <div class="row-desc">Scrobble tracks and send now playing updates</div>
     </div>
     <label class="toggle">
-      <input type="checkbox" id="lbEnabled" onchange="onLbToggle()">
+      <input type="checkbox" id="lbEnabled" aria-label="Enable ListenBrainz scrobbling" onchange="onLbToggle()">
       <div class="toggle-track"></div>
       <div class="toggle-knob"></div>
     </label>
@@ -477,7 +511,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
 </div>
 
-<button class="save-btn" onclick="save()">Save Changes</button>
+<div class="btn-row">
+  <button class="save-btn" id="saveBtn" onclick="save()">Save Changes</button>
+  <button class="close-btn" onclick="pywebview.api.close_window()">Close</button>
+</div>
 
 <button class="update-btn" id="updateBtn" onclick="checkForUpdates()">↑ Check for Updates</button>
 <div class="update-status" id="updateStatus"></div>
@@ -591,12 +628,24 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   async function save() {
     const mode = document.getElementById('idMode').value;
     const customId = document.getElementById('clientId').value.trim();
+    const btn = document.getElementById('saveBtn');
 
     if (mode === 'custom' && !customId) {
       document.getElementById('idError').style.display = 'block';
       return;
     }
+    if (mode === 'custom' && (!/^\\d+$/.test(customId) || customId.length < 15)) {
+      document.getElementById('idError').textContent = 'Client ID must be numeric and at least 15 digits.';
+      document.getElementById('idError').style.display = 'block';
+      document.getElementById('clientId').style.borderColor = '#f04747';
+      return;
+    }
     document.getElementById('idError').style.display = 'none';
+    document.getElementById('clientId').style.borderColor = '';
+
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+    btn.className = 'save-btn';
 
     const data = {
       use_custom: mode === 'custom',
@@ -611,7 +660,24 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       listenbrainz_token: document.getElementById('lbToken').value.trim()
     };
 
-    await pywebview.api.save_settings(data);
+    try {
+      await pywebview.api.save_settings(data);
+      btn.textContent = '\u2713 Saved!';
+      btn.className = 'save-btn saved';
+      setTimeout(() => {
+        btn.textContent = 'Save Changes';
+        btn.className = 'save-btn';
+        btn.disabled = false;
+      }, 2000);
+    } catch (e) {
+      btn.textContent = '\u2717 Save failed';
+      btn.className = 'save-btn error';
+      setTimeout(() => {
+        btn.textContent = 'Save Changes';
+        btn.className = 'save-btn';
+        btn.disabled = false;
+      }, 2000);
+    }
   }
 
   async function init() {
@@ -788,6 +854,7 @@ class _Api:
         if self._on_save:
             self._on_save(config)
 
+    def close_window(self):
         window = self._window_ref()
         if window:
             window.destroy()
@@ -799,7 +866,7 @@ class SettingsWindow:
         self._window = None
 
     def show(self):
-        html = HTML_TEMPLATE.replace("{icon_b64}", _icon_b64())
+        html = HTML_TEMPLATE.replace("{icon_b64}", _icon_b64()).replace("{version}", APP_VERSION)
 
         window_holder = [None]
         api = _Api(self.on_save, lambda: window_holder[0])
