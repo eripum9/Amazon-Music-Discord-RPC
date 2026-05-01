@@ -99,9 +99,15 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Diagnostics snapshot", False, str(e)))
 
     try:
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings_ui.py"), "r", encoding="utf-8") as f:
-            source = f.read()
-        ok = "What\\\\'s new" not in source and "async function init()" in source
+        import settings_ui
+        html = (
+            settings_ui.HTML_TEMPLATE
+            .replace("{icon_b64}", "")
+            .replace("{version}", "0.0.0")
+            .replace("{config_json}", json.dumps(settings_ui._settings_payload()))
+        )
+        script = html[html.index("<script>") + len("<script>"):html.index("</script>")]
+        ok = "What\\\\'s new" not in script and "\\n\\nWhat's new:\\n" in script and "async function init()" in script
         results.append(_result("Settings script", ok, "Settings JavaScript guard"))
     except Exception as e:
         results.append(_result("Settings script", False, str(e)))
