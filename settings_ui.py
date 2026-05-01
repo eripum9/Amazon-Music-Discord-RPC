@@ -3,6 +3,7 @@
 import os
 import sys
 import base64
+import json
 import subprocess
 import webview
 from config import load_config, save_config, is_startup_enabled, set_startup, DEFAULT_CLIENT_ID, APP_VERSION
@@ -34,6 +35,32 @@ def _save_window_size(width, height):
     config["settings_window_width"] = _bounded_int(width, 460, 420)
     config["settings_window_height"] = _bounded_int(height, 800, 560)
     save_config(config)
+
+
+def _settings_payload():
+    cfg = load_config()
+    try:
+        cfg["start_on_startup"] = is_startup_enabled()
+    except Exception:
+        cfg["start_on_startup"] = False
+    keys = [
+        "discord_client_id",
+        "use_custom_client_id",
+        "start_on_startup",
+        "start_minimized",
+        "show_paused",
+        "privacy_private_session",
+        "privacy_disable_scrobbling",
+        "privacy_blocked_keywords",
+        "song_link_enabled",
+        "notification_enrichment_enabled",
+        "lastfm_enabled",
+        "lastfm_username",
+        "listenbrainz_enabled",
+        "listenbrainz_token",
+        "intro_seen",
+    ]
+    return {key: cfg.get(key) for key in keys}
 
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -686,6 +713,24 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <div class="update-status" id="updateStatus"></div>
 
 <script>
+  const BOOTSTRAP_CONFIG = {config_json};
+
+  function showSettingsStatus(text, kind) {
+    const status = document.getElementById('updateStatus');
+    status.className = 'update-status ' + (kind || 'update-error');
+    status.textContent = text;
+    status.style.display = 'block';
+  }
+
+  function hideSettingsStatus() {
+    const status = document.getElementById('updateStatus');
+    if (status.className.indexOf('update-error') !== -1 && status.textContent.indexOf('settings') !== -1) {
+      status.style.display = 'none';
+      status.className = 'update-status';
+      status.textContent = '';
+    }
+  }
+
   function onModeChange() {
     const group = document.getElementById('customIdGroup');
     const mode = document.getElementById('idMode').value;
@@ -849,11 +894,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
   }
 
-  async function init() {
-    const cfg = await pywebview.api.get_config();
+  function applyConfig(cfg) {
+    cfg = cfg || {};
     if (cfg.use_custom_client_id) {
       document.getElementById('idMode').value = 'custom';
       document.getElementById('customIdGroup').classList.add('visible');
+    } else {
+      document.getElementById('idMode').value = 'default';
+      document.getElementById('customIdGroup').classList.remove('visible');
     }
     document.getElementById('clientId').value = cfg.discord_client_id || '';
     document.getElementById('startOnStartup').checked = !!cfg.start_on_startup;
@@ -866,10 +914,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     document.getElementById('notifEnrichEnabled').checked = !!cfg.notification_enrichment_enabled;
     if (cfg.notification_enrichment_enabled) {
       document.getElementById('notifEnrichInfo').classList.add('visible');
+    } else {
+      document.getElementById('notifEnrichInfo').classList.remove('visible');
     }
     document.getElementById('lastfmEnabled').checked = !!cfg.lastfm_enabled;
     if (cfg.lastfm_enabled) {
       document.getElementById('lastfmFields').classList.add('visible');
+    } else {
+      document.getElementById('lastfmFields').classList.remove('visible');
     }
     if (cfg.lastfm_username) {
       const status = document.getElementById('lastfmStatus');
@@ -881,18 +933,37 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     document.getElementById('lbToken').value = cfg.listenbrainz_token || '';
     if (cfg.listenbrainz_enabled) {
       document.getElementById('lbFields').classList.add('visible');
+    } else {
+      document.getElementById('lbFields').classList.remove('visible');
     }
-    if (cfg.listenbrainz_enabled && cfg.listenbrainz_token) {
+    if (cfg.listenbrainz_enabled && cfg.listenbrainz_token && window.pywebview && window.pywebview.api) {
       lbValidate();
     }
     if (!cfg.intro_seen) {
       document.getElementById('introOverlay').classList.add('visible');
+    } else {
+      document.getElementById('introOverlay').classList.remove('visible');
+    }
+  }
+
+  async function init() {
+    applyConfig(BOOTSTRAP_CONFIG);
+    try {
+      const cfg = await pywebview.api.get_config();
+      applyConfig(cfg);
+      hideSettingsStatus();
+    } catch (e) {
+      showSettingsStatus('\u2717 Could not refresh settings from the app bridge. Showing saved config snapshot.', 'update-error');
     }
   }
 
   async function finishIntro() {
-    await pywebview.api.dismiss_intro();
-    document.getElementById('introOverlay').classList.remove('visible');
+    try {
+      await pywebview.api.dismiss_intro();
+      document.getElementById('introOverlay').classList.remove('visible');
+    } catch (e) {
+      showSettingsStatus('\u2717 Could not save intro state yet. Try again after Settings finishes loading.', 'update-error');
+    }
   }
 
   async function checkForUpdates() {
@@ -904,13 +975,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     status.className = 'update-status';
     try {
       const result = await pywebview.api.check_for_updates();
-      if (result.has_update) {
-        status.className = 'update-status update-available';
-        status.textContent = '\u2191 Update available: v' + result.version + (result.changelog ? "\n\nWhat's new:\n" + result.changelog : '');
+      if (result.install_started) {
+        status.className = 'update-status up-to-date';
+        status.textContent = '\u2713 Installer launched.';
         status.style.display = 'block';
       } else if (result.error) {
         status.className = 'update-status update-error';
         status.textContent = '\u2717 ' + result.error;
+        status.style.display = 'block';
+      } else if (result.has_update) {
+        status.className = 'update-status update-available';
+        status.textContent = '\u2191 Update available: v' + result.version + (result.changelog ? "\n\nWhat's new:\n" + result.changelog : '');
         status.style.display = 'block';
       } else {
         status.className = 'update-status up-to-date';
@@ -926,6 +1001,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     btn.textContent = '\u2191 Check for Updates';
   }
 
+  document.addEventListener('DOMContentLoaded', () => applyConfig(BOOTSTRAP_CONFIG));
   window.addEventListener('pywebviewready', init);
 </script>
 </body>
@@ -938,9 +1014,7 @@ class _Api:
         self._window_ref = window_ref
 
     def get_config(self):
-        cfg = load_config()
-        cfg["start_on_startup"] = is_startup_enabled()
-        return cfg
+        return _settings_payload()
 
     def open_url(self, url):
         import webbrowser
@@ -1006,10 +1080,16 @@ class _Api:
 
     def check_for_updates(self):
         try:
-            from updater import check_for_update
+            from updater import check_for_update, prompt_for_update
             has_update, version, download_url, changelog = check_for_update()
             if has_update:
-                return {"has_update": True, "version": version, "changelog": changelog}
+                result = {"has_update": True, "version": version, "changelog": changelog}
+                if download_url:
+                    installer_path = prompt_for_update(version, download_url, changelog)
+                    result["install_started"] = bool(installer_path)
+                else:
+                    result["error"] = "No installer asset found for this release."
+                return result
             return {"has_update": False}
         except Exception as e:
             return {"has_update": False, "error": f"Could not check: {e}"}
@@ -1069,7 +1149,12 @@ class SettingsWindow:
         config = load_config()
         width = _bounded_int(config.get("settings_window_width"), 460, 420)
         height = _bounded_int(config.get("settings_window_height"), 800, 560)
-        html = HTML_TEMPLATE.replace("{icon_b64}", _icon_b64()).replace("{version}", APP_VERSION)
+        html = (
+            HTML_TEMPLATE
+            .replace("{icon_b64}", _icon_b64())
+            .replace("{version}", APP_VERSION)
+            .replace("{config_json}", json.dumps(_settings_payload()))
+        )
 
         window_holder = [None]
         api = _Api(self.on_save, lambda: window_holder[0])

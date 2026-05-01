@@ -18,7 +18,7 @@ from notification_reader import get_notification_track_sync, is_new_notification
 from album_art import get_album_art, search_tracks
 from discord_rpc import DiscordRPC
 from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION
-from updater import check_for_update, download_installer
+from updater import check_for_update, prompt_for_update
 
 if getattr(sys, 'frozen', False):
     BUNDLE_DIR = sys._MEIPASS
@@ -890,27 +890,13 @@ def wrong_song_handler(icon=None, item=None):
 
 
 def _prompt_and_install_update(latest_ver, download_url, changelog=""):
-    MB_YESNO = 0x04
-    MB_ICONQUESTION = 0x20
     MB_TOPMOST = 0x40000
-    IDYES = 6
-    message = f"A new version (v{latest_ver}) is available."
-    if changelog:
-        message += f"\n\nWhat's new:\n{changelog}"
-    message += "\n\nWould you like to update now?"
-    result = ctypes.windll.user32.MessageBoxW(
-        0,
-        message,
-        "Amazon Music RPC — Update Available",
-        MB_YESNO | MB_ICONQUESTION | MB_TOPMOST,
-    )
-    if result != IDYES:
-        return
     print(f"[Update] Downloading installer...")
     try:
-        installer_path = download_installer(download_url)
+        installer_path = prompt_for_update(latest_ver, download_url, changelog)
+        if not installer_path:
+            return
         print(f"[Update] Downloaded to {installer_path}, launching installer...")
-        subprocess.Popen([installer_path], creationflags=0x08000000)
         on_quit(tray_icon, None)
     except Exception as e:
         print(f"[Update] Download/install failed: {e}")

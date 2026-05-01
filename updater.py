@@ -1,6 +1,8 @@
 # MIT License - Copyright (c) 2026 eripum9
 
 import os
+import ctypes
+import subprocess
 import tempfile
 import requests
 from config import APP_VERSION
@@ -85,6 +87,28 @@ def check_for_update():
     except Exception:
         pass
     return False, None, None, ""
+
+
+def prompt_for_update(latest_ver, download_url, changelog=""):
+    MB_YESNO = 0x04
+    MB_ICONQUESTION = 0x20
+    MB_TOPMOST = 0x40000
+    IDYES = 6
+    message = f"A new version (v{latest_ver}) is available."
+    if changelog:
+        message += f"\n\nWhat's new:\n{changelog}"
+    message += "\n\nWould you like to update now?"
+    result = ctypes.windll.user32.MessageBoxW(
+        0,
+        message,
+        "Amazon Music RPC — Update Available",
+        MB_YESNO | MB_ICONQUESTION | MB_TOPMOST,
+    )
+    if result != IDYES:
+        return None
+    installer_path = download_installer(download_url)
+    subprocess.Popen([installer_path], creationflags=0x08000000)
+    return installer_path
 
 
 def download_installer(url):
