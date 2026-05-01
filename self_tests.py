@@ -59,6 +59,15 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Version parsing", False, str(e)))
 
     try:
+        from updater import _format_changelog
+        body = "## What's Changed\n- Added diagnostics\n- Fixed privacy"
+        formatted = _format_changelog(body)
+        ok = "Added diagnostics" in formatted and "Fixed privacy" in formatted
+        results.append(_result("Update changelog", ok, formatted or "No changelog"))
+    except Exception as e:
+        results.append(_result("Update changelog", False, str(e)))
+
+    try:
         from album_art import _clean_title
         ok = _clean_title("Song [Explicit]") == "Song"
         results.append(_result("Metadata cleanup", ok, "Explicit marker stripped"))
@@ -71,5 +80,22 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Diagnostics cards", len(cards) == 7, f"{len(cards)} cards"))
     except Exception as e:
         results.append(_result("Diagnostics cards", False, str(e)))
+
+    try:
+        import diagnostics_ui
+        logs = diagnostics_ui._log_files()
+        ok = bool(logs) and all("label" in item and "path" in item for item in logs)
+        results.append(_result("Diagnostics log history", ok, f"{len(logs)} log entries"))
+    except Exception as e:
+        results.append(_result("Diagnostics log history", False, str(e)))
+
+    try:
+        import diagnostics_ui
+        api = diagnostics_ui._Api(lambda: None)
+        snapshot = api.get_snapshot()
+        ok = "cards" in snapshot and "log_files" in snapshot and "config_path" in snapshot
+        results.append(_result("Diagnostics snapshot", ok, "Snapshot API returned expected fields"))
+    except Exception as e:
+        results.append(_result("Diagnostics snapshot", False, str(e)))
 
     return results

@@ -50,6 +50,8 @@ _picker_pending_key = None
 _resolved_cache = {}
 _skipped_keys = set()
 _current_track_raw = None
+active_rpc = None
+_track_timing_cache = {}
 
 RPC_CONFIG_KEYS = {
     "discord_client_id",
@@ -103,6 +105,33 @@ def _privacy_match(config, title="", artist="", album=""):
         if keyword in haystack:
             return f"Matched privacy keyword: {keyword}"
     return ""
+
+
+def _cached_start_ts(raw_key):
+    cached = _track_timing_cache.get(raw_key)
+    if not cached:
+        return None
+    if time.time() - cached.get("updated_at", 0) > 45:
+        _track_timing_cache.pop(raw_key, None)
+        return None
+    return cached.get("start_ts")
+
+
+def _track_start_ts(track, raw_key):
+    position = track.get("position")
+    start_ts = None
+    try:
+        if position is not None and float(position) > 0:
+            start_ts = int(time.time() - float(position))
+    except (TypeError, ValueError):
+        start_ts = None
+    if start_ts is None:
+        start_ts = _cached_start_ts(raw_key) or int(time.time())
+    _track_timing_cache[raw_key] = {
+        "start_ts": start_ts,
+        "updated_at": time.time(),
+    }
+    return start_ts
 
 
 def _rotated_log_path(index):
@@ -275,7 +304,7 @@ def _try_scrobble(scrobbler, lb_scrobbler, title, artist, start_time, album, dur
 
 
 def rpc_loop():
-    global rpc_running, _current_track_raw
+    global rpc_running, _current_track_raw, active_rpc
 
     config = current_config
     if config.get("use_custom_client_id") and config.get("discord_client_id"):
@@ -284,6 +313,7 @@ def rpc_loop():
         client_id = DEFAULT_CLIENT_ID
 
     rpc = DiscordRPC(client_id)
+    active_rpc = rpc
     last_track_key = None
     last_art_url = None
     last_album_name = None
@@ -500,18 +530,20 @@ def rpc_loop():
 
             privacy_reason = _privacy_match(config, title, artist, track.get("album", ""))
             if privacy_reason:
+                private_start_ts = _track_start_ts(track, raw_key)
                 if presence_visible:
                     rpc.clear()
                     presence_visible = False
                 if privacy_disable_scrobbling:
+                    last_start_ts = private_start_ts
+                    last_track_key = raw_key
+                    last_album_name = track.get("album", "")
+                    last_deezer_duration = track["duration"] or 0
                     scrobble_track_key = None
                     scrobble_start_time = None
                     scrobbled = True
-                    last_track_key = None
                     last_art_url = None
-                    last_album_name = None
                     last_art_fetch_key = None
-                    last_start_ts = None
                     last_track_link = None
                     hidden_track = {
                         "title": "Hidden by privacy controls",
@@ -546,7 +578,7 @@ def rpc_loop():
                     last_album_name = _notif_album
                 elif not last_album_name and track["album"]:
                     last_album_name = track["album"]
-                last_start_ts = int(time.time() - track["position"]) if track["position"] else int(time.time())
+                last_start_ts = _track_start_ts(track, raw_key)
                 if last_art_url:
                     print(f"[Art] Found: '{last_album_name}' for '{title}'")
                 else:
@@ -599,7 +631,7 @@ def rpc_loop():
                     last_start_ts = int(time.time() - paused_position)
                     paused_position = None
                 elif track["position"] is not None:
-                    last_start_ts = int(time.time() - track["position"])
+                    last_start_ts = _track_start_ts(track, raw_key)
 
             if _notif_album:
                 last_album_name = _notif_album
@@ -674,6 +706,8 @@ def rpc_loop():
         rpc.disconnect()
     except Exception:
         pass
+    if active_rpc is rpc:
+        active_rpc = None
     _write_diagnostics_state(
         rpc_status="stopped",
         discord_status="disconnected",
@@ -720,12 +754,27 @@ def restart_rpc():
     start_rpc()
 
 
+def clear_current_presence(reason=""):
+    rpc = active_rpc
+    if rpc:
+        try:
+            rpc.clear()
+            if reason:
+                print(f"[Privacy] Cleared Discord presence: {reason}")
+            return True
+        except Exception as e:
+            print(f"[Privacy] Could not clear Discord presence: {e}")
+    return False
+
+
 def toggle_private_session(icon=None, item=None):
     global current_config
     config = load_config()
     config["privacy_private_session"] = not bool(config.get("privacy_private_session"))
     save_config(config)
     current_config = config
+    if config["privacy_private_session"]:
+        clear_current_presence("private session enabled")
     restart_rpc()
     print(f"[Privacy] Private session {'enabled' if config['privacy_private_session'] else 'disabled'}.")
 
@@ -754,6 +803,8 @@ def open_settings(icon=None, item=None):
                 if new_config != old_config:
                     current_config = new_config
                     if new_rpc_config != old_rpc_config:
+                        if new_config.get("privacy_private_session") and not old_config.get("privacy_private_session"):
+                            clear_current_presence("private session enabled")
                         restart_rpc()
                         print("[Settings] Config updated, RPC restarted.")
                 break
@@ -763,6 +814,8 @@ def open_settings(icon=None, item=None):
                 current_config = new_config
                 old_config = dict(new_config)
                 if new_rpc_config != old_rpc_config:
+                    if new_config.get("privacy_private_session") and not old_rpc_config.get("privacy_private_session"):
+                        clear_current_presence("private session enabled")
                     old_rpc_config = new_rpc_config
                     restart_rpc()
                     print("[Settings] Config updated, RPC restarted.")
@@ -836,14 +889,18 @@ def wrong_song_handler(icon=None, item=None):
     threading.Thread(target=_worker, daemon=True).start()
 
 
-def _prompt_and_install_update(latest_ver, download_url):
+def _prompt_and_install_update(latest_ver, download_url, changelog=""):
     MB_YESNO = 0x04
     MB_ICONQUESTION = 0x20
     MB_TOPMOST = 0x40000
     IDYES = 6
+    message = f"A new version (v{latest_ver}) is available."
+    if changelog:
+        message += f"\n\nWhat's new:\n{changelog}"
+    message += "\n\nWould you like to update now?"
     result = ctypes.windll.user32.MessageBoxW(
         0,
-        f"A new version (v{latest_ver}) is available.\nWould you like to update now?",
+        message,
         "Amazon Music RPC — Update Available",
         MB_YESNO | MB_ICONQUESTION | MB_TOPMOST,
     )
@@ -867,10 +924,10 @@ def _prompt_and_install_update(latest_ver, download_url):
 
 def _check_for_update_and_prompt():
     try:
-        has_update, latest_ver, download_url = check_for_update()
+        has_update, latest_ver, download_url, changelog = check_for_update()
         if has_update and download_url:
             print(f"[Update] New version {latest_ver} available!")
-            _prompt_and_install_update(latest_ver, download_url)
+            _prompt_and_install_update(latest_ver, download_url, changelog)
         elif has_update:
             print(f"[Update] New version {latest_ver} found but no installer asset.")
     except Exception as e:

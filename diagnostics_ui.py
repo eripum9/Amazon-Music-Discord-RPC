@@ -386,6 +386,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     gap: 8px;
     overflow: auto;
   }
+  .dev-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(140px, 1fr));
+    gap: 8px;
+    padding: 12px;
+    border-bottom: 1px solid #3d3d3d;
+  }
+  .dev-action-note {
+    grid-column: 1 / -1;
+    color: #999;
+    font-size: 11px;
+  }
   .test-result {
     display: grid;
     grid-template-columns: auto 1fr;
@@ -539,6 +551,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <span class="tests-title">Development Tests</span>
         <button class="primary-action" onclick="runTests()">Run Tests</button>
         <button onclick="hideTests()">Hide</button>
+      </div>
+      <div class="dev-actions">
+        <button onclick="resetIntroFlag()">Reset Intro</button>
+        <button onclick="resetTestsWarning()">Reset Tests Warning</button>
+        <button onclick="clearPrivateSession()">Clear Private Session</button>
+        <div class="dev-action-note" id="devActionStatus">Use these only while testing local behavior.</div>
       </div>
       <div class="tests-results" id="testsResults"></div>
     </div>
@@ -719,6 +737,26 @@ function hideTests() {
   document.getElementById('testsCard').classList.remove('visible');
 }
 
+function setDevActionStatus(text) {
+  document.getElementById('devActionStatus').textContent = text;
+}
+
+async function resetIntroFlag() {
+  await pywebview.api.set_config_flag('intro_seen', false);
+  setDevActionStatus('Intro will show next time Settings opens.');
+}
+
+async function resetTestsWarning() {
+  await pywebview.api.set_config_flag('diagnostics_tests_warning_dismissed', false);
+  setDevActionStatus('Tests warning will show next time.');
+}
+
+async function clearPrivateSession() {
+  await pywebview.api.set_config_flag('privacy_private_session', false);
+  setDevActionStatus('Private session flag cleared.');
+  refreshSnapshot();
+}
+
 async function runTests() {
   const root = document.getElementById('testsResults');
   root.textContent = 'Running...';
@@ -802,6 +840,19 @@ class _Api:
     def dismiss_test_warning(self):
         config = load_config()
         config["diagnostics_tests_warning_dismissed"] = True
+        save_config(config)
+        return {"ok": True}
+
+    def set_config_flag(self, key, value):
+        allowed = {
+            "intro_seen",
+            "diagnostics_tests_warning_dismissed",
+            "privacy_private_session",
+        }
+        if key not in allowed:
+            return {"ok": False, "error": "Unsupported flag"}
+        config = load_config()
+        config[key] = bool(value)
         save_config(config)
         return {"ok": True}
 

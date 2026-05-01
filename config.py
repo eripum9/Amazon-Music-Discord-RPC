@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import tempfile
 import winreg
 
 APP_NAME = "AmazonMusicRPC"
@@ -14,7 +15,7 @@ if not os.environ.get("APPDATA") or getattr(sys, "frozen", False) is False:
     CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
     CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 
 DEFAULTS = {
     "discord_client_id": DEFAULT_CLIENT_ID,
@@ -48,8 +49,12 @@ STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 def load_config():
     if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, "r") as f:
-            saved = json.load(f)
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+        except (OSError, json.JSONDecodeError, TypeError) as e:
+            print(f"[Config] Could not read config, using defaults: {e}")
+            saved = {}
         config = {**DEFAULTS, **saved}
     else:
         config = dict(DEFAULTS)
@@ -58,8 +63,19 @@ def load_config():
 
 def save_config(config):
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(config, f, indent=4)
+    fd, tmp_path = tempfile.mkstemp(prefix="config.", suffix=".tmp", dir=CONFIG_DIR)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, CONFIG_PATH)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def get_exe_path():

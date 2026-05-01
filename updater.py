@@ -18,6 +18,40 @@ def _parse_version(tag):
         return (0,)
 
 
+def _format_changelog(body):
+    if not body:
+        return ""
+    lines = []
+    skip_headings = {
+        "changelog",
+        "changes",
+        "release notes",
+        "what's changed",
+        "whats changed",
+        "new features",
+    }
+    for raw in body.replace("\r", "\n").split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        if lowered.startswith(("<!--", "<details", "</details", "<summary", "</summary")):
+            continue
+        line = line.strip("#").strip()
+        if line.lower() in skip_headings:
+            continue
+        if line.startswith(("-", "*", "•")):
+            line = "- " + line.lstrip("-*• ").strip()
+        if line:
+            lines.append(line)
+        if len(lines) >= 5:
+            break
+    text = "\n".join(lines)
+    if len(text) > 600:
+        text = text[:597].rstrip() + "..."
+    return text
+
+
 def check_for_update():
     try:
         resp = requests.get(RELEASES_URL, timeout=10)
@@ -32,10 +66,10 @@ def check_for_update():
                 if asset["name"].lower().endswith("_setup.exe") or asset["name"].lower().endswith("setup.exe"):
                     download_url = asset["browser_download_url"]
                     break
-            return True, latest_tag.lstrip("v"), download_url
+            return True, latest_tag.lstrip("v"), download_url, _format_changelog(data.get("body", ""))
     except Exception:
         pass
-    return False, None, None
+    return False, None, None, ""
 
 
 def download_installer(url):

@@ -341,6 +341,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     border-radius: 6px;
     display: none;
     text-align: center;
+    white-space: pre-line;
   }
   .update-status.up-to-date {
     display: block;
@@ -465,12 +466,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <div class="intro-overlay" id="introOverlay">
   <div class="intro-card">
     <div class="intro-mark"><img src="data:image/png;base64,{icon_b64}" alt="icon"></div>
-    <div class="intro-title">Welcome to Amazon Music RPC</div>
-    <div class="intro-copy">Set up Discord presence, scrobbling, privacy controls, diagnostics, and startup behavior from one place.</div>
+    <div class="intro-title">Amazon Music RPC</div>
+    <div class="intro-copy">An RPC for Amazon Music. These are the main settings worth checking before you leave it running in the tray.</div>
     <div class="intro-list">
-      <div class="intro-item">Use Settings for day-to-day options.</div>
-      <div class="intro-item">Open Diagnostics when something needs checking.</div>
-      <div class="intro-item">Enable Private Session when listening should stay local.</div>
+      <div class="intro-item">Discord Client ID can stay on Default unless you use your own app.</div>
+      <div class="intro-item">Notification enrichment can improve artist and album metadata.</div>
+      <div class="intro-item">Privacy controls hide tracks you do not want to share.</div>
+      <div class="intro-item">Diagnostics shows status, logs, and development checks.</div>
     </div>
     <button class="save-btn" onclick="finishIntro()">Get Started</button>
   </div>
@@ -904,7 +906,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       const result = await pywebview.api.check_for_updates();
       if (result.has_update) {
         status.className = 'update-status update-available';
-        status.textContent = '\u2191 Update available: v' + result.version;
+        status.textContent = '\u2191 Update available: v' + result.version + (result.changelog ? '\n\nWhat\\'s new:\n' + result.changelog : '');
         status.style.display = 'block';
       } else if (result.error) {
         status.className = 'update-status update-error';
@@ -1005,9 +1007,9 @@ class _Api:
     def check_for_updates(self):
         try:
             from updater import check_for_update
-            has_update, version, download_url = check_for_update()
+            has_update, version, download_url, changelog = check_for_update()
             if has_update:
-                return {"has_update": True, "version": version}
+                return {"has_update": True, "version": version, "changelog": changelog}
             return {"has_update": False}
         except Exception as e:
             return {"has_update": False, "error": f"Could not check: {e}"}
