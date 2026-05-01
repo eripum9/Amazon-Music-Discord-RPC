@@ -906,7 +906,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       const result = await pywebview.api.check_for_updates();
       if (result.has_update) {
         status.className = 'update-status update-available';
-        status.textContent = '\u2191 Update available: v' + result.version + (result.changelog ? '\n\nWhat\\'s new:\n' + result.changelog : '');
+        status.textContent = '\u2191 Update available: v' + result.version + (result.changelog ? "\n\nWhat's new:\n" + result.changelog : '');
         status.style.display = 'block';
       } else if (result.error) {
         status.className = 'update-status update-error';

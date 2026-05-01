@@ -98,4 +98,12 @@ def run_self_tests(log_dir, diagnostics_path):
     except Exception as e:
         results.append(_result("Diagnostics snapshot", False, str(e)))
 
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings_ui.py"), "r", encoding="utf-8") as f:
+            source = f.read()
+        ok = "What\\\\'s new" not in source and "async function init()" in source
+        results.append(_result("Settings script", ok, "Settings JavaScript guard"))
+    except Exception as e:
+        results.append(_result("Settings script", False, str(e)))
+
     return results
