@@ -946,9 +946,24 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
   }
 
+  function apiReady() {
+    return !!(window.pywebview && window.pywebview.api);
+  }
+
+  async function waitForApi(timeoutMs = 7000) {
+    const start = Date.now();
+    while (!apiReady()) {
+      if ((Date.now() - start) > timeoutMs) {
+        throw new Error('Timed out waiting for app bridge.');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+  }
+
   async function init() {
     applyConfig(BOOTSTRAP_CONFIG);
     try {
+      await waitForApi();
       const cfg = await pywebview.api.get_config();
       applyConfig(cfg);
       hideSettingsStatus();
@@ -1001,7 +1016,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     btn.textContent = '\u2191 Check for Updates';
   }
 
-  document.addEventListener('DOMContentLoaded', () => applyConfig(BOOTSTRAP_CONFIG));
+  document.addEventListener('DOMContentLoaded', () => {
+    applyConfig(BOOTSTRAP_CONFIG);
+    init();
+  });
   window.addEventListener('pywebviewready', init);
 </script>
 </body>
