@@ -60,9 +60,9 @@ def run_self_tests(log_dir, diagnostics_path):
 
     try:
         from updater import _format_changelog
-        body = "## What's Changed\n- Added diagnostics\n- Fixed privacy"
+        body = "Intro paragraph\n\n## What's New\n\n### New Features\n\n- Added diagnostics\n- Fixed privacy\n\n## Installation\n\nDownload the installer."
         formatted = _format_changelog(body)
-        ok = "Added diagnostics" in formatted and "Fixed privacy" in formatted
+        ok = "Added diagnostics" in formatted and "Fixed privacy" in formatted and "Intro paragraph" not in formatted and "Download the installer" not in formatted
         results.append(_result("Update changelog", ok, formatted or "No changelog"))
     except Exception as e:
         results.append(_result("Update changelog", False, str(e)))

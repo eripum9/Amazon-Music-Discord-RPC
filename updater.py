@@ -22,6 +22,13 @@ def _format_changelog(body):
     if not body:
         return ""
     lines = []
+    body_lines = body.replace("\r", "\n").split("\n")
+    start_at = 0
+    for index, raw in enumerate(body_lines):
+        heading = raw.strip().strip("#").strip().lower()
+        if heading in {"what's new", "whats new", "new features", "improvements"}:
+            start_at = index + 1
+            break
     skip_headings = {
         "changelog",
         "changes",
@@ -29,8 +36,14 @@ def _format_changelog(body):
         "what's changed",
         "whats changed",
         "new features",
+        "improvements",
+        "reliability",
+        "settings ui",
+        "diagnostics",
+        "privacy",
     }
-    for raw in body.replace("\r", "\n").split("\n"):
+    stop_headings = {"installation", "requirements"}
+    for raw in body_lines[start_at:]:
         line = raw.strip()
         if not line:
             continue
@@ -38,6 +51,8 @@ def _format_changelog(body):
         if lowered.startswith(("<!--", "<details", "</details", "<summary", "</summary")):
             continue
         line = line.strip("#").strip()
+        if line.lower() in stop_headings:
+            break
         if line.lower() in skip_headings:
             continue
         if line.startswith(("-", "*", "•")):
