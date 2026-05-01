@@ -32,6 +32,15 @@ DEFAULTS = {
     "listenbrainz_enabled": False,
     "listenbrainz_token": "",
     "notification_enrichment_enabled": False,
+    "privacy_private_session": False,
+    "privacy_blocked_keywords": "",
+    "privacy_disable_scrobbling": True,
+    "intro_seen": False,
+    "diagnostics_tests_warning_dismissed": False,
+    "settings_window_width": 460,
+    "settings_window_height": 800,
+    "diagnostics_window_width": 940,
+    "diagnostics_window_height": 700,
 }
 
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -71,12 +80,13 @@ def is_startup_enabled():
         return False
 
 
-def set_startup(enable):
+def set_startup(enable, start_minimized=True):
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_REG_KEY, 0, winreg.KEY_SET_VALUE)
         if enable:
             exe = get_exe_path()
-            winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, f'"{exe}" --startup')
+            args = " --startup" if start_minimized else ""
+            winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, f'"{exe}"{args}')
         else:
             try:
                 winreg.DeleteValue(key, APP_NAME)

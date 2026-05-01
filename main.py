@@ -17,7 +17,7 @@ from media_reader import get_track_sync
 from notification_reader import get_notification_track_sync, is_new_notification
 from album_art import get_album_art, search_tracks
 from discord_rpc import DiscordRPC
-from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID
+from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION
 from updater import check_for_update, download_installer
 
 if getattr(sys, 'frozen', False):
@@ -36,18 +36,98 @@ if getattr(sys, 'frozen', False):
 else:
     LOG_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(LOG_DIR, "console.log")
+DIAGNOSTICS_PATH = os.path.join(LOG_DIR, "diagnostics.json")
+MAX_OLD_LOGS = 5
 
 rpc_thread = None
 rpc_running = False
 tray_icon = None
 current_config = {}
 settings_proc = None
-console_proc = None
+diagnostics_proc = None
 _picker_lock = threading.Lock()
 _picker_pending_key = None
 _resolved_cache = {}
 _skipped_keys = set()
 _current_track_raw = None
+
+RPC_CONFIG_KEYS = {
+    "discord_client_id",
+    "use_custom_client_id",
+    "track_mappings",
+    "song_link_enabled",
+    "show_paused",
+    "lastfm_enabled",
+    "lastfm_api_key",
+    "lastfm_api_secret",
+    "lastfm_session_key",
+    "listenbrainz_enabled",
+    "listenbrainz_token",
+    "notification_enrichment_enabled",
+    "privacy_private_session",
+    "privacy_blocked_keywords",
+    "privacy_disable_scrobbling",
+}
+
+
+def _rpc_config_snapshot(config):
+    return {key: config.get(key) for key in RPC_CONFIG_KEYS}
+
+
+def _write_diagnostics_state(**state):
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        payload = {
+            "updated_at": time.time(),
+            "app_version": APP_VERSION,
+            **state,
+        }
+        tmp_path = DIAGNOSTICS_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp_path, DIAGNOSTICS_PATH)
+    except Exception:
+        pass
+
+
+def _privacy_keywords(config):
+    raw = config.get("privacy_blocked_keywords", "")
+    return [item.strip().lower() for item in raw.replace("\n", ",").split(",") if item.strip()]
+
+
+def _privacy_match(config, title="", artist="", album=""):
+    if config.get("privacy_private_session"):
+        return "Private session enabled"
+    haystack = f"{title} {artist} {album}".lower()
+    for keyword in _privacy_keywords(config):
+        if keyword in haystack:
+            return f"Matched privacy keyword: {keyword}"
+    return ""
+
+
+def _rotated_log_path(index):
+    return os.path.join(LOG_DIR, f"console.{index}.log")
+
+
+def _rotate_logs():
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        oldest = _rotated_log_path(MAX_OLD_LOGS)
+        if os.path.exists(oldest):
+            os.remove(oldest)
+        for index in range(MAX_OLD_LOGS - 1, 0, -1):
+            src = _rotated_log_path(index)
+            dst = _rotated_log_path(index + 1)
+            if os.path.exists(src):
+                os.replace(src, dst)
+        if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > 0:
+            os.replace(LOG_PATH, _rotated_log_path(1))
+        open(LOG_PATH, 'w').close()
+    except Exception:
+        try:
+            open(LOG_PATH, 'w').close()
+        except Exception:
+            pass
 
 
 class _LogTee(io.TextIOBase):
@@ -216,11 +296,14 @@ def rpc_loop():
     song_link_enabled = config.get("song_link_enabled", False)
     show_paused = config.get("show_paused", True)
     notification_enrichment_enabled = config.get("notification_enrichment_enabled", False)
+    privacy_disable_scrobbling = config.get("privacy_disable_scrobbling", True)
     _current_notif_data = None
     _notif_art_fetched_for = None
 
     scrobbler = None
+    lastfm_state = "disabled"
     if config.get("lastfm_enabled") and config.get("lastfm_session_key"):
+        lastfm_state = "error"
         try:
             from lastfm import LastFMScrobbler
             scrobbler = LastFMScrobbler(
@@ -228,26 +311,61 @@ def rpc_loop():
                 config["lastfm_api_secret"],
                 config["lastfm_session_key"],
             )
+            lastfm_state = "active"
             print("[Last.fm] Scrobbler active.")
         except Exception as e:
             print(f"[Last.fm] Init failed: {e}")
+    elif config.get("lastfm_enabled"):
+        lastfm_state = "not_authenticated"
 
     lb_scrobbler = None
+    listenbrainz_state = "disabled"
     if config.get("listenbrainz_enabled") and config.get("listenbrainz_token"):
+        listenbrainz_state = "error"
         try:
             from listenbrainz_scrobbler import ListenBrainzScrobbler
             lb_scrobbler = ListenBrainzScrobbler(config["listenbrainz_token"])
+            listenbrainz_state = "active"
             print("[ListenBrainz] Scrobbler active.")
         except Exception as e:
             print(f"[ListenBrainz] Init failed: {e}")
+    elif config.get("listenbrainz_enabled"):
+        listenbrainz_state = "missing_token"
 
     scrobble_track_key = None
     scrobble_start_time = None
     scrobble_duration = 0
     scrobbled = False
     last_deezer_duration = 0
+    scrobbling_state = {
+        "lastfm": lastfm_state,
+        "listenbrainz": listenbrainz_state,
+    }
+
+    def _update_state(track=None, presence=False, error="", privacy_reason=""):
+        _write_diagnostics_state(
+            rpc_status="running" if rpc_running else "stopped",
+            discord_status="connected" if rpc.connected else "retrying",
+            client_id=client_id,
+            track=track,
+            presence_visible=presence,
+            album_art_url=last_art_url or "",
+            album_name=last_album_name or "",
+            track_link=last_track_link or "",
+            notification_enabled=notification_enrichment_enabled,
+            notification=_current_notif_data,
+            scrobbling=scrobbling_state,
+            privacy={
+                "private_session": bool(config.get("privacy_private_session")),
+                "blocked_keywords": config.get("privacy_blocked_keywords", ""),
+                "hidden": bool(privacy_reason),
+                "reason": privacy_reason,
+            },
+            last_error=error,
+        )
 
     print("[RPC] Started.")
+    _update_state()
 
     while rpc_running:
         try:
@@ -288,10 +406,35 @@ def rpc_loop():
                 last_track_link = None
                 _current_notif_data = None
                 _notif_art_fetched_for = None
+                _update_state(track=None, presence=False)
                 time.sleep(3)
                 continue
 
             if track["status"] == "paused":
+                privacy_reason = _privacy_match(config, track.get("title", ""), track.get("artist", ""), track.get("album", ""))
+                if privacy_reason:
+                    if presence_visible:
+                        rpc.clear()
+                        presence_visible = False
+                    if privacy_disable_scrobbling:
+                        scrobble_track_key = None
+                        scrobble_start_time = None
+                        scrobbled = True
+                    last_track_key = None
+                    last_art_url = None
+                    last_album_name = None
+                    last_track_link = None
+                    hidden_track = {
+                        "title": "Hidden by privacy controls",
+                        "artist": "",
+                        "album": "",
+                        "status": track["status"],
+                        "position": track.get("position"),
+                        "duration": track.get("duration"),
+                    }
+                    _update_state(track=hidden_track, presence=False, privacy_reason=privacy_reason)
+                    time.sleep(3)
+                    continue
                 if show_paused and last_track_key:
                     if last_start_ts is not None:
                         paused_position = time.time() - last_start_ts
@@ -317,9 +460,17 @@ def rpc_loop():
                         small_text="Paused",
                     )
                     presence_visible = True
+                    paused_track = dict(track)
+                    paused_track["title"] = title_parts[0]
+                    paused_track["artist"] = title_parts[1] if len(title_parts) > 1 else ""
+                    paused_track["album"] = last_album_name or track.get("album", "")
+                    _update_state(track=paused_track, presence=True)
                 elif presence_visible:
                     rpc.clear()
                     presence_visible = False
+                    _update_state(track=track, presence=False)
+                else:
+                    _update_state(track=track, presence=False)
                 time.sleep(3)
                 continue
 
@@ -343,8 +494,36 @@ def rpc_loop():
                 last_art_fetch_key = None
                 last_start_ts = None
                 last_track_link = None
+                _update_state(track=track, presence=False)
                 time.sleep(3)
                 continue
+
+            privacy_reason = _privacy_match(config, title, artist, track.get("album", ""))
+            if privacy_reason:
+                if presence_visible:
+                    rpc.clear()
+                    presence_visible = False
+                if privacy_disable_scrobbling:
+                    scrobble_track_key = None
+                    scrobble_start_time = None
+                    scrobbled = True
+                    last_track_key = None
+                    last_art_url = None
+                    last_album_name = None
+                    last_art_fetch_key = None
+                    last_start_ts = None
+                    last_track_link = None
+                    hidden_track = {
+                        "title": "Hidden by privacy controls",
+                        "artist": "",
+                        "album": "",
+                        "status": track["status"],
+                        "position": track.get("position"),
+                        "duration": track.get("duration"),
+                    }
+                    _update_state(track=hidden_track, presence=False, privacy_reason=privacy_reason)
+                    time.sleep(3)
+                    continue
 
             _current_track_raw = raw_key
 
@@ -440,16 +619,32 @@ def rpc_loop():
             if song_link_enabled and last_track_link:
                 buttons = [{"label": "Listen on Deezer", "url": last_track_link}]
 
-            rpc.update(
-                title=title,
-                artist=artist,
-                album_art_url=last_art_url,
-                album_name=last_album_name,
-                start_ts=last_start_ts,
-                duration=track["duration"] or last_deezer_duration,
-                buttons=buttons,
-            )
-            presence_visible = True
+            state_track = dict(track)
+            state_track["title"] = title
+            state_track["artist"] = artist
+            state_track["album"] = last_album_name or track.get("album", "")
+            if privacy_reason:
+                hidden_track = {
+                    "title": "Hidden by privacy controls",
+                    "artist": "",
+                    "album": "",
+                    "status": track["status"],
+                    "position": track.get("position"),
+                    "duration": track.get("duration"),
+                }
+                _update_state(track=hidden_track, presence=False, privacy_reason=privacy_reason)
+            else:
+                rpc.update(
+                    title=title,
+                    artist=artist,
+                    album_art_url=last_art_url,
+                    album_name=last_album_name,
+                    start_ts=last_start_ts,
+                    duration=track["duration"] or last_deezer_duration,
+                    buttons=buttons,
+                )
+                presence_visible = True
+                _update_state(track=state_track, presence=True)
 
             if (scrobbler or lb_scrobbler) and not scrobbled and scrobble_track_key and scrobble_start_time:
                 scrobble_title, scrobble_artist = scrobble_track_key.split("|", 1)
@@ -471,6 +666,7 @@ def rpc_loop():
 
         except Exception as e:
             print(f"[RPC] Loop error: {e}")
+            _update_state(error=str(e))
             time.sleep(3)
 
     try:
@@ -478,6 +674,26 @@ def rpc_loop():
         rpc.disconnect()
     except Exception:
         pass
+    _write_diagnostics_state(
+        rpc_status="stopped",
+        discord_status="disconnected",
+        client_id=client_id,
+        track=None,
+        presence_visible=False,
+        album_art_url="",
+        album_name="",
+        track_link="",
+        notification_enabled=notification_enrichment_enabled,
+        notification=None,
+        scrobbling=scrobbling_state,
+        privacy={
+            "private_session": bool(config.get("privacy_private_session")),
+            "blocked_keywords": config.get("privacy_blocked_keywords", ""),
+            "hidden": False,
+            "reason": "",
+        },
+        last_error="",
+    )
     print("[RPC] Stopped.")
 
 
@@ -504,6 +720,16 @@ def restart_rpc():
     start_rpc()
 
 
+def toggle_private_session(icon=None, item=None):
+    global current_config
+    config = load_config()
+    config["privacy_private_session"] = not bool(config.get("privacy_private_session"))
+    save_config(config)
+    current_config = config
+    restart_rpc()
+    print(f"[Privacy] Private session {'enabled' if config['privacy_private_session'] else 'disabled'}.")
+
+
 def open_settings(icon=None, item=None):
     global current_config, settings_proc
     if settings_proc and settings_proc.poll() is None:
@@ -519,33 +745,39 @@ def open_settings(icon=None, item=None):
         global current_config
         time.sleep(2)
         old_config = dict(current_config)
+        old_rpc_config = _rpc_config_snapshot(old_config)
         for _ in range(300):
             time.sleep(1)
             if settings_proc and settings_proc.poll() is not None:
                 new_config = load_config()
+                new_rpc_config = _rpc_config_snapshot(new_config)
                 if new_config != old_config:
                     current_config = new_config
-                    restart_rpc()
-                    print("[Settings] Config updated, RPC restarted.")
+                    if new_rpc_config != old_rpc_config:
+                        restart_rpc()
+                        print("[Settings] Config updated, RPC restarted.")
                 break
             new_config = load_config()
+            new_rpc_config = _rpc_config_snapshot(new_config)
             if new_config != old_config:
                 current_config = new_config
                 old_config = dict(new_config)
-                restart_rpc()
-                print("[Settings] Config updated, RPC restarted.")
+                if new_rpc_config != old_rpc_config:
+                    old_rpc_config = new_rpc_config
+                    restart_rpc()
+                    print("[Settings] Config updated, RPC restarted.")
     threading.Thread(target=_reload_after_delay, daemon=True).start()
 
 
-def open_console(icon=None, item=None):
-    global console_proc
-    if console_proc and console_proc.poll() is None:
+def open_diagnostics(icon=None, item=None):
+    global diagnostics_proc
+    if diagnostics_proc and diagnostics_proc.poll() is None:
         return
     if getattr(sys, 'frozen', False):
-        console_proc = subprocess.Popen([sys.executable, '--console', LOG_PATH], creationflags=0x08000000)
+        diagnostics_proc = subprocess.Popen([sys.executable, '--diagnostics'], creationflags=0x08000000)
     else:
-        console_proc = subprocess.Popen(
-            [sys.executable, os.path.join(SCRIPT_DIR, 'track_picker.py'), '--console', LOG_PATH],
+        diagnostics_proc = subprocess.Popen(
+            [sys.executable, os.path.join(SCRIPT_DIR, 'diagnostics_ui.py')],
             creationflags=0x08000000
         )
 
@@ -646,14 +878,14 @@ def _check_for_update_and_prompt():
 
 
 def on_quit(icon, item):
-    global rpc_running, settings_proc, console_proc
+    global rpc_running, settings_proc, diagnostics_proc
     rpc_running = False
     if settings_proc and settings_proc.poll() is None:
         settings_proc.terminate()
         settings_proc = None
-    if console_proc and console_proc.poll() is None:
-        console_proc.terminate()
-        console_proc = None
+    if diagnostics_proc and diagnostics_proc.poll() is None:
+        diagnostics_proc.terminate()
+        diagnostics_proc = None
     icon.stop()
 
 
@@ -670,7 +902,9 @@ def build_menu():
         pystray.MenuItem(status_text, None, enabled=False),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Settings", open_settings),
-        pystray.MenuItem("Show Console", open_console),
+        pystray.MenuItem("Diagnostics", open_diagnostics),
+        pystray.MenuItem("Private Session", toggle_private_session,
+                         checked=lambda item: bool(current_config.get("privacy_private_session"))),
         pystray.MenuItem("Wrong Song?", wrong_song_handler),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Start RPC", lambda icon, item: start_rpc(),
@@ -691,6 +925,11 @@ def main():
         SettingsWindow().show()
         return
 
+    if '--diagnostics' in sys.argv:
+        from diagnostics_ui import DiagnosticsWindow
+        DiagnosticsWindow().show()
+        return
+
     if '--picker' in sys.argv:
         idx = sys.argv.index('--picker')
         if idx + 1 < len(sys.argv):
@@ -699,10 +938,8 @@ def main():
         return
 
     if '--console' in sys.argv:
-        idx = sys.argv.index('--console')
-        if idx + 1 < len(sys.argv):
-            from track_picker import show_console
-            show_console(sys.argv[idx + 1])
+        from diagnostics_ui import DiagnosticsWindow
+        DiagnosticsWindow().show()
         return
 
     kernel32 = ctypes.windll.kernel32
@@ -724,16 +961,13 @@ def main():
                 open_settings()
     threading.Thread(target=_watch_for_settings_signal, daemon=True).start()
 
-    try:
-        os.makedirs(LOG_DIR, exist_ok=True)
-        open(LOG_PATH, 'w').close()
-    except Exception:
-        pass
+    _rotate_logs()
     sys.stdout = _LogTee(sys.__stdout__, LOG_PATH)
     sys.stderr = _LogTee(sys.__stderr__, LOG_PATH)
 
     is_startup_launch = '--startup' in sys.argv
 
+    config_exists = os.path.exists(CONFIG_PATH)
     current_config = load_config()
 
     if os.path.exists(ICON_PATH):
@@ -754,7 +988,10 @@ def main():
         _check_for_update_and_prompt()
     threading.Thread(target=_check_update, daemon=True).start()
 
-    if not is_startup_launch:
+    should_open_settings = not is_startup_launch and (
+        not current_config.get("start_minimized", True) or not config_exists
+    )
+    if should_open_settings:
         open_settings()
 
     tray_icon.run()

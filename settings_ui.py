@@ -3,6 +3,7 @@
 import os
 import sys
 import base64
+import subprocess
 import webview
 from config import load_config, save_config, is_startup_enabled, set_startup, DEFAULT_CLIENT_ID, APP_VERSION
 
@@ -19,6 +20,20 @@ def _icon_b64():
         with open(ICON_PATH, "rb") as f:
             return base64.b64encode(f.read()).decode()
     return ""
+
+
+def _bounded_int(value, default, minimum):
+    try:
+        return max(minimum, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _save_window_size(width, height):
+    config = load_config()
+    config["settings_window_width"] = _bounded_int(width, 460, 420)
+    config["settings_window_height"] = _bounded_int(height, 800, 560)
+    save_config(config)
 
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -138,6 +153,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   input:focus { border-color: #5865f2; box-shadow: 0 0 0 1px #5865f250; }
   input[type="number"] { width: 64px; text-align: center; }
   input[type="number"]::-webkit-inner-spin-button { opacity: 1; }
+  textarea {
+    background: #383838;
+    color: #e4e4e4;
+    border: 1px solid #4a4a4a;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    width: 100%;
+    min-height: 58px;
+    resize: vertical;
+    transition: border-color 0.15s;
+  }
+  textarea:hover { border-color: #5865f2; }
+  textarea:focus { border-color: #5865f2; box-shadow: 0 0 0 1px #5865f250; }
 
   /* Custom ID field */
   .custom-id-group {
@@ -346,9 +377,104 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     padding: 2px 8px;
     margin-left: auto;
   }
+  .intro-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(18, 18, 18, 0.88);
+    backdrop-filter: blur(18px);
+    z-index: 20;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .intro-overlay.visible { display: flex; }
+  .intro-card {
+    width: min(420px, 100%);
+    background: #2d2d2d;
+    border: 1px solid #464646;
+    border-radius: 10px;
+    padding: 28px;
+    animation: introRise 0.36s ease-out;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+  }
+  .intro-mark {
+    width: 72px;
+    height: 72px;
+    border-radius: 18px;
+    margin-bottom: 18px;
+    display: grid;
+    place-items: center;
+    background: #383838;
+    border: 1px solid #555;
+    position: relative;
+    overflow: hidden;
+  }
+  .intro-mark::before {
+    content: "";
+    position: absolute;
+    width: 140%;
+    height: 140%;
+    background: conic-gradient(from 90deg, transparent, #5865f2, #43b581, transparent);
+    animation: introSpin 2.6s linear infinite;
+  }
+  .intro-mark img {
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
+    position: relative;
+    z-index: 1;
+  }
+  .intro-title {
+    font-size: 24px;
+    color: #fff;
+    font-weight: 650;
+    line-height: 1.15;
+    margin-bottom: 8px;
+  }
+  .intro-copy {
+    color: #aaa;
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 18px;
+  }
+  .intro-list {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .intro-item {
+    background: #383838;
+    border: 1px solid #4a4a4a;
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: #ddd;
+    font-size: 12px;
+  }
+  @keyframes introRise {
+    from { opacity: 0; transform: translateY(18px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes introSpin {
+    to { transform: rotate(360deg); }
+  }
 </style>
 </head>
 <body>
+
+<div class="intro-overlay" id="introOverlay">
+  <div class="intro-card">
+    <div class="intro-mark"><img src="data:image/png;base64,{icon_b64}" alt="icon"></div>
+    <div class="intro-title">Welcome to Amazon Music RPC</div>
+    <div class="intro-copy">Set up Discord presence, scrobbling, privacy controls, diagnostics, and startup behavior from one place.</div>
+    <div class="intro-list">
+      <div class="intro-item">Use Settings for day-to-day options.</div>
+      <div class="intro-item">Open Diagnostics when something needs checking.</div>
+      <div class="intro-item">Enable Private Session when listening should stay local.</div>
+    </div>
+    <button class="save-btn" onclick="finishIntro()">Get Started</button>
+  </div>
+</div>
 
 <div class="header">
   <img src="data:image/png;base64,{icon_b64}" alt="icon" id="appIcon">
@@ -446,6 +572,42 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </div>
 
 <div class="card">
+  <div class="card-title">Privacy</div>
+
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Private session</span>
+      <div class="row-desc">Hide Discord presence and skip protected activity</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="privacyPrivateSession" aria-label="Private session">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <div class="separator"></div>
+
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Disable scrobbling while private</span>
+      <div class="row-desc">Do not send Last.fm or ListenBrainz updates for hidden tracks</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="privacyDisableScrobbling" aria-label="Disable scrobbling while private">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <div class="separator"></div>
+
+  <div style="padding:6px 0;">
+    <div class="row-label">Blocked keywords</div>
+    <div class="row-desc" style="margin-bottom:8px;">Comma-separated words that hide matching tracks, artists, or albums</div>
+    <textarea id="privacyBlockedKeywords" placeholder="artist name, track title, album keyword"></textarea>
+  </div>
+</div>
+
+<div class="card">
   <div class="card-title">Song Link</div>
   <div class="row">
     <div class="row-labels">
@@ -517,6 +679,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </div>
 
 <button class="update-btn" id="updateBtn" onclick="checkForUpdates()">↑ Check for Updates</button>
+<button class="update-btn" id="diagBtn" onclick="pywebview.api.open_diagnostics()">Open Diagnostics</button>
+<button class="update-btn" onclick="pywebview.api.open_url('https://github.com/eripum9/Amazon-Music-Discord-RPC/issues')">Report Issue</button>
 <div class="update-status" id="updateStatus"></div>
 
 <script>
@@ -653,6 +817,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       start_on_startup: document.getElementById('startOnStartup').checked,
       start_minimized: document.getElementById('startMinimized').checked,
       show_paused: document.getElementById('showPaused').checked,
+      privacy_private_session: document.getElementById('privacyPrivateSession').checked,
+      privacy_disable_scrobbling: document.getElementById('privacyDisableScrobbling').checked,
+      privacy_blocked_keywords: document.getElementById('privacyBlockedKeywords').value.trim(),
       song_link_enabled: document.getElementById('songLinkEnabled').checked,
       notification_enrichment_enabled: document.getElementById('notifEnrichEnabled').checked,
       lastfm_enabled: document.getElementById('lastfmEnabled').checked,
@@ -690,6 +857,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     document.getElementById('startOnStartup').checked = !!cfg.start_on_startup;
     document.getElementById('startMinimized').checked = !!cfg.start_minimized;
     document.getElementById('showPaused').checked = cfg.show_paused !== false;
+    document.getElementById('privacyPrivateSession').checked = !!cfg.privacy_private_session;
+    document.getElementById('privacyDisableScrobbling').checked = cfg.privacy_disable_scrobbling !== false;
+    document.getElementById('privacyBlockedKeywords').value = cfg.privacy_blocked_keywords || '';
     document.getElementById('songLinkEnabled').checked = !!cfg.song_link_enabled;
     document.getElementById('notifEnrichEnabled').checked = !!cfg.notification_enrichment_enabled;
     if (cfg.notification_enrichment_enabled) {
@@ -713,6 +883,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     if (cfg.listenbrainz_enabled && cfg.listenbrainz_token) {
       lbValidate();
     }
+    if (!cfg.intro_seen) {
+      document.getElementById('introOverlay').classList.add('visible');
+    }
+  }
+
+  async function finishIntro() {
+    await pywebview.api.dismiss_intro();
+    document.getElementById('introOverlay').classList.remove('visible');
   }
 
   async function checkForUpdates() {
@@ -766,6 +944,12 @@ class _Api:
         import webbrowser
         webbrowser.open(url)
 
+    def dismiss_intro(self):
+        config = load_config()
+        config["intro_seen"] = True
+        save_config(config)
+        return {"ok": True}
+
     def validate_lb_token(self, token):
         try:
             import urllib.request
@@ -797,6 +981,7 @@ class _Api:
 
     _skg = None
     _auth_url = None
+    _diagnostics_proc = None
 
     def lastfm_complete_auth(self):
         try:
@@ -827,29 +1012,42 @@ class _Api:
         except Exception as e:
             return {"has_update": False, "error": f"Could not check: {e}"}
 
+    def open_diagnostics(self):
+        try:
+            if _Api._diagnostics_proc and _Api._diagnostics_proc.poll() is None:
+                return {"ok": True}
+            if getattr(sys, 'frozen', False):
+                cmd = [sys.executable, '--diagnostics']
+            else:
+                cmd = [sys.executable, os.path.join(_BUNDLE_DIR, "diagnostics_ui.py")]
+            _Api._diagnostics_proc = subprocess.Popen(cmd, creationflags=0x08000000)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def save_settings(self, data):
         use_custom = data.get("use_custom", False)
         client_id = data.get("client_id", "").strip() if use_custom else DEFAULT_CLIENT_ID
 
+        existing = load_config()
         config = {
+            **existing,
             "discord_client_id": client_id,
             "use_custom_client_id": use_custom,
             "start_on_startup": bool(data.get("start_on_startup")),
             "start_minimized": bool(data.get("start_minimized")),
             "show_paused": bool(data.get("show_paused", True)),
+            "privacy_private_session": bool(data.get("privacy_private_session")),
+            "privacy_disable_scrobbling": bool(data.get("privacy_disable_scrobbling", True)),
+            "privacy_blocked_keywords": data.get("privacy_blocked_keywords", "").strip(),
             "song_link_enabled": bool(data.get("song_link_enabled")),
             "notification_enrichment_enabled": bool(data.get("notification_enrichment_enabled")),
             "lastfm_enabled": bool(data.get("lastfm_enabled")),
             "listenbrainz_enabled": bool(data.get("listenbrainz_enabled")),
             "listenbrainz_token": data.get("listenbrainz_token", "").strip(),
         }
-        existing = load_config()
-        config["lastfm_api_key"] = existing.get("lastfm_api_key", "")
-        config["lastfm_api_secret"] = existing.get("lastfm_api_secret", "")
-        config["lastfm_session_key"] = existing.get("lastfm_session_key", "")
-        config["lastfm_username"] = existing.get("lastfm_username", "")
         save_config(config)
-        set_startup(config["start_on_startup"])
+        set_startup(config["start_on_startup"], config["start_minimized"])
 
         if self._on_save:
             self._on_save(config)
@@ -866,6 +1064,9 @@ class SettingsWindow:
         self._window = None
 
     def show(self):
+        config = load_config()
+        width = _bounded_int(config.get("settings_window_width"), 460, 420)
+        height = _bounded_int(config.get("settings_window_height"), 800, 560)
         html = HTML_TEMPLATE.replace("{icon_b64}", _icon_b64()).replace("{version}", APP_VERSION)
 
         window_holder = [None]
@@ -875,11 +1076,13 @@ class SettingsWindow:
             "Amazon Music RPC",
             html=html,
             js_api=api,
-            width=460,
-            height=800,
-            resizable=False,
+            width=width,
+            height=height,
+            resizable=True,
+            min_size=(420, 560),
             background_color="#202020",
         )
+        window_holder[0].events.resized += _save_window_size
         self._window = window_holder[0]
         webview.start()
 

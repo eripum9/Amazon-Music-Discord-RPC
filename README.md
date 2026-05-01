@@ -24,9 +24,12 @@ Discord Rich Presence for Amazon Music on Windows. Shows what you're listening t
 - **Last.fm scrobbling** — authenticate with one click and scrobble tracks automatically
 - **ListenBrainz scrobbling** — paste your user token, validate it in Settings, and scrobble tracks
 - **Listen on Deezer button** — adds a clickable link on your Discord presence (toggleable)
+- **Privacy controls** — private session mode and keyword filters for tracks you do not want to share
+- **Diagnostics window** — overview health checks, development tests, log history, and live console output in one resizable window
+- **Report issue shortcut** — opens the GitHub issue page from Settings or Diagnostics
 - **Auto-updater** — checks for updates on startup and via the Settings window
 - **System tray app** — runs quietly in the background
-- **Modern settings UI** — dark theme with WebView2 (Edge), Windows 11 style
+- **Modern settings UI** — dark theme with WebView2 (Edge), Windows 11 style, with saved window sizing
 - **Start on Windows startup** — optional, launches minimized to tray
 - **Custom Discord Application ID** — use your own if you want custom assets
 

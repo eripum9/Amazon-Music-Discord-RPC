@@ -18,6 +18,8 @@ a = Analysis(
         'clr',
         'pythonnet',
         'track_picker',
+        'diagnostics_ui',
+        'self_tests',
         'updater',
         'lastfm',
         'pylast',

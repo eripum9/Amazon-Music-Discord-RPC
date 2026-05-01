@@ -10,6 +10,8 @@ icon.ico
 icon.png
 
 config.json
+diagnostics.json
+diagnostics.json.tmp
 
 .vscode/
 .idea/
