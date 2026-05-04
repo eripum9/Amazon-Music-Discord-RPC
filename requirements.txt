@@ -1,8 +1,8 @@
-winsdk
-pypresence
-requests
-Pillow
-pystray
-pywebview
-pylast
-liblistenbrainz
+winsdk>=1.0.0b10
+pypresence>=4.3.0
+requests>=2.28.0
+Pillow>=9.0.0
+pystray>=0.19.0
+pywebview>=4.0.0
+pylast>=5.1.0
+liblistenbrainz>=0.5.6

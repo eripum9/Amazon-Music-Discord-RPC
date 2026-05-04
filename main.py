@@ -18,6 +18,7 @@ from notification_reader import get_notification_track_sync, is_new_notification
 from album_art import get_album_art, search_tracks
 from discord_rpc import DiscordRPC
 from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION
+from privacy import _privacy_keywords, _privacy_match
 from updater import check_for_update, prompt_for_update
 
 if getattr(sys, 'frozen', False):
@@ -91,20 +92,6 @@ def _write_diagnostics_state(**state):
     except Exception:
         pass
 
-
-def _privacy_keywords(config):
-    raw = config.get("privacy_blocked_keywords", "")
-    return [item.strip().lower() for item in raw.replace("\n", ",").split(",") if item.strip()]
-
-
-def _privacy_match(config, title="", artist="", album=""):
-    if config.get("privacy_private_session"):
-        return "Private session enabled"
-    haystack = f"{title} {artist} {album}".lower()
-    for keyword in _privacy_keywords(config):
-        if keyword in haystack:
-            return f"Matched privacy keyword: {keyword}"
-    return ""
 
 
 def _cached_start_ts(raw_key):
