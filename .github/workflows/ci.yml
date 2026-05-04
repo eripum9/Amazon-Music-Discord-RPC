@@ -10,6 +10,8 @@ jobs:
   test:
     name: Lint and test
     runs-on: windows-latest
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
