@@ -15,7 +15,7 @@ import pystray
 
 from media_reader import get_track_sync
 from notification_reader import get_notification_track_sync, is_new_notification
-from album_art import get_album_art, search_tracks
+from album_art import get_album_art, search_tracks, find_custom_album_art
 from discord_rpc import DiscordRPC
 from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION
 from updater import check_for_update, prompt_for_update
@@ -48,7 +48,9 @@ diagnostics_proc = None
 _picker_lock = threading.Lock()
 _picker_pending_key = None
 _resolved_cache = {}
+_resolved_track_info = {}
 _skipped_keys = set()
+_wrong_song_prompted_keys = set()
 _current_track_raw = None
 active_rpc = None
 _track_timing_cache = {}
@@ -57,6 +59,7 @@ RPC_CONFIG_KEYS = {
     "discord_client_id",
     "use_custom_client_id",
     "track_mappings",
+    "custom_albums",
     "song_link_enabled",
     "show_paused",
     "lastfm_enabled",
@@ -105,6 +108,127 @@ def _privacy_match(config, title="", artist="", album=""):
         if keyword in haystack:
             return f"Matched privacy keyword: {keyword}"
     return ""
+
+
+def _normalised_text(value):
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _same_track_field(left, right):
+    left = _normalised_text(left)
+    right = _normalised_text(right)
+    return bool(left and right and left == right)
+
+
+def _duration_value(value):
+    try:
+        return max(0, int(float(value or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _track_info_payload(track):
+    return {
+        "title": track.get("title", ""),
+        "artist": track.get("artist", ""),
+        "album": track.get("album", ""),
+        "art_url": track.get("art_url", ""),
+        "track_link": track.get("track_link", ""),
+        "duration": _duration_value(track.get("duration", 0)),
+    }
+
+
+def _store_resolved_track(raw_key, track):
+    if not isinstance(track, dict):
+        return
+    payload = _track_info_payload(track)
+    if raw_key:
+        _resolved_track_info[raw_key] = payload
+    resolved_key = f"{payload['title']}|{payload['artist']}"
+    if payload["title"] or payload["artist"]:
+        _resolved_track_info[resolved_key] = payload
+
+
+def _apply_custom_album_override(config, art_url, album_name, *album_names):
+    custom = find_custom_album_art(config, album_name, *album_names)
+    if custom:
+        return custom.get("art_url", art_url), custom.get("album", album_name) or album_name
+    return art_url, album_name
+
+
+def _apply_resolved_cache(raw_key, title, artist):
+    resolved = _resolved_cache.get(raw_key)
+    if not resolved:
+        return title, artist, False
+    return resolved[0] or title, resolved[1] or artist, True
+
+
+def _resolved_art(raw_key, title, artist, fallback_album=""):
+    info = _resolved_track_info.get(raw_key) or _resolved_track_info.get(f"{title}|{artist}")
+    if not info or not info.get("art_url"):
+        return None
+    return (
+        info.get("art_url", ""),
+        info.get("album", "") or fallback_album,
+        info.get("track_link", ""),
+        _duration_value(info.get("duration", 0)),
+    )
+
+
+def _apply_wrong_song_choice(choice, raw_key, title, artist, config):
+    if not choice:
+        return
+    _resolved_cache.pop(raw_key, None)
+    _resolved_track_info.pop(raw_key, None)
+    _skipped_keys.discard(raw_key)
+    if choice == "artist":
+        if not title:
+            return
+        mappings = config.get("track_mappings", {})
+        mappings.pop(title.lower().strip(), None)
+        _resolve_missing_artist(title, "", config, raw_key)
+    elif choice == "title":
+        if not artist:
+            return
+        _resolve_missing_title("", artist, raw_key)
+
+
+def _prompt_wrong_song_async(raw_key, title, artist, config, force=False):
+    global _picker_pending_key
+    if not force and raw_key in _wrong_song_prompted_keys:
+        return
+    with _picker_lock:
+        if _picker_pending_key is not None:
+            return
+        _picker_pending_key = raw_key
+    _wrong_song_prompted_keys.add(raw_key)
+
+    def _worker():
+        global _picker_pending_key
+        response = {}
+        try:
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
+            json.dump({"mode": "wrongsong"}, tmp)
+            tmp.close()
+
+            if getattr(sys, 'frozen', False):
+                cmd = [sys.executable, '--picker', tmp.name]
+            else:
+                cmd = [sys.executable, os.path.join(SCRIPT_DIR, "track_picker.py"), tmp.name]
+
+            subprocess.run(cmd, timeout=60)
+
+            with open(tmp.name, "r", encoding="utf-8") as f:
+                response = json.load(f)
+            os.unlink(tmp.name)
+        except Exception as e:
+            print(f"[WrongSong] Error: {e}")
+        finally:
+            with _picker_lock:
+                _picker_pending_key = None
+        _apply_wrong_song_choice(response.get("choice"), raw_key, title, artist, config)
+
+    threading.Thread(target=_worker, daemon=True).start()
 
 
 def _cached_start_ts(raw_key):
@@ -199,6 +323,7 @@ def _run_picker_async(request_data, raw_key, callback):
 
     def _worker():
         global _picker_pending_key
+        response = None
         try:
             tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
             json.dump(request_data, tmp)
@@ -214,12 +339,13 @@ def _run_picker_async(request_data, raw_key, callback):
             with open(tmp.name, "r", encoding="utf-8") as f:
                 response = json.load(f)
             os.unlink(tmp.name)
-            callback(response)
         except Exception as e:
             print(f"[Picker] Error: {e}")
         finally:
             with _picker_lock:
                 _picker_pending_key = None
+        if response is not None:
+            callback(response)
 
     threading.Thread(target=_worker, daemon=True).start()
 
@@ -237,6 +363,7 @@ def _resolve_missing_artist(title, artist, config, raw_key):
         m = mappings[mapping_key]
         result = (m.get("title", title), m.get("artist", ""))
         _resolved_cache[raw_key] = result
+        _store_resolved_track(raw_key, m)
         return result
 
     with _picker_lock:
@@ -249,17 +376,28 @@ def _resolve_missing_artist(title, artist, config, raw_key):
         return title, ""
 
     def _on_result(result):
-        if not result or result.get("index", -1) < 0:
+        if not result:
             _skipped_keys.add(raw_key)
             return
-        chosen = choices[result["index"]]
+        chosen = result.get("track")
+        if not chosen:
+            index = result.get("index", -1)
+            if index < 0 or index >= len(choices):
+                _skipped_keys.add(raw_key)
+                return
+            chosen = choices[index]
         _resolved_cache[raw_key] = (chosen["title"], chosen["artist"])
+        _store_resolved_track(raw_key, chosen)
         if result.get("remember"):
-            mappings[mapping_key] = {"title": chosen["title"], "artist": chosen["artist"]}
+            mappings[mapping_key] = _track_info_payload(chosen)
             config["track_mappings"] = mappings
             save_config(config)
 
-    _run_picker_async({"mode": "choice", "title": title, "choices": choices}, raw_key, _on_result)
+    _run_picker_async(
+        {"mode": "choice", "title": title, "choices": choices, "search_query": title, "page_size": 5},
+        raw_key,
+        _on_result,
+    )
     return title, artist
 
 
@@ -277,6 +415,7 @@ def _resolve_missing_title(title, artist, raw_key):
     def _on_result(result):
         if result and result.get("title"):
             _resolved_cache[raw_key] = (result["title"], result.get("artist", artist))
+            _store_resolved_track(raw_key, result)
         else:
             _skipped_keys.add(raw_key)
 
@@ -508,6 +647,10 @@ def rpc_loop():
             artist = track["artist"]
             raw_key = f"{title}|{artist}"
 
+            title, artist, resolved_applied = _apply_resolved_cache(raw_key, title, artist)
+            if not resolved_applied and _same_track_field(title, artist):
+                _prompt_wrong_song_async(raw_key, title, artist, config)
+
             if title and not artist:
                 title, artist = _resolve_missing_artist(title, artist, config, raw_key)
 
@@ -573,11 +716,18 @@ def rpc_loop():
                 _current_notif_data = None
                 _notif_art_fetched_for = None
 
-                last_art_url, last_album_name, last_track_link, last_deezer_duration = get_album_art(title, artist)
+                resolved = _resolved_art(raw_key, title, artist, track.get("album", ""))
+                if resolved:
+                    last_art_url, last_album_name, last_track_link, last_deezer_duration = resolved
+                else:
+                    last_art_url, last_album_name, last_track_link, last_deezer_duration = get_album_art(title, artist)
                 if _notif_album:
                     last_album_name = _notif_album
                 elif not last_album_name and track["album"]:
                     last_album_name = track["album"]
+                last_art_url, last_album_name = _apply_custom_album_override(
+                    config, last_art_url, last_album_name, _notif_album, track.get("album", "")
+                )
                 last_start_ts = _track_start_ts(track, raw_key)
                 if last_art_url:
                     print(f"[Art] Found: '{last_album_name}' for '{title}'")
@@ -604,11 +754,18 @@ def rpc_loop():
                             except Exception:
                                 pass
             elif raw_key in _resolved_cache and last_art_fetch_key != track_art_key:
-                last_art_url, last_album_name, last_track_link, last_deezer_duration = get_album_art(title, artist)
+                resolved = _resolved_art(raw_key, title, artist, track.get("album", ""))
+                if resolved:
+                    last_art_url, last_album_name, last_track_link, last_deezer_duration = resolved
+                else:
+                    last_art_url, last_album_name, last_track_link, last_deezer_duration = get_album_art(title, artist)
                 if _notif_album:
                     last_album_name = _notif_album
                 elif not last_album_name and track["album"]:
                     last_album_name = track["album"]
+                last_art_url, last_album_name = _apply_custom_album_override(
+                    config, last_art_url, last_album_name, _notif_album, track.get("album", "")
+                )
                 last_art_fetch_key = track_art_key
                 print(f"[Art] Refreshed after resolve: '{last_album_name}' for '{title}'")
                 if (scrobbler or lb_scrobbler) and scrobble_start_time and not scrobbled:
@@ -646,6 +803,9 @@ def rpc_loop():
                             last_deezer_duration = _notif_dur
                         print(f"[Art] Re-fetched art for notification album: '{_notif_album}'")
                     _notif_art_fetched_for = notif_art_key
+            last_art_url, last_album_name = _apply_custom_album_override(
+                config, last_art_url, last_album_name, _notif_album, track.get("album", "")
+            )
 
             buttons = None
             if song_link_enabled and last_track_link:
@@ -842,47 +1002,12 @@ def wrong_song_handler(icon=None, item=None):
         return
 
     def _worker():
-        global _current_track_raw
         try:
-            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
-            json.dump({"mode": "wrongsong"}, tmp)
-            tmp.close()
-
-            if getattr(sys, 'frozen', False):
-                cmd = [sys.executable, '--picker', tmp.name]
-            else:
-                cmd = [sys.executable, os.path.join(SCRIPT_DIR, "track_picker.py"), tmp.name]
-
-            subprocess.run(cmd, timeout=60)
-
-            with open(tmp.name, "r", encoding="utf-8") as f:
-                response = json.load(f)
-            os.unlink(tmp.name)
-
-            choice = response.get("choice")
-            if not choice:
-                return
-
-            rk = _current_track_raw or raw_key
-            _resolved_cache.pop(rk, None)
-            _skipped_keys.discard(rk)
-
             track = get_track_sync()
             if not track:
                 return
-
-            if choice == "artist":
-                title = track["title"]
-                if not title:
-                    return
-                mappings = current_config.get("track_mappings", {})
-                mappings.pop(title.lower().strip(), None)
-                _resolve_missing_artist(title, "", current_config, rk)
-            elif choice == "title":
-                artist = track["artist"]
-                if not artist:
-                    return
-                _resolve_missing_title("", artist, rk)
+            rk = _current_track_raw or raw_key
+            _prompt_wrong_song_async(rk, track["title"], track["artist"], current_config, force=True)
         except Exception as e:
             print(f"[WrongSong] Error: {e}")
 
