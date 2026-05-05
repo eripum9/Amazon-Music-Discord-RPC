@@ -30,9 +30,43 @@ def _load_thumbnail(url, size=50):
         return None
 
 
-def show_choice_picker(title, choices):
-    result = {"index": -1, "remember": False}
+def _track_payload(track):
+    return {
+        "title": track.get("title", ""),
+        "artist": track.get("artist", ""),
+        "album": track.get("album", ""),
+        "art_url": track.get("art_url", ""),
+        "track_link": track.get("track_link", ""),
+        "duration": track.get("duration", 0) or 0,
+    }
+
+
+def _search_page(query, page_size, page, search_fn=None):
+    offset = max(0, int(page)) * max(1, int(page_size))
+    if search_fn:
+        try:
+            return search_fn(query, limit=page_size, offset=offset)
+        except TypeError:
+            if offset:
+                return []
+            return search_fn(query, limit=page_size)
+    from album_art import search_tracks
+    return search_tracks(query, limit=page_size, offset=offset)
+
+
+def _center_window(root, min_width):
+    root.update_idletasks()
+    w = max(root.winfo_reqwidth(), min_width)
+    h = root.winfo_reqheight()
+    x = (root.winfo_screenwidth() - w) // 2
+    y = (root.winfo_screenheight() - h) // 2
+    root.geometry(f"{w}x{h}+{x}+{y}")
+
+
+def show_choice_picker(title, choices, search_query=None, page_size=5, prompt="No artist found. Select the correct track:", remember=True, search_fn=None):
+    result = {"index": -1, "remember": False, "track": None}
     _photo_refs.clear()
+    page_size = max(1, int(page_size or 5))
 
     root = tk.Tk()
     root.title("Amazon Music RPC")
@@ -50,69 +84,139 @@ def show_choice_picker(title, choices):
     ).pack(padx=20, pady=(16, 4), anchor="w")
 
     tk.Label(
-        root, text="No artist found. Select the correct track:",
+        root, text=prompt,
         bg=BG, fg=FG_DIM, font=small_font
     ).pack(padx=20, pady=(0, 10), anchor="w")
 
     selected = tk.IntVar(value=-1)
+    pages = {0: list(choices or [])}
+    current_page = [0]
+    exhausted_pages = set()
+    list_frame = tk.Frame(root, bg=BG)
+    list_frame.pack(fill="x")
+    status_label = tk.Label(root, text="", bg=BG, fg=FG_DIM, font=small_font)
+    status_label.pack(padx=20, pady=(4, 2), anchor="w")
 
-    for i, c in enumerate(choices):
-        row_frame = tk.Frame(root, bg=CARD_BG, highlightbackground=BORDER, highlightthickness=1)
-        row_frame.pack(fill="x", padx=16, pady=2)
-
-        rb = tk.Radiobutton(
-            row_frame, variable=selected, value=i,
-            bg=CARD_BG, selectcolor=BTN_BG,
-            activebackground=CARD_BG, highlightthickness=0, bd=0
-        )
-        rb.pack(side="left", padx=(8, 4), pady=6)
-
-        thumb = _load_thumbnail(c.get("art_url", ""), 48) if c.get("art_url") else None
-        if thumb:
-            _photo_refs.append(thumb)
-            tk.Label(row_frame, image=thumb, bg=CARD_BG, bd=0).pack(side="left", padx=(0, 8), pady=4)
-        else:
-            placeholder = tk.Frame(row_frame, bg="#444", width=48, height=48)
-            placeholder.pack_propagate(False)
-            placeholder.pack(side="left", padx=(0, 8), pady=4)
-
-        info_frame = tk.Frame(row_frame, bg=CARD_BG)
-        info_frame.pack(side="left", fill="x", expand=True, pady=4)
-
-        tk.Label(
-            info_frame, text=c.get("title", ""), bg=CARD_BG, fg="#fff",
-            font=main_font, anchor="w"
-        ).pack(anchor="w")
-        tk.Label(
-            info_frame, text=c.get("artist", ""), bg=CARD_BG, fg=FG,
-            font=small_font, anchor="w"
-        ).pack(anchor="w")
-        album_text = c.get("album", "")
-        if album_text:
+    def render_choices():
+        for child in list_frame.winfo_children():
+            child.destroy()
+        _photo_refs.clear()
+        selected.set(-1)
+        page_choices = pages.get(current_page[0], [])
+        if not page_choices:
             tk.Label(
-                info_frame, text=album_text, bg=CARD_BG, fg=FG_DIM,
+                list_frame, text="No results found on this page.",
+                bg=BG, fg=FG_DIM, font=small_font
+            ).pack(padx=20, pady=12, anchor="w")
+        for i, c in enumerate(page_choices):
+            row_frame = tk.Frame(list_frame, bg=CARD_BG, highlightbackground=BORDER, highlightthickness=1)
+            row_frame.pack(fill="x", padx=16, pady=2)
+
+            rb = tk.Radiobutton(
+                row_frame, variable=selected, value=i,
+                bg=CARD_BG, selectcolor=BTN_BG,
+                activebackground=CARD_BG, highlightthickness=0, bd=0
+            )
+            rb.pack(side="left", padx=(8, 4), pady=6)
+
+            thumb = _load_thumbnail(c.get("art_url", ""), 48) if c.get("art_url") else None
+            if thumb:
+                _photo_refs.append(thumb)
+                tk.Label(row_frame, image=thumb, bg=CARD_BG, bd=0).pack(side="left", padx=(0, 8), pady=4)
+            else:
+                placeholder = tk.Frame(row_frame, bg="#444", width=48, height=48)
+                placeholder.pack_propagate(False)
+                placeholder.pack(side="left", padx=(0, 8), pady=4)
+
+            info_frame = tk.Frame(row_frame, bg=CARD_BG)
+            info_frame.pack(side="left", fill="x", expand=True, pady=4)
+
+            tk.Label(
+                info_frame, text=c.get("title", ""), bg=CARD_BG, fg="#fff",
+                font=main_font, anchor="w"
+            ).pack(anchor="w")
+            tk.Label(
+                info_frame, text=c.get("artist", ""), bg=CARD_BG, fg=FG,
                 font=small_font, anchor="w"
             ).pack(anchor="w")
+            album_text = c.get("album", "")
+            if album_text:
+                tk.Label(
+                    info_frame, text=album_text, bg=CARD_BG, fg=FG_DIM,
+                    font=small_font, anchor="w"
+                ).pack(anchor="w")
+        page_label.configure(text=f"Page {current_page[0] + 1}")
+        prev_btn.configure(state="normal" if current_page[0] > 0 else "disabled")
+        can_next = bool(search_query) and current_page[0] not in exhausted_pages and len(page_choices) >= page_size
+        next_btn.configure(state="normal" if can_next else "disabled")
+        _center_window(root, 500)
+
+    def load_page(page):
+        if page < 0:
+            return
+        if page in pages:
+            current_page[0] = page
+            status_label.configure(text="")
+            render_choices()
+            return
+        if not search_query:
+            return
+        status_label.configure(text="Searching...")
+        root.update_idletasks()
+        tracks = _search_page(search_query, page_size, page, search_fn)
+        if not tracks:
+            exhausted_pages.add(page - 1)
+            status_label.configure(text="No more results.")
+            render_choices()
+            return
+        pages[page] = tracks
+        current_page[0] = page
+        status_label.configure(text="")
+        if len(tracks) < page_size:
+            exhausted_pages.add(page)
+        render_choices()
 
     remember_var = tk.BooleanVar(value=False)
-    tk.Checkbutton(
-        root, text="Always use this for this title", variable=remember_var,
-        bg=BG, fg=FG_DIM, selectcolor=BTN_BG,
-        activebackground=BG, activeforeground=FG,
-        font=small_font, highlightthickness=0, bd=0
-    ).pack(padx=20, pady=(6, 8), anchor="w")
+    if remember:
+        tk.Checkbutton(
+            root, text="Always use this for this title", variable=remember_var,
+            bg=BG, fg=FG_DIM, selectcolor=BTN_BG,
+            activebackground=BG, activeforeground=FG,
+            font=small_font, highlightthickness=0, bd=0
+        ).pack(padx=20, pady=(6, 8), anchor="w")
 
     btn_frame = tk.Frame(root, bg=BG)
     btn_frame.pack(fill="x", padx=16, pady=(0, 14))
 
     def on_select():
-        if selected.get() >= 0:
-            result["index"] = selected.get()
+        selected_index = selected.get()
+        page_choices = pages.get(current_page[0], [])
+        if selected_index >= 0 and selected_index < len(page_choices):
+            chosen = page_choices[selected_index]
+            result["index"] = current_page[0] * page_size + selected_index
             result["remember"] = remember_var.get()
+            result["track"] = _track_payload(chosen)
         root.destroy()
 
     def on_skip():
         root.destroy()
+
+    prev_btn = tk.Button(
+        btn_frame, text="Previous", command=lambda: load_page(current_page[0] - 1),
+        bg=BTN_BG, fg=FG, font=main_font, relief="flat",
+        padx=12, pady=4, cursor="hand2"
+    )
+    prev_btn.pack(side="left")
+
+    page_label = tk.Label(btn_frame, text="Page 1", bg=BG, fg=FG_DIM, font=small_font)
+    page_label.pack(side="left", padx=8)
+
+    next_btn = tk.Button(
+        btn_frame, text="Next", command=lambda: load_page(current_page[0] + 1),
+        bg=BTN_BG, fg=FG, font=main_font, relief="flat",
+        padx=12, pady=4, cursor="hand2"
+    )
+    next_btn.pack(side="left")
 
     tk.Button(
         btn_frame, text="Select", command=on_select,
@@ -126,12 +230,7 @@ def show_choice_picker(title, choices):
         padx=16, pady=4, cursor="hand2"
     ).pack(side="right")
 
-    root.update_idletasks()
-    w = max(root.winfo_reqwidth(), 480)
-    h = root.winfo_reqheight()
-    x = (root.winfo_screenwidth() - w) // 2
-    y = (root.winfo_screenheight() - h) // 2
-    root.geometry(f"{w}x{h}+{x}+{y}")
+    render_choices()
 
     root.protocol("WM_DELETE_WINDOW", on_skip)
     root.mainloop()
@@ -241,26 +340,38 @@ def show_input_picker(artist, search_fn=None):
 
     btn_frame = tk.Frame(root, bg=BG)
     btn_frame.pack(fill="x", padx=16, pady=(0, 14))
+    status_label = tk.Label(root, text="", bg=BG, fg=FG_DIM, font=small_font)
+    status_label.pack(padx=20, pady=(0, 8), anchor="w")
 
     def on_search(event=None):
         query = entry.get().strip()
         if not query:
             return
-        if search_fn:
-            tracks = search_fn(f"{query} {artist}", limit=1)
-        else:
-            from album_art import search_tracks
-            tracks = search_tracks(f"{query} {artist}", limit=1)
+        search_query = f"{query} {artist}"
+        status_label.configure(text="Searching...")
+        root.update_idletasks()
+        tracks = _search_page(search_query, 5, 0, search_fn)
         if not tracks:
+            status_label.configure(text="No results found.")
             return
-        track_info = tracks[0]
-        accepted = _show_confirm(root, track_info, main_font, small_font)
-        if accepted:
+        root.destroy()
+        picked = show_choice_picker(
+            query,
+            tracks,
+            search_query=search_query,
+            page_size=5,
+            prompt="Select the correct track:",
+            remember=False,
+            search_fn=search_fn,
+        )
+        track_info = picked.get("track") or {}
+        if track_info:
             result["title"] = track_info.get("title", query)
             result["artist"] = track_info.get("artist", artist)
             result["album"] = track_info.get("album", "")
             result["art_url"] = track_info.get("art_url", "")
-            root.destroy()
+            result["track_link"] = track_info.get("track_link", "")
+            result["duration"] = track_info.get("duration", 0) or 0
 
     def on_skip():
         root.destroy()
@@ -279,12 +390,7 @@ def show_input_picker(artist, search_fn=None):
         padx=16, pady=4, cursor="hand2"
     ).pack(side="right")
 
-    root.update_idletasks()
-    w = max(root.winfo_reqwidth(), 400)
-    h = root.winfo_reqheight()
-    x = (root.winfo_screenwidth() - w) // 2
-    y = (root.winfo_screenheight() - h) // 2
-    root.geometry(f"{w}x{h}+{x}+{y}")
+    _center_window(root, 400)
 
     root.protocol("WM_DELETE_WINDOW", on_skip)
     root.mainloop()
@@ -404,7 +510,12 @@ def run_from_file(filepath):
     mode = request.get("mode")
 
     if mode == "choice":
-        response = show_choice_picker(request["title"], request["choices"])
+        response = show_choice_picker(
+            request["title"],
+            request["choices"],
+            search_query=request.get("search_query") or request.get("title", ""),
+            page_size=request.get("page_size", 5),
+        )
     elif mode == "input":
         response = show_input_picker(request["artist"])
     elif mode == "wrongsong":

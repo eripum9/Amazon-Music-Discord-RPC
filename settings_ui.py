@@ -37,6 +37,29 @@ def _save_window_size(width, height):
     save_config(config)
 
 
+def _split_aliases(value):
+    if isinstance(value, list):
+        items = value
+    else:
+        items = str(value or "").replace("\n", ",").split(",")
+    return [str(item).strip() for item in items if str(item).strip()]
+
+
+def _clean_custom_albums(items):
+    if not isinstance(items, list):
+        return []
+    cleaned = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        album = str(item.get("album", "")).strip()
+        art_url = str(item.get("art_url", "")).strip()
+        aliases = _split_aliases(item.get("aliases", []))
+        if album and art_url:
+            cleaned.append({"album": album, "aliases": aliases, "art_url": art_url})
+    return cleaned
+
+
 def _settings_payload():
     cfg = load_config()
     try:
@@ -46,6 +69,7 @@ def _settings_payload():
     keys = [
         "discord_client_id",
         "use_custom_client_id",
+        "custom_albums",
         "start_on_startup",
         "start_minimized",
         "show_paused",
@@ -60,7 +84,9 @@ def _settings_payload():
         "listenbrainz_token",
         "intro_seen",
     ]
-    return {key: cfg.get(key) for key in keys}
+    payload = {key: cfg.get(key) for key in keys}
+    payload["custom_albums"] = _clean_custom_albums(payload.get("custom_albums"))
+    return payload
 
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -258,6 +284,50 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
   .lastfm-status.connected { color: #43b581; }
   .lastfm-status.disconnected { color: #f04747; }
+
+  .custom-album-list {
+    display: grid;
+    gap: 10px;
+  }
+  .custom-album-item {
+    background: #262626;
+    border: 1px solid #3d3d3d;
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .custom-album-fields {
+    display: grid;
+    gap: 8px;
+  }
+  .custom-album-fields label {
+    font-size: 11px;
+    color: #888;
+    display: block;
+    margin-bottom: 4px;
+  }
+  .custom-album-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 10px;
+  }
+  .mini-btn {
+    padding: 7px 12px;
+    background: #383838;
+    color: #e4e4e4;
+    border: 1px solid #4a4a4a;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .mini-btn:hover { border-color: #5865f2; background: #404040; }
+  .mini-btn.remove { color: #ff9b9b; }
+  .empty-state {
+    color: #888;
+    font-size: 12px;
+    padding: 4px 0 10px;
+  }
   .auth-btn {
     padding: 7px 14px;
     background: #d51007;
@@ -559,6 +629,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </div>
 
 <div class="card">
+  <div class="card-title">Custom Album Art</div>
+  <div class="row-desc" style="margin-bottom:10px;">Match album names or aliases to a custom cover image URL</div>
+  <div class="custom-album-list" id="customAlbumList"></div>
+  <button class="update-btn" type="button" onclick="addCustomAlbum()">Add Album Art</button>
+</div>
+
+<div class="card">
   <div class="card-title">Settings</div>
 
   <div class="row">
@@ -714,6 +791,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 <script>
   const BOOTSTRAP_CONFIG = {config_json};
+  let customAlbums = [];
 
   function showSettingsStatus(text, kind) {
     const status = document.getElementById('updateStatus');
@@ -740,6 +818,75 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       group.classList.remove('visible');
       document.getElementById('idError').style.display = 'none';
     }
+  }
+
+  function escapeHtml(value) {
+    return String(value || '').replace(/[&<>"']/g, (ch) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[ch]));
+  }
+
+  function splitAliasText(value) {
+    return String(value || '').split(/[\\n,]+/).map((item) => item.trim()).filter(Boolean);
+  }
+
+  function collectCustomAlbums(keepEmpty) {
+    return Array.from(document.querySelectorAll('.custom-album-item')).map((item) => {
+      const album = item.querySelector('[data-field="album"]').value.trim();
+      const aliases = splitAliasText(item.querySelector('[data-field="aliases"]').value);
+      const artUrl = item.querySelector('[data-field="art_url"]').value.trim();
+      return { album, aliases, art_url: artUrl };
+    }).filter((item) => keepEmpty || (item.album && item.art_url));
+  }
+
+  function renderCustomAlbums(items) {
+    customAlbums = Array.isArray(items) ? items.map((item) => ({
+      album: item.album || '',
+      aliases: Array.isArray(item.aliases) ? item.aliases : splitAliasText(item.aliases || ''),
+      art_url: item.art_url || ''
+    })) : [];
+    const list = document.getElementById('customAlbumList');
+    if (!customAlbums.length) {
+      list.innerHTML = '<div class="empty-state">No custom album art configured.</div>';
+      return;
+    }
+    list.innerHTML = customAlbums.map((item, index) => `
+      <div class="custom-album-item">
+        <div class="custom-album-fields">
+          <div>
+            <label>Album</label>
+            <input type="text" data-field="album" value="${escapeHtml(item.album)}" placeholder="Album name">
+          </div>
+          <div>
+            <label>Alternative names</label>
+            <textarea data-field="aliases" placeholder="One alias per line">${escapeHtml(item.aliases.join('\\n'))}</textarea>
+          </div>
+          <div>
+            <label>Cover image URL</label>
+            <input type="text" data-field="art_url" value="${escapeHtml(item.art_url)}" placeholder="https://example.com/cover.jpg">
+          </div>
+        </div>
+        <div class="custom-album-actions">
+          <button class="mini-btn remove" type="button" onclick="removeCustomAlbum(${index})">Remove</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function addCustomAlbum() {
+    customAlbums = collectCustomAlbums(true);
+    customAlbums.push({ album: '', aliases: [], art_url: '' });
+    renderCustomAlbums(customAlbums);
+  }
+
+  function removeCustomAlbum(index) {
+    customAlbums = collectCustomAlbums(true);
+    customAlbums.splice(index, 1);
+    renderCustomAlbums(customAlbums);
   }
 
   function onLastfmToggle() {
@@ -867,6 +1014,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       privacy_private_session: document.getElementById('privacyPrivateSession').checked,
       privacy_disable_scrobbling: document.getElementById('privacyDisableScrobbling').checked,
       privacy_blocked_keywords: document.getElementById('privacyBlockedKeywords').value.trim(),
+      custom_albums: collectCustomAlbums(false),
       song_link_enabled: document.getElementById('songLinkEnabled').checked,
       notification_enrichment_enabled: document.getElementById('notifEnrichEnabled').checked,
       lastfm_enabled: document.getElementById('lastfmEnabled').checked,
@@ -910,6 +1058,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     document.getElementById('privacyPrivateSession').checked = !!cfg.privacy_private_session;
     document.getElementById('privacyDisableScrobbling').checked = cfg.privacy_disable_scrobbling !== false;
     document.getElementById('privacyBlockedKeywords').value = cfg.privacy_blocked_keywords || '';
+    renderCustomAlbums(cfg.custom_albums || []);
     document.getElementById('songLinkEnabled').checked = !!cfg.song_link_enabled;
     document.getElementById('notifEnrichEnabled').checked = !!cfg.notification_enrichment_enabled;
     if (cfg.notification_enrichment_enabled) {
@@ -1140,6 +1289,7 @@ class _Api:
             "privacy_private_session": bool(data.get("privacy_private_session")),
             "privacy_disable_scrobbling": bool(data.get("privacy_disable_scrobbling", True)),
             "privacy_blocked_keywords": data.get("privacy_blocked_keywords", "").strip(),
+            "custom_albums": _clean_custom_albums(data.get("custom_albums", [])),
             "song_link_enabled": bool(data.get("song_link_enabled")),
             "notification_enrichment_enabled": bool(data.get("notification_enrichment_enabled")),
             "lastfm_enabled": bool(data.get("lastfm_enabled")),
@@ -1167,11 +1317,12 @@ class SettingsWindow:
         config = load_config()
         width = _bounded_int(config.get("settings_window_width"), 460, 420)
         height = _bounded_int(config.get("settings_window_height"), 800, 560)
+        config_json = json.dumps(_settings_payload()).replace("</", "<\\/")
         html = (
             HTML_TEMPLATE
             .replace("{icon_b64}", _icon_b64())
             .replace("{version}", APP_VERSION)
-            .replace("{config_json}", json.dumps(_settings_payload()))
+            .replace("{config_json}", config_json)
         )
 
         window_holder = [None]

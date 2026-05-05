@@ -1,5 +1,6 @@
 # MIT License - Copyright (c) 2026 eripum9
 
+import os
 import requests
 from urllib.parse import quote
 
@@ -14,8 +15,17 @@ def _clean_title(title):
     return title.strip()
 
 
-def search_tracks(query, limit=5):
-    url = f"https://api.deezer.com/search?q={quote(query)}&limit={limit}"
+def _bounded_int(value, default, minimum=0):
+    try:
+        return max(minimum, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def search_tracks(query, limit=5, offset=0):
+    limit = _bounded_int(limit, 5, 1)
+    offset = _bounded_int(offset, 0, 0)
+    url = f"https://api.deezer.com/search?q={quote(query)}&limit={limit}&index={offset}"
     try:
         resp = requests.get(url, timeout=5)
         resp.raise_for_status()
@@ -29,19 +39,22 @@ def search_tracks(query, limit=5):
                 "artist": track.get("artist", {}).get("name", ""),
                 "album": album.get("title", ""),
                 "art_url": art or "",
+                "track_link": track.get("link", ""),
+                "duration": track.get("duration", 0) or 0,
             })
         if results:
             return results
     except (requests.RequestException, KeyError, ValueError):
         pass
 
-    url = f"https://itunes.apple.com/search?term={quote(query)}&media=music&limit={limit}"
+    fetch_limit = min(max(limit + offset, limit), 200)
+    url = f"https://itunes.apple.com/search?term={quote(query)}&media=music&limit={fetch_limit}"
     try:
         resp = requests.get(url, timeout=5)
         resp.raise_for_status()
         data = resp.json()
         results = []
-        for r in data.get("results", []):
+        for r in data.get("results", [])[offset:offset + limit]:
             art_url = r.get("artworkUrl100", "")
             if art_url:
                 art_url = art_url.replace("100x100bb", "600x600bb")
@@ -50,11 +63,55 @@ def search_tracks(query, limit=5):
                 "artist": r.get("artistName", ""),
                 "album": r.get("collectionName", ""),
                 "art_url": art_url,
+                "track_link": r.get("trackViewUrl", ""),
+                "duration": round((r.get("trackTimeMillis") or 0) / 1000),
             })
         return results
     except (requests.RequestException, KeyError, ValueError):
         pass
     return []
+
+
+def _normalise_name(value):
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _split_aliases(value):
+    if isinstance(value, list):
+        items = value
+    else:
+        items = str(value or "").replace("\n", ",").split(",")
+    return [str(item).strip() for item in items if str(item).strip()]
+
+
+def _normalise_art_value(value):
+    art = str(value or "").strip()
+    if not art:
+        return ""
+    if art.lower().startswith(("http://", "https://", "mp:", "file://")):
+        return art
+    if os.path.exists(art):
+        return os.path.abspath(art)
+    return art
+
+
+def find_custom_album_art(config, *album_names):
+    entries = config.get("custom_albums", [])
+    if not isinstance(entries, list):
+        return None
+    candidates = {_normalise_name(name) for name in album_names if _normalise_name(name)}
+    if not candidates:
+        return None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        album = str(entry.get("album", "")).strip()
+        art_url = _normalise_art_value(entry.get("art_url", ""))
+        names = [album] + _split_aliases(entry.get("aliases", []))
+        normalised = {_normalise_name(name) for name in names if _normalise_name(name)}
+        if art_url and candidates.intersection(normalised):
+            return {"album": album or next(iter(candidates)), "art_url": art_url}
+    return None
 
 
 def _search_deezer(title, artist):
