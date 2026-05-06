@@ -1,3 +1,4 @@
+# MIT License - Copyright (c) 2026 eripum9
 import json
 import os
 import tempfile

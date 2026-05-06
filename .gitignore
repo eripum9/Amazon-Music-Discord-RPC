@@ -6,9 +6,6 @@ __pycache__/
 *.pyc
 *.pyo
 
-icon.ico
-icon.png
-
 config.json
 diagnostics.json
 diagnostics.json.tmp
