@@ -109,3 +109,8 @@ Right-click the tray icon and select **Settings** to open the configuration wind
 - [Deezer API](https://developers.deezer.com/) — Album art search
 - [iTunes Search API](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/) — Album art fallback
 - [ListenBrainz API](https://listenbrainz.readthedocs.io/) — ListenBrainz scrobbling
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
