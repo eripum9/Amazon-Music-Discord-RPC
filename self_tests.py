@@ -114,16 +114,20 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Track correction cache", False, str(e)))
 
     try:
-        from amazon_app_probe import _choose_track_from_texts, apply_probe_to_track
-        probe = _choose_track_from_texts(
-            ["Home", "Ring Ring Ring", "Tyler, The Creator", "DON'T TAP THE GLASS", "Pause"],
-            {"title": "Ring Ring Ring", "artist": "", "album": ""},
-        )
-        merged, changed = apply_probe_to_track({"title": "Ring Ring Ring", "artist": "", "album": "", "status": "playing"}, {"status": "found", **probe})
-        ok = changed and merged["artist"] == "Tyler, The Creator"
-        results.append(_result("Amazon app probe", ok, "Probe metadata can repair missing artist"))
+        from amazon_devtools import _normalise_track_payload, apply_devtools_to_track
+        devtools = _normalise_track_payload({
+            "status": "found",
+            "title": "Treehome95 [Explicit]",
+            "secondary": "Tyler, The Creator feat. Coco O. & Erykah Badu \u2022 Wolf [Explicit]",
+            "art_url": "https://m.media-amazon.com/images/I/41SsO6U8VML.jpg",
+            "position_text": "02:18",
+            "remaining_text": "-00:41",
+        })
+        merged, changed = apply_devtools_to_track({"title": "Treehome95", "artist": "", "album": "", "status": "playing"}, devtools)
+        ok = changed and merged["artist"].startswith("Tyler") and merged["album"] == "Wolf" and merged["duration"] == 179
+        results.append(_result("Amazon DevTools metadata", ok, "DevTools metadata can repair artist, album, art, and duration"))
     except Exception as e:
-        results.append(_result("Amazon app probe", False, str(e)))
+        results.append(_result("Amazon DevTools metadata", False, str(e)))
 
     try:
         import diagnostics_ui
@@ -164,7 +168,8 @@ def run_self_tests(log_dir, diagnostics_path):
             and "async function init()" in script
             and "renderCustomAlbums" in script
             and "custom_albums" in script
-            and "app_probe_enabled" in script
+            and "amazon_devtools_enabled" in script
+            and "launchAmazonDevtools" in script
         )
         results.append(_result("Settings script", ok, "Settings JavaScript guard"))
     except Exception as e:

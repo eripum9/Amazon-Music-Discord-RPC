@@ -154,24 +154,24 @@ def _build_cards(state, config, access):
     else:
         cards.append({"label": "Notifications", "value": "Off", "detail": "Notification enrichment disabled", "state": "muted"})
 
-    app_probe = state.get("app_probe") or {}
-    if config.get("app_probe_enabled"):
-        probe_status = app_probe.get("status") or "waiting"
-        if probe_status == "found":
+    amazon_devtools = state.get("amazon_devtools") or {}
+    if config.get("amazon_devtools_enabled"):
+        devtools_status = amazon_devtools.get("status") or "waiting"
+        if devtools_status == "found":
             value = "Found"
-            detail = app_probe.get("title") or app_probe.get("detail") or "Amazon app metadata available"
+            detail = amazon_devtools.get("title") or amazon_devtools.get("detail") or "Amazon DevTools metadata available"
             card_state = "good"
-        elif probe_status in ("error", "unavailable"):
+        elif devtools_status in ("error", "unavailable"):
             value = "Unavailable"
-            detail = app_probe.get("detail") or "Amazon app probe failed"
+            detail = amazon_devtools.get("detail") or "Amazon DevTools metadata failed"
             card_state = "bad"
         else:
             value = "Waiting"
-            detail = app_probe.get("detail") or "Waiting for exposed Amazon Music UI text"
+            detail = amazon_devtools.get("detail") or "Launch Amazon Music for beta metadata"
             card_state = "warn"
-        cards.append({"label": "App Probe", "value": value, "detail": detail, "state": card_state})
+        cards.append({"label": "Amazon Beta", "value": value, "detail": detail, "state": card_state})
     else:
-        cards.append({"label": "App Probe", "value": "Off", "detail": "Experimental metadata probe disabled", "state": "muted"})
+        cards.append({"label": "Amazon Beta", "value": "Off", "detail": "DevTools metadata disabled", "state": "muted"})
 
     privacy = state.get("privacy") or {}
     if privacy.get("hidden"):

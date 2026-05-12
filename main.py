@@ -16,7 +16,7 @@ import pystray
 from media_reader import get_track_sync
 from notification_reader import get_notification_track_sync, is_new_notification
 from album_art import get_album_art, search_tracks, find_custom_album_art
-from amazon_app_probe import get_app_track_sync, apply_probe_to_track
+from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track
 from discord_rpc import DiscordRPC
 from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION
 from updater import check_for_update, prompt_for_update
@@ -70,7 +70,7 @@ RPC_CONFIG_KEYS = {
     "listenbrainz_enabled",
     "listenbrainz_token",
     "notification_enrichment_enabled",
-    "app_probe_enabled",
+    "amazon_devtools_enabled",
     "privacy_private_session",
     "privacy_blocked_keywords",
     "privacy_disable_scrobbling",
@@ -467,14 +467,14 @@ def rpc_loop():
     song_link_enabled = config.get("song_link_enabled", False)
     show_paused = config.get("show_paused", True)
     notification_enrichment_enabled = config.get("notification_enrichment_enabled", False)
-    app_probe_enabled = config.get("app_probe_enabled", False)
+    amazon_devtools_enabled = config.get("amazon_devtools_enabled", False)
     privacy_disable_scrobbling = config.get("privacy_disable_scrobbling", True)
     _current_notif_data = None
     _notif_art_fetched_for = None
-    _current_app_probe = {
-        "enabled": bool(app_probe_enabled),
-        "status": "waiting" if app_probe_enabled else "off",
-        "detail": "Experimental app probe enabled" if app_probe_enabled else "Experimental app probe disabled",
+    _current_amazon_devtools = {
+        "enabled": bool(amazon_devtools_enabled),
+        "status": "waiting" if amazon_devtools_enabled else "off",
+        "detail": "Amazon DevTools metadata enabled" if amazon_devtools_enabled else "Amazon DevTools metadata disabled",
     }
 
     scrobbler = None
@@ -531,7 +531,7 @@ def rpc_loop():
             track_link=last_track_link or "",
             notification_enabled=notification_enrichment_enabled,
             notification=_current_notif_data,
-            app_probe=_current_app_probe,
+            amazon_devtools=_current_amazon_devtools,
             scrobbling=scrobbling_state,
             privacy={
                 "private_session": bool(config.get("privacy_private_session")),
@@ -549,8 +549,35 @@ def rpc_loop():
         try:
             track = get_track_sync()
 
+            devtools_found = False
+            if amazon_devtools_enabled:
+                try:
+                    devtools = get_devtools_track_sync()
+                    _current_amazon_devtools = {"enabled": True, **devtools}
+                    if devtools.get("status") == "found":
+                        devtools_found = True
+                        if track is None:
+                            track = {
+                                "title": "",
+                                "artist": "",
+                                "album": "",
+                                "status": "playing",
+                                "position": None,
+                                "duration": 0,
+                            }
+                        track, devtools_changed = apply_devtools_to_track(track, devtools)
+                        if devtools_changed:
+                            print(f"[Amazon] DevTools metadata: '{track.get('title', '')}' by '{track.get('artist', '')}'")
+                except Exception as e:
+                    _current_amazon_devtools = {
+                        "enabled": True,
+                        "status": "error",
+                        "detail": str(e),
+                        "source": "amazon_devtools",
+                    }
+
             _notif_album = None
-            if notification_enrichment_enabled and track and track["status"] == "playing":
+            if notification_enrichment_enabled and not devtools_found and track and track["status"] == "playing":
                 try:
                     notif = get_notification_track_sync()
                 except Exception:
@@ -573,11 +600,11 @@ def rpc_loop():
                         _current_notif_data = None
 
             if track is None:
-                if app_probe_enabled:
-                    _current_app_probe = {
+                if amazon_devtools_enabled:
+                    _current_amazon_devtools = {
                         "enabled": True,
                         "status": "waiting",
-                        "detail": "No SMTC session to compare",
+                        "detail": "No SMTC session and no Amazon DevTools metadata",
                     }
                 if presence_visible:
                     rpc.clear()
@@ -593,22 +620,6 @@ def rpc_loop():
                 _update_state(track=None, presence=False)
                 time.sleep(3)
                 continue
-
-            if app_probe_enabled and track["status"] == "playing":
-                try:
-                    probe = get_app_track_sync(track)
-                    _current_app_probe = {"enabled": True, **probe}
-                    merged_track, probe_applied = apply_probe_to_track(track, probe)
-                    if probe_applied:
-                        track = merged_track
-                        print(f"[AppProbe] Applied Amazon app metadata: '{track.get('title', '')}' by '{track.get('artist', '')}'")
-                except Exception as e:
-                    _current_app_probe = {
-                        "enabled": True,
-                        "status": "error",
-                        "detail": str(e),
-                        "source": "amazon_app_probe",
-                    }
 
             if track["status"] == "paused":
                 privacy_reason = _privacy_match(config, track.get("title", ""), track.get("artist", ""), track.get("album", ""))
@@ -750,12 +761,23 @@ def rpc_loop():
                 resolved = _resolved_art(raw_key, title, artist, track.get("album", ""))
                 if resolved:
                     last_art_url, last_album_name, last_track_link, last_deezer_duration = resolved
+                elif track.get("_amazon_art_url"):
+                    last_art_url = track.get("_amazon_art_url")
+                    last_album_name = track.get("album", "")
+                    last_track_link = track.get("_amazon_track_link", "")
+                    last_deezer_duration = track.get("duration") or 0
                 else:
                     last_art_url, last_album_name, last_track_link, last_deezer_duration = get_album_art(title, artist)
                 if _notif_album:
                     last_album_name = _notif_album
                 elif not last_album_name and track["album"]:
                     last_album_name = track["album"]
+                if track.get("_amazon_art_url"):
+                    last_art_url = track.get("_amazon_art_url")
+                    last_album_name = track.get("album", "") or last_album_name
+                    last_deezer_duration = track.get("duration") or last_deezer_duration
+                if track.get("_amazon_track_link"):
+                    last_track_link = track.get("_amazon_track_link")
                 last_art_url, last_album_name = _apply_custom_album_override(
                     config, last_art_url, last_album_name, _notif_album, track.get("album", "")
                 )
@@ -788,12 +810,23 @@ def rpc_loop():
                 resolved = _resolved_art(raw_key, title, artist, track.get("album", ""))
                 if resolved:
                     last_art_url, last_album_name, last_track_link, last_deezer_duration = resolved
+                elif track.get("_amazon_art_url"):
+                    last_art_url = track.get("_amazon_art_url")
+                    last_album_name = track.get("album", "")
+                    last_track_link = track.get("_amazon_track_link", "")
+                    last_deezer_duration = track.get("duration") or 0
                 else:
                     last_art_url, last_album_name, last_track_link, last_deezer_duration = get_album_art(title, artist)
                 if _notif_album:
                     last_album_name = _notif_album
                 elif not last_album_name and track["album"]:
                     last_album_name = track["album"]
+                if track.get("_amazon_art_url"):
+                    last_art_url = track.get("_amazon_art_url")
+                    last_album_name = track.get("album", "") or last_album_name
+                    last_deezer_duration = track.get("duration") or last_deezer_duration
+                if track.get("_amazon_track_link"):
+                    last_track_link = track.get("_amazon_track_link")
                 last_art_url, last_album_name = _apply_custom_album_override(
                     config, last_art_url, last_album_name, _notif_album, track.get("album", "")
                 )

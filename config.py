@@ -15,7 +15,7 @@ if not os.environ.get("APPDATA") or getattr(sys, "frozen", False) is False:
     CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
     CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
-APP_VERSION = "2.2.3"
+APP_VERSION = "3.0.0"
 
 DEFAULTS = {
     "discord_client_id": DEFAULT_CLIENT_ID,
@@ -34,7 +34,7 @@ DEFAULTS = {
     "listenbrainz_enabled": False,
     "listenbrainz_token": "",
     "notification_enrichment_enabled": False,
-    "app_probe_enabled": False,
+    "amazon_devtools_enabled": False,
     "privacy_private_session": False,
     "privacy_blocked_keywords": "",
     "privacy_disable_scrobbling": True,
