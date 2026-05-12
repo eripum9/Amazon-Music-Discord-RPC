@@ -34,6 +34,7 @@ DEFAULTS = {
     "listenbrainz_enabled": False,
     "listenbrainz_token": "",
     "notification_enrichment_enabled": False,
+    "app_probe_enabled": False,
     "privacy_private_session": False,
     "privacy_blocked_keywords": "",
     "privacy_disable_scrobbling": True,

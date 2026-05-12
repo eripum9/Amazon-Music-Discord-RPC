@@ -154,6 +154,25 @@ def _build_cards(state, config, access):
     else:
         cards.append({"label": "Notifications", "value": "Off", "detail": "Notification enrichment disabled", "state": "muted"})
 
+    app_probe = state.get("app_probe") or {}
+    if config.get("app_probe_enabled"):
+        probe_status = app_probe.get("status") or "waiting"
+        if probe_status == "found":
+            value = "Found"
+            detail = app_probe.get("title") or app_probe.get("detail") or "Amazon app metadata available"
+            card_state = "good"
+        elif probe_status in ("error", "unavailable"):
+            value = "Unavailable"
+            detail = app_probe.get("detail") or "Amazon app probe failed"
+            card_state = "bad"
+        else:
+            value = "Waiting"
+            detail = app_probe.get("detail") or "Waiting for exposed Amazon Music UI text"
+            card_state = "warn"
+        cards.append({"label": "App Probe", "value": value, "detail": detail, "state": card_state})
+    else:
+        cards.append({"label": "App Probe", "value": "Off", "detail": "Experimental metadata probe disabled", "state": "muted"})
+
     privacy = state.get("privacy") or {}
     if privacy.get("hidden"):
         cards.append({"label": "Privacy", "value": "Hiding", "detail": privacy.get("reason") or "Current activity hidden", "state": "warn"})

@@ -114,9 +114,21 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Track correction cache", False, str(e)))
 
     try:
+        from amazon_app_probe import _choose_track_from_texts, apply_probe_to_track
+        probe = _choose_track_from_texts(
+            ["Home", "Ring Ring Ring", "Tyler, The Creator", "DON'T TAP THE GLASS", "Pause"],
+            {"title": "Ring Ring Ring", "artist": "", "album": ""},
+        )
+        merged, changed = apply_probe_to_track({"title": "Ring Ring Ring", "artist": "", "album": "", "status": "playing"}, {"status": "found", **probe})
+        ok = changed and merged["artist"] == "Tyler, The Creator"
+        results.append(_result("Amazon app probe", ok, "Probe metadata can repair missing artist"))
+    except Exception as e:
+        results.append(_result("Amazon app probe", False, str(e)))
+
+    try:
         import diagnostics_ui
         cards = diagnostics_ui._build_cards({}, load_config(), {"value": "Unavailable", "state": "bad"})
-        results.append(_result("Diagnostics cards", len(cards) == 7, f"{len(cards)} cards"))
+        results.append(_result("Diagnostics cards", len(cards) == 8, f"{len(cards)} cards"))
     except Exception as e:
         results.append(_result("Diagnostics cards", False, str(e)))
 
@@ -152,6 +164,7 @@ def run_self_tests(log_dir, diagnostics_path):
             and "async function init()" in script
             and "renderCustomAlbums" in script
             and "custom_albums" in script
+            and "app_probe_enabled" in script
         )
         results.append(_result("Settings script", ok, "Settings JavaScript guard"))
     except Exception as e:

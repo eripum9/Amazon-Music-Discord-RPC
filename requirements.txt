@@ -6,3 +6,4 @@ pystray
 pywebview
 pylast
 liblistenbrainz
+uiautomation

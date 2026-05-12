@@ -16,6 +16,7 @@ import pystray
 from media_reader import get_track_sync
 from notification_reader import get_notification_track_sync, is_new_notification
 from album_art import get_album_art, search_tracks, find_custom_album_art
+from amazon_app_probe import get_app_track_sync, apply_probe_to_track
 from discord_rpc import DiscordRPC
 from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION
 from updater import check_for_update, prompt_for_update
@@ -69,6 +70,7 @@ RPC_CONFIG_KEYS = {
     "listenbrainz_enabled",
     "listenbrainz_token",
     "notification_enrichment_enabled",
+    "app_probe_enabled",
     "privacy_private_session",
     "privacy_blocked_keywords",
     "privacy_disable_scrobbling",
@@ -465,9 +467,15 @@ def rpc_loop():
     song_link_enabled = config.get("song_link_enabled", False)
     show_paused = config.get("show_paused", True)
     notification_enrichment_enabled = config.get("notification_enrichment_enabled", False)
+    app_probe_enabled = config.get("app_probe_enabled", False)
     privacy_disable_scrobbling = config.get("privacy_disable_scrobbling", True)
     _current_notif_data = None
     _notif_art_fetched_for = None
+    _current_app_probe = {
+        "enabled": bool(app_probe_enabled),
+        "status": "waiting" if app_probe_enabled else "off",
+        "detail": "Experimental app probe enabled" if app_probe_enabled else "Experimental app probe disabled",
+    }
 
     scrobbler = None
     lastfm_state = "disabled"
@@ -523,6 +531,7 @@ def rpc_loop():
             track_link=last_track_link or "",
             notification_enabled=notification_enrichment_enabled,
             notification=_current_notif_data,
+            app_probe=_current_app_probe,
             scrobbling=scrobbling_state,
             privacy={
                 "private_session": bool(config.get("privacy_private_session")),
@@ -564,6 +573,12 @@ def rpc_loop():
                         _current_notif_data = None
 
             if track is None:
+                if app_probe_enabled:
+                    _current_app_probe = {
+                        "enabled": True,
+                        "status": "waiting",
+                        "detail": "No SMTC session to compare",
+                    }
                 if presence_visible:
                     rpc.clear()
                     presence_visible = False
@@ -578,6 +593,22 @@ def rpc_loop():
                 _update_state(track=None, presence=False)
                 time.sleep(3)
                 continue
+
+            if app_probe_enabled and track["status"] == "playing":
+                try:
+                    probe = get_app_track_sync(track)
+                    _current_app_probe = {"enabled": True, **probe}
+                    merged_track, probe_applied = apply_probe_to_track(track, probe)
+                    if probe_applied:
+                        track = merged_track
+                        print(f"[AppProbe] Applied Amazon app metadata: '{track.get('title', '')}' by '{track.get('artist', '')}'")
+                except Exception as e:
+                    _current_app_probe = {
+                        "enabled": True,
+                        "status": "error",
+                        "detail": str(e),
+                        "source": "amazon_app_probe",
+                    }
 
             if track["status"] == "paused":
                 privacy_reason = _privacy_match(config, track.get("title", ""), track.get("artist", ""), track.get("album", ""))

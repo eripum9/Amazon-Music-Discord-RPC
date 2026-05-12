@@ -78,6 +78,7 @@ def _settings_payload():
         "privacy_blocked_keywords",
         "song_link_enabled",
         "notification_enrichment_enabled",
+        "app_probe_enabled",
         "lastfm_enabled",
         "lastfm_username",
         "listenbrainz_enabled",
@@ -629,6 +630,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </div>
 
 <div class="card">
+  <div class="card-title">Experimental Metadata</div>
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Amazon app probe</span>
+      <div class="row-desc">Try reading exposed Amazon Music window metadata through Windows accessibility</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="appProbeEnabled" aria-label="Enable Amazon app probe">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+</div>
+
+<div class="card">
   <div class="card-title">Custom Album Art</div>
   <div class="row-desc" style="margin-bottom:10px;">Match album names or aliases to a custom cover image URL</div>
   <div class="custom-album-list" id="customAlbumList"></div>
@@ -1017,6 +1033,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       custom_albums: collectCustomAlbums(false),
       song_link_enabled: document.getElementById('songLinkEnabled').checked,
       notification_enrichment_enabled: document.getElementById('notifEnrichEnabled').checked,
+      app_probe_enabled: document.getElementById('appProbeEnabled').checked,
       lastfm_enabled: document.getElementById('lastfmEnabled').checked,
       listenbrainz_enabled: document.getElementById('lbEnabled').checked,
       listenbrainz_token: document.getElementById('lbToken').value.trim()
@@ -1061,6 +1078,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     renderCustomAlbums(cfg.custom_albums || []);
     document.getElementById('songLinkEnabled').checked = !!cfg.song_link_enabled;
     document.getElementById('notifEnrichEnabled').checked = !!cfg.notification_enrichment_enabled;
+    document.getElementById('appProbeEnabled').checked = !!cfg.app_probe_enabled;
     if (cfg.notification_enrichment_enabled) {
       document.getElementById('notifEnrichInfo').classList.add('visible');
     } else {
@@ -1292,6 +1310,7 @@ class _Api:
             "custom_albums": _clean_custom_albums(data.get("custom_albums", [])),
             "song_link_enabled": bool(data.get("song_link_enabled")),
             "notification_enrichment_enabled": bool(data.get("notification_enrichment_enabled")),
+            "app_probe_enabled": bool(data.get("app_probe_enabled")),
             "lastfm_enabled": bool(data.get("lastfm_enabled")),
             "listenbrainz_enabled": bool(data.get("listenbrainz_enabled")),
             "listenbrainz_token": data.get("listenbrainz_token", "").strip(),
