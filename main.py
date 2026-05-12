@@ -879,6 +879,8 @@ def rpc_loop():
             state_track["title"] = title
             state_track["artist"] = artist
             state_track["album"] = last_album_name or track.get("album", "")
+            state_track.pop("_amazon_art_url", None)
+            state_track.pop("_amazon_track_link", None)
             if privacy_reason:
                 hidden_track = {
                     "title": "Hidden by privacy controls",
