@@ -260,6 +260,19 @@ def _track_start_ts(track, raw_key):
     return start_ts
 
 
+def _devtools_no_track_state(enabled, current_state):
+    if not enabled:
+        return current_state
+    current_state = current_state if isinstance(current_state, dict) else {}
+    if current_state.get("status") in {"unavailable", "error"}:
+        return current_state
+    return {
+        "enabled": True,
+        "status": "waiting",
+        "detail": "No SMTC session and no Amazon DevTools metadata",
+    }
+
+
 def _rotated_log_path(index):
     return os.path.join(LOG_DIR, f"console.{index}.log")
 
@@ -600,12 +613,7 @@ def rpc_loop():
                         _current_notif_data = None
 
             if track is None:
-                if amazon_devtools_enabled:
-                    _current_amazon_devtools = {
-                        "enabled": True,
-                        "status": "waiting",
-                        "detail": "No SMTC session and no Amazon DevTools metadata",
-                    }
+                _current_amazon_devtools = _devtools_no_track_state(amazon_devtools_enabled, _current_amazon_devtools)
                 if presence_visible:
                     rpc.clear()
                     presence_visible = False
@@ -646,8 +654,25 @@ def rpc_loop():
                     _update_state(track=hidden_track, presence=False, privacy_reason=privacy_reason)
                     time.sleep(3)
                     continue
+                paused_key = f"{track.get('title', '')}|{track.get('artist', '')}"
+                if paused_key != "|":
+                    last_track_key = paused_key
+                    if not last_album_name and track.get("album"):
+                        last_album_name = track.get("album")
+                    if track.get("_amazon_art_url"):
+                        last_art_url = track.get("_amazon_art_url")
+                    if track.get("_amazon_track_link"):
+                        last_track_link = track.get("_amazon_track_link")
+                    if track.get("duration"):
+                        last_deezer_duration = track.get("duration")
                 if show_paused and last_track_key:
-                    if last_start_ts is not None:
+                    if track.get("position") is not None:
+                        try:
+                            paused_position = float(track.get("position"))
+                            last_start_ts = None
+                        except (TypeError, ValueError):
+                            paused_position = None
+                    elif last_start_ts is not None:
                         paused_position = time.time() - last_start_ts
                         last_start_ts = None
                     buttons = None

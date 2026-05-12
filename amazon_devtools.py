@@ -59,16 +59,23 @@ def _normalise_track_payload(payload):
     artist = _clean(payload.get("artist"))
     album = _clean_label(payload.get("album"))
     secondary = _clean(payload.get("secondary"))
-    if secondary and (not artist or not album) and " • " in secondary:
-        left, right = secondary.split(" • ", 1)
-        artist = artist or _clean(left)
-        album = album or _clean_label(right)
+    if secondary and (not artist or not album):
+        if " • " in secondary:
+            left, right = secondary.split(" • ", 1)
+            artist = artist or _clean(left)
+            album = album or _clean_label(right)
+        elif not artist:
+            artist = secondary
 
     position = _parse_time(payload.get("position_text"))
     remaining = _parse_time(payload.get("remaining_text"))
     duration = 0
     if position is not None and remaining is not None and remaining < 0:
         duration = max(0, position + abs(remaining))
+
+    playback_status = _clean(payload.get("playback_status"))
+    if playback_status not in {"playing", "paused"}:
+        playback_status = "playing"
 
     if not title or not artist:
         return {
@@ -88,6 +95,7 @@ def _normalise_track_payload(payload):
         "track_link": _clean(payload.get("track_link")),
         "position": position,
         "duration": duration,
+        "playback_status": playback_status,
         "confidence": 98,
     }
 
@@ -225,6 +233,14 @@ _TRANSPORT_EXPRESSION = r"""
   const titleLink = titleEl ? titleEl.querySelector('a') : null;
   const positionEl = root.querySelector('.currentPlaybackPosition');
   const remainingEl = root.querySelector('.currentRemainingPosition');
+  const playPause = root.querySelector('button.playPause');
+  const playPauseMarkup = playPause ? playPause.innerHTML : '';
+  let playbackStatus = '';
+  if (/#pause|svg-icon--pause/i.test(playPauseMarkup)) {
+    playbackStatus = 'playing';
+  } else if (/#play|svg-icon--play/i.test(playPauseMarkup)) {
+    playbackStatus = 'paused';
+  }
   const title = clean((titleEl && (titleEl.getAttribute('title') || titleEl.innerText || titleEl.textContent)) || '');
   const secondary = clean((secondaryEl && (secondaryEl.getAttribute('title') || secondaryEl.innerText || secondaryEl.textContent)) || '');
   return {
@@ -237,7 +253,8 @@ _TRANSPORT_EXPRESSION = r"""
     art_url: img ? img.src : '',
     track_link: titleLink ? titleLink.href : '',
     position_text: positionEl ? clean(positionEl.innerText || positionEl.textContent) : '',
-    remaining_text: remainingEl ? clean(remainingEl.innerText || remainingEl.textContent) : ''
+    remaining_text: remainingEl ? clean(remainingEl.innerText || remainingEl.textContent) : '',
+    playback_status: playbackStatus
   };
 })()
 """
@@ -289,11 +306,14 @@ def apply_devtools_to_track(track, devtools):
             changed = True
     position = devtools.get("position")
     duration = devtools.get("duration")
+    playback_status = _clean(devtools.get("playback_status"))
     if position is not None:
         merged["position"] = position
     if duration:
         merged["duration"] = duration
-    if not merged.get("status"):
+    if playback_status in {"playing", "paused"}:
+        merged["status"] = playback_status
+    elif not merged.get("status"):
         merged["status"] = "playing"
     if devtools.get("art_url"):
         merged["_amazon_art_url"] = devtools.get("art_url")

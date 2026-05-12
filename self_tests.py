@@ -122,12 +122,39 @@ def run_self_tests(log_dir, diagnostics_path):
             "art_url": "https://m.media-amazon.com/images/I/41SsO6U8VML.jpg",
             "position_text": "02:18",
             "remaining_text": "-00:41",
+            "playback_status": "paused",
         })
         merged, changed = apply_devtools_to_track({"title": "Treehome95", "artist": "", "album": "", "status": "playing"}, devtools)
-        ok = changed and merged["artist"].startswith("Tyler") and merged["album"] == "Wolf" and merged["duration"] == 179
-        results.append(_result("Amazon DevTools metadata", ok, "DevTools metadata can repair artist, album, art, and duration"))
+        ok = changed and merged["artist"].startswith("Tyler") and merged["album"] == "Wolf" and merged["duration"] == 179 and merged["position"] == 138 and merged["status"] == "paused"
+        results.append(_result("Amazon DevTools metadata", ok, "DevTools metadata can repair artist, album, art, position, duration, and status"))
     except Exception as e:
         results.append(_result("Amazon DevTools metadata", False, str(e)))
+
+    try:
+        from amazon_devtools import _normalise_track_payload
+        devtools = _normalise_track_payload({
+            "status": "found",
+            "title": "Song",
+            "secondary": "Artist Only",
+        })
+        ok = devtools.get("status") == "found" and devtools.get("artist") == "Artist Only" and devtools.get("album") == ""
+        results.append(_result("Amazon DevTools secondary fallback", ok, "Single secondary label is treated as artist"))
+    except Exception as e:
+        results.append(_result("Amazon DevTools secondary fallback", False, str(e)))
+
+    try:
+        import main
+        unavailable = {"enabled": True, "status": "unavailable", "detail": "DevTools unavailable"}
+        error = {"enabled": True, "status": "error", "detail": "Socket failed"}
+        waiting = main._devtools_no_track_state(True, {"enabled": True, "status": "no_match", "detail": "No title"})
+        ok = (
+            main._devtools_no_track_state(True, unavailable) == unavailable
+            and main._devtools_no_track_state(True, error) == error
+            and waiting.get("status") == "waiting"
+        )
+        results.append(_result("Amazon DevTools diagnostics state", ok, "Unavailable and error states are preserved without a track"))
+    except Exception as e:
+        results.append(_result("Amazon DevTools diagnostics state", False, str(e)))
 
     try:
         import diagnostics_ui
