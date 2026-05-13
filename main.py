@@ -16,7 +16,7 @@ import pystray
 from media_reader import get_track_sync
 from notification_reader import get_notification_track_sync, is_new_notification
 from album_art import get_album_art, search_tracks, find_custom_album_art
-from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track
+from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, launch_amazon_music_devtools, restart_amazon_music_devtools
 from discord_rpc import DiscordRPC
 from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION
 from updater import check_for_update, prompt_for_update
@@ -39,6 +39,7 @@ else:
 LOG_PATH = os.path.join(LOG_DIR, "console.log")
 DIAGNOSTICS_PATH = os.path.join(LOG_DIR, "diagnostics.json")
 MAX_OLD_LOGS = 5
+DEVTOOLS_REPAIR_GRACE_SECONDS = 7
 
 rpc_thread = None
 rpc_running = False
@@ -71,6 +72,7 @@ RPC_CONFIG_KEYS = {
     "listenbrainz_token",
     "notification_enrichment_enabled",
     "amazon_devtools_enabled",
+    "amazon_devtools_auto_launch",
     "privacy_private_session",
     "privacy_blocked_keywords",
     "privacy_disable_scrobbling",
@@ -264,12 +266,12 @@ def _devtools_no_track_state(enabled, current_state):
     if not enabled:
         return current_state
     current_state = current_state if isinstance(current_state, dict) else {}
-    if current_state.get("status") in {"unavailable", "error"}:
+    if current_state.get("status") in {"unavailable", "error", "launching", "restarting"}:
         return current_state
     return {
         "enabled": True,
         "status": "waiting",
-        "detail": "No SMTC session and no Amazon DevTools metadata",
+        "detail": "No Amazon Music metadata or SMTC fallback session",
     }
 
 
@@ -481,13 +483,18 @@ def rpc_loop():
     show_paused = config.get("show_paused", True)
     notification_enrichment_enabled = config.get("notification_enrichment_enabled", False)
     amazon_devtools_enabled = config.get("amazon_devtools_enabled", False)
+    amazon_devtools_auto_launch = config.get("amazon_devtools_auto_launch", True)
     privacy_disable_scrobbling = config.get("privacy_disable_scrobbling", True)
+    devtools_auto_launch_attempted = False
+    devtools_restart_attempted = False
+    devtools_unavailable_since = None
+    last_amazon_metadata_key = None
     _current_notif_data = None
     _notif_art_fetched_for = None
     _current_amazon_devtools = {
         "enabled": bool(amazon_devtools_enabled),
         "status": "waiting" if amazon_devtools_enabled else "off",
-        "detail": "Amazon DevTools metadata enabled" if amazon_devtools_enabled else "Amazon DevTools metadata disabled",
+        "detail": "Amazon Music metadata enabled" if amazon_devtools_enabled else "Amazon Music metadata disabled",
     }
 
     scrobbler = None
@@ -560,7 +567,7 @@ def rpc_loop():
 
     while rpc_running:
         try:
-            track = get_track_sync()
+            track = None
 
             devtools_found = False
             if amazon_devtools_enabled:
@@ -568,19 +575,66 @@ def rpc_loop():
                     devtools = get_devtools_track_sync()
                     _current_amazon_devtools = {"enabled": True, **devtools}
                     if devtools.get("status") == "found":
+                        devtools_unavailable_since = None
+                        devtools_auto_launch_attempted = False
+                        devtools_restart_attempted = False
                         devtools_found = True
-                        if track is None:
-                            track = {
-                                "title": "",
-                                "artist": "",
-                                "album": "",
-                                "status": "playing",
-                                "position": None,
-                                "duration": 0,
-                            }
+                        _current_notif_data = None
+                        _notif_art_fetched_for = None
+                        track = {
+                            "title": "",
+                            "artist": "",
+                            "album": "",
+                            "status": "playing",
+                            "position": None,
+                            "duration": 0,
+                        }
                         track, devtools_changed = apply_devtools_to_track(track, devtools)
-                        if devtools_changed:
-                            print(f"[Amazon] DevTools metadata: '{track.get('title', '')}' by '{track.get('artist', '')}'")
+                        amazon_metadata_key = f"{track.get('title', '')}|{track.get('artist', '')}|{track.get('album', '')}|{track.get('status', '')}"
+                        if devtools_changed and amazon_metadata_key != last_amazon_metadata_key:
+                            last_amazon_metadata_key = amazon_metadata_key
+                            print(f"[Amazon] Metadata: '{track.get('title', '')}' by '{track.get('artist', '')}'")
+                    elif devtools.get("status") == "unavailable" and amazon_devtools_auto_launch:
+                        now = time.time()
+                        if devtools_unavailable_since is None:
+                            devtools_unavailable_since = now
+                        if not devtools_auto_launch_attempted:
+                            devtools_auto_launch_attempted = True
+                            launch_result = launch_amazon_music_devtools()
+                            if launch_result.get("ok"):
+                                devtools_unavailable_since = time.time()
+                                _current_amazon_devtools = {
+                                    "enabled": True,
+                                    "status": "launching",
+                                    "detail": "Amazon Music launched for metadata",
+                                    "source": "amazon_devtools",
+                                }
+                                print("[Amazon] Launched Amazon Music for metadata.")
+                            else:
+                                _current_amazon_devtools = {
+                                    "enabled": True,
+                                    "status": "error",
+                                    "detail": launch_result.get("error") or "Could not launch Amazon Music for metadata",
+                                    "source": "amazon_devtools",
+                                }
+                        elif not devtools_restart_attempted and now - devtools_unavailable_since >= DEVTOOLS_REPAIR_GRACE_SECONDS:
+                            devtools_restart_attempted = True
+                            restart_result = restart_amazon_music_devtools()
+                            if restart_result.get("ok"):
+                                _current_amazon_devtools = {
+                                    "enabled": True,
+                                    "status": "restarting",
+                                    "detail": "Restarted Amazon Music for metadata",
+                                    "source": "amazon_devtools",
+                                }
+                                print("[Amazon] Restarted Amazon Music for metadata.")
+                            else:
+                                _current_amazon_devtools = {
+                                    "enabled": True,
+                                    "status": "error",
+                                    "detail": restart_result.get("error") or "Could not restart Amazon Music for metadata",
+                                    "source": "amazon_devtools",
+                                }
                 except Exception as e:
                     _current_amazon_devtools = {
                         "enabled": True,
@@ -590,6 +644,9 @@ def rpc_loop():
                     }
 
             _notif_album = None
+            if not devtools_found:
+                track = get_track_sync()
+
             if notification_enrichment_enabled and not devtools_found and track and track["status"] == "playing":
                 try:
                     notif = get_notification_track_sync()
@@ -1086,6 +1143,17 @@ def open_diagnostics(icon=None, item=None):
         )
 
 
+def launch_amazon_devtools_from_tray(icon=None, item=None):
+    def _worker():
+        result = launch_amazon_music_devtools()
+        if result.get("ok"):
+            print("[Amazon] Launched Amazon Music for metadata.")
+        else:
+            print(f"[Amazon] Could not launch metadata mode: {result.get('error')}")
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 def wrong_song_handler(icon=None, item=None):
     global _current_track_raw
     raw_key = _current_track_raw
@@ -1162,6 +1230,7 @@ def build_menu():
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Settings", open_settings),
         pystray.MenuItem("Diagnostics", open_diagnostics),
+        pystray.MenuItem("Launch Amazon Music", launch_amazon_devtools_from_tray),
         pystray.MenuItem("Private Session", toggle_private_session,
                          checked=lambda item: bool(current_config.get("privacy_private_session"))),
         pystray.MenuItem("Wrong Song?", wrong_song_handler),
@@ -1187,6 +1256,20 @@ def main():
     if '--diagnostics' in sys.argv:
         from diagnostics_ui import DiagnosticsWindow
         DiagnosticsWindow().show()
+        return
+
+    if '--launch-amazon-devtools' in sys.argv:
+        result = launch_amazon_music_devtools()
+        if not result.get("ok"):
+            try:
+                ctypes.windll.user32.MessageBoxW(
+                    0,
+                    result.get("error") or "Could not launch Amazon Music for metadata.",
+                    "Amazon Music RPC",
+                    0x10 | 0x40000,
+                )
+            except Exception:
+                pass
         return
 
     if '--picker' in sys.argv:

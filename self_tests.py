@@ -146,15 +146,28 @@ def run_self_tests(log_dir, diagnostics_path):
         import main
         unavailable = {"enabled": True, "status": "unavailable", "detail": "DevTools unavailable"}
         error = {"enabled": True, "status": "error", "detail": "Socket failed"}
+        launching = {"enabled": True, "status": "launching", "detail": "Starting Amazon Music"}
+        restarting = {"enabled": True, "status": "restarting", "detail": "Restarting Amazon Music"}
         waiting = main._devtools_no_track_state(True, {"enabled": True, "status": "no_match", "detail": "No title"})
         ok = (
             main._devtools_no_track_state(True, unavailable) == unavailable
             and main._devtools_no_track_state(True, error) == error
+            and main._devtools_no_track_state(True, launching) == launching
+            and main._devtools_no_track_state(True, restarting) == restarting
             and waiting.get("status") == "waiting"
         )
-        results.append(_result("Amazon DevTools diagnostics state", ok, "Unavailable and error states are preserved without a track"))
+        results.append(_result("Amazon DevTools diagnostics state", ok, "Unavailable, launch, restart, and error states are preserved without a track"))
     except Exception as e:
         results.append(_result("Amazon DevTools diagnostics state", False, str(e)))
+
+    try:
+        from amazon_devtools import amazon_devtools_launcher_state, _shortcut_launcher_command
+        state = amazon_devtools_launcher_state()
+        target, arguments, working_dir, icon_path = _shortcut_launcher_command()
+        ok = state.get("path", "").endswith("Amazon Music Metadata.lnk") and target and "--launch-amazon-devtools" in arguments and working_dir and icon_path
+        results.append(_result("Amazon DevTools launcher", ok, "Launcher command and cleanup path are available"))
+    except Exception as e:
+        results.append(_result("Amazon DevTools launcher", False, str(e)))
 
     try:
         import diagnostics_ui
@@ -196,7 +209,12 @@ def run_self_tests(log_dir, diagnostics_path):
             and "renderCustomAlbums" in script
             and "custom_albums" in script
             and "amazon_devtools_enabled" in script
+            and "amazon_devtools_auto_launch" in script
             and "launchAmazonDevtools" in script
+            and "toggleAmazonLauncher" in script
+            and "onAmazonMetadataToggle" in script
+            and "not recommended" in script
+            and "beta metadata" not in html.lower()
         )
         results.append(_result("Settings script", ok, "Settings JavaScript guard"))
     except Exception as e:

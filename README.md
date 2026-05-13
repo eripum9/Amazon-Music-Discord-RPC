@@ -18,8 +18,8 @@ Discord Rich Presence for Amazon Music on Windows. Shows what you're listening t
 ## Features
 
 - **Live track display** — title, artist, album name, and progress bar with elapsed/total time
-- **Album art** — fetched automatically from Deezer (primary) and iTunes (fallback)
-- **Notification enrichment** — reads full artist and album info from Windows notifications for more accurate metadata than SMTC alone
+- **Album art** — uses Amazon Music artwork first, with external artwork lookup as fallback
+- **Fallback metadata** — uses SMTC and Windows notifications only when enhanced Amazon metadata is unavailable
 - **Pause state** — keeps your presence visible when paused, with a frozen progress bar and pause icon
 - **Last.fm scrobbling** — authenticate with one click and scrobble tracks automatically
 - **ListenBrainz scrobbling** — paste your user token, validate it in Settings, and scrobble tracks
@@ -35,9 +35,9 @@ Discord Rich Presence for Amazon Music on Windows. Shows what you're listening t
 
 ## How It Works
 
-Amazon Music exposes currently playing media through Windows' System Media Transport Controls (SMTC). This app reads that data and sends it to Discord via Rich Presence IPC.
+Amazon Music metadata is read from the local Amazon Music desktop app when enhanced metadata is enabled. This provides the current title, artist, album, artwork, playback state, and progress timing for Discord Rich Presence.
 
-Optionally, notification enrichment can be enabled to read full track metadata (artist + album) from Amazon Music's Windows notifications, which provides richer data than SMTC alone. This requires Amazon Music notifications to be enabled and the app to be minimized.
+If enhanced Amazon metadata is unavailable, the app falls back to Windows' System Media Transport Controls (SMTC). Notification fallback can optionally enrich that fallback path with artist and album metadata from Amazon Music's Windows notifications.
 
 ## Installation
 

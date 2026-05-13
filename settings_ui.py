@@ -79,6 +79,7 @@ def _settings_payload():
         "song_link_enabled",
         "notification_enrichment_enabled",
         "amazon_devtools_enabled",
+        "amazon_devtools_auto_launch",
         "lastfm_enabled",
         "lastfm_username",
         "listenbrainz_enabled",
@@ -87,6 +88,14 @@ def _settings_payload():
     ]
     payload = {key: cfg.get(key) for key in keys}
     payload["custom_albums"] = _clean_custom_albums(payload.get("custom_albums"))
+    try:
+        from amazon_devtools import amazon_devtools_launcher_state
+        launcher_state = amazon_devtools_launcher_state()
+        payload["amazon_devtools_launcher_installed"] = bool(launcher_state.get("installed"))
+        payload["amazon_devtools_launcher_path"] = launcher_state.get("path", "")
+    except Exception:
+        payload["amazon_devtools_launcher_installed"] = False
+        payload["amazon_devtools_launcher_path"] = ""
     return payload
 
 
@@ -568,7 +577,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="intro-copy">An RPC for Amazon Music. These are the main settings worth checking before you leave it running in the tray.</div>
     <div class="intro-list">
       <div class="intro-item">Discord Client ID can stay on Default unless you use your own app.</div>
-      <div class="intro-item">Notification enrichment can improve artist and album metadata.</div>
+      <div class="intro-item">Fallback metadata can help when Amazon metadata is unavailable.</div>
       <div class="intro-item">Privacy controls hide tracks you do not want to share.</div>
       <div class="intro-item">Diagnostics shows status, logs, and development checks.</div>
     </div>
@@ -602,14 +611,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </div>
 
 <div class="card">
-  <div class="card-title">Notification Enrichment</div>
+  <div class="card-title">Fallback Metadata</div>
   <div class="row">
     <div class="row-labels">
-      <span class="row-label">Enable notification enrichment</span>
-      <div class="row-desc">Use Windows notifications for more accurate track info</div>
+      <span class="row-label">Notification fallback</span>
+      <div class="row-desc">Use Windows notifications only when Amazon metadata is unavailable</div>
     </div>
     <label class="toggle">
-      <input type="checkbox" id="notifEnrichEnabled" aria-label="Enable notification enrichment" onchange="onNotifEnrichToggle()">
+      <input type="checkbox" id="notifEnrichEnabled" aria-label="Enable notification fallback" onchange="onNotifEnrichToggle()">
       <div class="toggle-track"></div>
       <div class="toggle-knob"></div>
     </label>
@@ -630,19 +639,32 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </div>
 
 <div class="card">
-  <div class="card-title">Experimental Metadata</div>
+  <div class="card-title">Amazon Metadata</div>
   <div class="row">
     <div class="row-labels">
-      <span class="row-label">Amazon metadata beta</span>
-      <div class="row-desc">Use Amazon Music's local DevTools metadata when the app is launched for testing</div>
+      <span class="row-label">Enhanced Amazon metadata</span>
+      <div class="row-desc">Use Amazon Music's local playback metadata for better track info</div>
     </div>
     <label class="toggle">
-      <input type="checkbox" id="amazonDevtoolsEnabled" aria-label="Enable Amazon metadata beta">
+      <input type="checkbox" id="amazonDevtoolsEnabled" aria-label="Enable enhanced Amazon metadata" onchange="onAmazonMetadataToggle()">
       <div class="toggle-track"></div>
       <div class="toggle-knob"></div>
     </label>
   </div>
-  <button class="update-btn" type="button" onclick="launchAmazonDevtools()">Launch Amazon Music for Beta Metadata</button>
+  <div class="separator"></div>
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Auto-launch Amazon Music</span>
+      <div class="row-desc">Start or restart Amazon Music for metadata when RPC starts</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="amazonDevtoolsAutoLaunch" aria-label="Auto-launch Amazon Music metadata">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <button class="update-btn" type="button" onclick="launchAmazonDevtools()">Launch Amazon Music Now</button>
+  <button class="update-btn" id="amazonLauncherBtn" type="button" onclick="toggleAmazonLauncher()">Add Start Menu Launcher</button>
 </div>
 
 <div class="card">
@@ -809,6 +831,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <script>
   const BOOTSTRAP_CONFIG = {config_json};
   let customAlbums = [];
+  let amazonLauncherInstalled = false;
 
   function showSettingsStatus(text, kind) {
     const status = document.getElementById('updateStatus');
@@ -924,6 +947,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
   }
 
+  function onAmazonMetadataToggle() {
+    const input = document.getElementById('amazonDevtoolsEnabled');
+    if (input.checked) {
+      return;
+    }
+    const confirmed = window.confirm('Disabling enhanced Amazon metadata is not recommended. It is the most reliable source for track info, artwork, pause state, and timing. If you disable it, Amazon Music RPC will fall back to SMTC and notifications, which can be less accurate. Disable it anyway?');
+    if (!confirmed) {
+      input.checked = true;
+    }
+  }
+
   function onLbToggle() {
     const fields = document.getElementById('lbFields');
     if (document.getElementById('lbEnabled').checked) {
@@ -1035,6 +1069,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       song_link_enabled: document.getElementById('songLinkEnabled').checked,
       notification_enrichment_enabled: document.getElementById('notifEnrichEnabled').checked,
       amazon_devtools_enabled: document.getElementById('amazonDevtoolsEnabled').checked,
+      amazon_devtools_auto_launch: document.getElementById('amazonDevtoolsAutoLaunch').checked,
       lastfm_enabled: document.getElementById('lastfmEnabled').checked,
       listenbrainz_enabled: document.getElementById('lbEnabled').checked,
       listenbrainz_token: document.getElementById('lbToken').value.trim()
@@ -1080,6 +1115,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     document.getElementById('songLinkEnabled').checked = !!cfg.song_link_enabled;
     document.getElementById('notifEnrichEnabled').checked = !!cfg.notification_enrichment_enabled;
     document.getElementById('amazonDevtoolsEnabled').checked = !!cfg.amazon_devtools_enabled;
+    document.getElementById('amazonDevtoolsAutoLaunch').checked = cfg.amazon_devtools_auto_launch !== false;
+    amazonLauncherInstalled = !!cfg.amazon_devtools_launcher_installed;
+    renderAmazonLauncherButton();
     if (cfg.notification_enrichment_enabled) {
       document.getElementById('notifEnrichInfo').classList.add('visible');
     } else {
@@ -1184,17 +1222,46 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     btn.textContent = '\u2191 Check for Updates';
   }
 
+  function renderAmazonLauncherButton() {
+    const btn = document.getElementById('amazonLauncherBtn');
+    if (!btn) {
+      return;
+    }
+    btn.textContent = amazonLauncherInstalled ? 'Remove Start Menu Launcher' : 'Add Start Menu Launcher';
+  }
+
   async function launchAmazonDevtools() {
     try {
       const result = await pywebview.api.launch_amazon_devtools();
       if (result && result.ok) {
-        showSettingsStatus('\u2713 Amazon Music launched for beta metadata. Keep this window open and start playback.', 'up-to-date');
+        showSettingsStatus('\u2713 Amazon Music launched for metadata.', 'up-to-date');
       } else {
-        showSettingsStatus('\u2717 ' + ((result && result.error) || 'Could not launch Amazon Music for beta metadata.'), 'update-error');
+        showSettingsStatus('\u2717 ' + ((result && result.error) || 'Could not launch Amazon Music for metadata.'), 'update-error');
       }
     } catch (e) {
-      showSettingsStatus('\u2717 Could not launch Amazon Music for beta metadata.', 'update-error');
+      showSettingsStatus('\u2717 Could not launch Amazon Music for metadata.', 'update-error');
     }
+  }
+
+  async function toggleAmazonLauncher() {
+    const btn = document.getElementById('amazonLauncherBtn');
+    btn.disabled = true;
+    btn.textContent = amazonLauncherInstalled ? 'Removing...' : 'Adding...';
+    try {
+      const result = await pywebview.api.set_amazon_devtools_launcher(!amazonLauncherInstalled);
+      if (result && result.ok) {
+        amazonLauncherInstalled = !!result.installed;
+        renderAmazonLauncherButton();
+        showSettingsStatus(amazonLauncherInstalled ? '\u2713 Start Menu launcher added.' : '\u2713 Start Menu launcher removed.', 'up-to-date');
+      } else {
+        showSettingsStatus('\u2717 ' + ((result && result.error) || 'Could not update Start Menu launcher.'), 'update-error');
+        renderAmazonLauncherButton();
+      }
+    } catch (e) {
+      showSettingsStatus('\u2717 Could not update Start Menu launcher.', 'update-error');
+      renderAmazonLauncherButton();
+    }
+    btn.disabled = false;
   }
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -1313,6 +1380,15 @@ class _Api:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    def set_amazon_devtools_launcher(self, install):
+        try:
+            from amazon_devtools import install_amazon_devtools_launcher, remove_amazon_devtools_launcher
+            if install:
+                return install_amazon_devtools_launcher()
+            return remove_amazon_devtools_launcher()
+        except Exception as e:
+            return {"ok": False, "error": str(e), "installed": False}
+
     def save_settings(self, data):
         use_custom = data.get("use_custom", False)
         client_id = data.get("client_id", "").strip() if use_custom else DEFAULT_CLIENT_ID
@@ -1332,6 +1408,7 @@ class _Api:
             "song_link_enabled": bool(data.get("song_link_enabled")),
             "notification_enrichment_enabled": bool(data.get("notification_enrichment_enabled")),
             "amazon_devtools_enabled": bool(data.get("amazon_devtools_enabled")),
+            "amazon_devtools_auto_launch": bool(data.get("amazon_devtools_auto_launch", True)),
             "lastfm_enabled": bool(data.get("lastfm_enabled")),
             "listenbrainz_enabled": bool(data.get("listenbrainz_enabled")),
             "listenbrainz_token": data.get("listenbrainz_token", "").strip(),

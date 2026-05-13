@@ -9,6 +9,7 @@ import re
 import socket
 import struct
 import subprocess
+import sys
 import time
 import urllib.request
 from ctypes import wintypes
@@ -17,6 +18,10 @@ from urllib.parse import urlparse
 
 APP_USER_MODEL_ID = "AmazonMobileLLC.AmazonMusic_kc6t79cpj4tp0!AmazonMobileLLC.AmazonMusic"
 DEVTOOLS_PORT = 9222
+AMAZON_PACKAGE_NAME = "AmazonMobileLLC.AmazonMusic"
+SHORTCUT_NAME = "Amazon Music Metadata.lnk"
+OLD_SHORTCUT_NAMES = ("Amazon Music Beta Metadata.lnk",)
+SHORTCUT_DIR_NAME = "Amazon Music RPC"
 _CACHE = {"key": None, "expires": 0, "value": None}
 _EXPLICIT_RE = re.compile(r"\s*\[Explicit\]\s*$", re.IGNORECASE)
 _TIME_RE = re.compile(r"^-?\d{1,2}:\d{2}(?::\d{2})?$")
@@ -47,11 +52,11 @@ def _parse_time(value):
 
 def _normalise_track_payload(payload):
     if not isinstance(payload, dict):
-        return {"status": "no_match", "detail": "No Amazon DevTools metadata payload"}
+        return {"status": "no_match", "detail": "No Amazon Music metadata payload"}
     if payload.get("status") != "found":
         return {
             "status": payload.get("status") or "no_match",
-            "detail": payload.get("detail") or "No Amazon DevTools metadata found",
+            "detail": payload.get("detail") or "No Amazon Music metadata found",
             "source": "amazon_devtools",
         }
 
@@ -80,13 +85,13 @@ def _normalise_track_payload(payload):
     if not title or not artist:
         return {
             "status": "no_match",
-            "detail": "Amazon DevTools transport metadata was incomplete",
+            "detail": "Amazon Music transport metadata was incomplete",
             "source": "amazon_devtools",
         }
 
     return {
         "status": "found",
-        "detail": "Amazon Music DevTools metadata found",
+        "detail": "Amazon Music metadata found",
         "source": "amazon_devtools",
         "title": title,
         "artist": artist,
@@ -265,7 +270,7 @@ def get_devtools_track_sync():
     if not target:
         return {
             "status": "unavailable",
-            "detail": "Amazon Music is not running with DevTools metadata enabled",
+            "detail": "Amazon Music is not running with enhanced metadata enabled",
             "source": "amazon_devtools",
         }
     cache_key = target.get("id")
@@ -292,6 +297,12 @@ def get_devtools_track_sync():
     _CACHE["expires"] = now + 1.5
     _CACHE["value"] = track
     return track
+
+
+def _clear_cache():
+    _CACHE["key"] = None
+    _CACHE["expires"] = 0
+    _CACHE["value"] = None
 
 
 def apply_devtools_to_track(track, devtools):
@@ -374,3 +385,145 @@ Add-Type -TypeDefinition $code
     if completed.returncode != 0:
         return {"ok": False, "error": _clean(completed.stderr) or "Could not launch Amazon Music"}
     return {"ok": True, "pid": _clean(completed.stdout)}
+
+
+def stop_amazon_music():
+    script = rf"""
+$package = '{AMAZON_PACKAGE_NAME}'
+$targets = @(Get-Process | Where-Object {{
+    $path = ""
+    try {{ $path = $_.Path }} catch {{ }}
+    ($path -and $path -like "*$package*") -or
+    ($_.ProcessName -eq "AmazonMusic") -or
+    ($_.ProcessName -eq "Amazon Music") -or
+    ($_.ProcessName -eq "Amazon Music Helper")
+}})
+$ids = @($targets | Select-Object -ExpandProperty Id)
+foreach ($proc in $targets) {{
+    try {{ $proc.CloseMainWindow() | Out-Null }} catch {{ }}
+}}
+Start-Sleep -Milliseconds 1200
+foreach ($id in $ids) {{
+    try {{
+        $proc = Get-Process -Id $id -ErrorAction Stop
+        if (-not $proc.HasExited) {{
+            Stop-Process -Id $id -Force -ErrorAction Stop
+        }}
+    }} catch {{ }}
+}}
+($ids -join ',')
+"""
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15,
+            creationflags=0x08000000 if os.name == "nt" else 0,
+        )
+    except Exception as e:
+        return {"ok": False, "error": str(e), "stopped": []}
+    stopped = [item for item in _clean(completed.stdout).split(",") if item]
+    if completed.returncode != 0:
+        return {"ok": False, "error": _clean(completed.stderr) or "Could not stop Amazon Music", "stopped": stopped}
+    return {"ok": True, "stopped": stopped}
+
+
+def restart_amazon_music_devtools():
+    stop_result = stop_amazon_music()
+    if not stop_result.get("ok"):
+        return stop_result
+    _clear_cache()
+    time.sleep(1)
+    launch_result = launch_amazon_music_devtools()
+    return {**launch_result, "stopped": stop_result.get("stopped", [])}
+
+
+def _start_menu_shortcut_path():
+    appdata = os.environ.get("APPDATA", "")
+    if not appdata:
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), SHORTCUT_NAME)
+    return os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", SHORTCUT_DIR_NAME, SHORTCUT_NAME)
+
+
+def _legacy_start_menu_shortcut_paths():
+    appdata = os.environ.get("APPDATA", "")
+    if not appdata:
+        base = os.path.dirname(os.path.abspath(__file__))
+    else:
+        base = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", SHORTCUT_DIR_NAME)
+    return [os.path.join(base, name) for name in OLD_SHORTCUT_NAMES]
+
+
+def _shortcut_launcher_command():
+    if getattr(sys, "frozen", False):
+        target = sys.executable
+        arguments = "--launch-amazon-devtools"
+        working_dir = os.path.dirname(sys.executable)
+        icon_path = sys.executable
+    else:
+        target = sys.executable
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py")
+        arguments = f'"{script}" --launch-amazon-devtools'
+        working_dir = os.path.dirname(script)
+        icon_path = os.path.join(working_dir, "icon.ico")
+    return target, arguments, working_dir, icon_path
+
+
+def _ps_literal(value):
+    return "'" + str(value or "").replace("'", "''") + "'"
+
+
+def amazon_devtools_launcher_state():
+    path = _start_menu_shortcut_path()
+    return {"installed": os.path.exists(path), "path": path}
+
+
+def install_amazon_devtools_launcher():
+    path = _start_menu_shortcut_path()
+    target, arguments, working_dir, icon_path = _shortcut_launcher_command()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    for legacy_path in _legacy_start_menu_shortcut_paths():
+        try:
+            if os.path.exists(legacy_path):
+                os.remove(legacy_path)
+        except OSError:
+            pass
+    script = f"""
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut({_ps_literal(path)})
+$shortcut.TargetPath = {_ps_literal(target)}
+$shortcut.Arguments = {_ps_literal(arguments)}
+$shortcut.WorkingDirectory = {_ps_literal(working_dir)}
+$shortcut.IconLocation = {_ps_literal(icon_path)}
+$shortcut.Save()
+"""
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15,
+            creationflags=0x08000000 if os.name == "nt" else 0,
+        )
+    except Exception as e:
+        return {"ok": False, "error": str(e), **amazon_devtools_launcher_state()}
+    if completed.returncode != 0:
+        return {"ok": False, "error": _clean(completed.stderr) or "Could not create launcher shortcut", **amazon_devtools_launcher_state()}
+    return {"ok": True, **amazon_devtools_launcher_state()}
+
+
+def remove_amazon_devtools_launcher():
+    path = _start_menu_shortcut_path()
+    try:
+        for shortcut_path in [path, *_legacy_start_menu_shortcut_paths()]:
+            if os.path.exists(shortcut_path):
+                os.remove(shortcut_path)
+        parent = os.path.dirname(path)
+        if os.path.isdir(parent) and not os.listdir(parent):
+            os.rmdir(parent)
+        return {"ok": True, **amazon_devtools_launcher_state()}
+    except Exception as e:
+        return {"ok": False, "error": str(e), **amazon_devtools_launcher_state()}
