@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 import urllib.request
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 
 APP_USER_MODEL_ID = "AmazonMobileLLC.AmazonMusic_kc6t79cpj4tp0!AmazonMobileLLC.AmazonMusic"
@@ -23,6 +23,8 @@ SHORTCUT_DIR_NAME = "Amazon Music RPC"
 _CACHE = {"key": None, "expires": 0, "value": None}
 _EXPLICIT_RE = re.compile(r"\s*\[Explicit\]\s*$", re.IGNORECASE)
 _TIME_RE = re.compile(r"^-?\d{1,2}:\d{2}(?::\d{2})?$")
+_ASIN_RE = re.compile(r"^[A-Z0-9]{10}$", re.IGNORECASE)
+_MUSIC_HOST_RE = re.compile(r"^music\.amazon\.[a-z.]+$", re.IGNORECASE)
 
 
 def _clean(value):
@@ -31,6 +33,38 @@ def _clean(value):
 
 def _clean_label(value):
     return _EXPLICIT_RE.sub("", _clean(value)).strip()
+
+
+def _clean_asin(value):
+    text = _clean(value).upper()
+    return text if _ASIN_RE.match(text) else ""
+
+
+def _music_host(value):
+    host = _clean(value).lower()
+    return host if _MUSIC_HOST_RE.match(host) else "music.amazon.com"
+
+
+def _amazon_track_link(payload, title, artist):
+    direct_link = _clean(payload.get("track_link"))
+    if direct_link:
+        parsed = urlparse(direct_link)
+        if parsed.scheme == "https" and parsed.hostname and "amazon." in parsed.hostname:
+            return direct_link
+
+    host = _music_host(payload.get("music_host"))
+    track_asin = _clean_asin(payload.get("track_asin"))
+    album_asin = _clean_asin(payload.get("album_asin"))
+    if track_asin and album_asin:
+        return f"https://{host}/albums/{album_asin}?trackAsin={track_asin}"
+    if track_asin:
+        return f"https://{host}/tracks/{track_asin}"
+
+    query = " ".join(part for part in (title, artist) if part)
+    if query:
+        return f"https://{host}/search/{quote(query, safe='')}"
+
+    return ""
 
 
 def _parse_time(value):
@@ -95,7 +129,7 @@ def _normalise_track_payload(payload):
         "artist": artist,
         "album": album,
         "art_url": _clean(payload.get("art_url")),
-        "track_link": _clean(payload.get("track_link")),
+        "track_link": _amazon_track_link(payload, title, artist),
         "position": position,
         "duration": duration,
         "playback_status": playback_status,
@@ -226,8 +260,63 @@ class _CdpSocket:
 
 
 _TRANSPORT_EXPRESSION = r"""
-(() => {
+(async () => {
   const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const asin = (value) => {
+    const text = clean(value).toUpperCase();
+    return /^[A-Z0-9]{10}$/.test(text) ? text : '';
+  };
+  const musicHost = () => {
+    const host = location.hostname.replace(/^www\./, 'music.').toLowerCase();
+    return /^music\.amazon\.[a-z.]+$/.test(host) ? host : 'music.amazon.com';
+  };
+  const albumAsinFromLocation = () => {
+    const text = `${location.hash || ''} ${location.search || ''}`;
+    const match = text.match(/\/album\/detail\/([A-Z0-9]{10})/i) || text.match(/[?&](?:asin|id)=([A-Z0-9]{10})/i);
+    return match ? asin(match[1]) : '';
+  };
+  const queueTrackAsin = async () => {
+    try {
+      const openDb = (name) => new Promise((resolve, reject) => {
+        const request = indexedDB.open(name);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result);
+      });
+      const getAll = (store) => new Promise((resolve, reject) => {
+        const request = store.getAll();
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result || []);
+      });
+      const db = await openDb('amplify-datastore');
+      try {
+        if (!db.objectStoreNames.contains('user_DevicePlaybackState') || !db.objectStoreNames.contains('user_QueueSequenceSlice')) {
+          return '';
+        }
+        const transaction = db.transaction(['user_DevicePlaybackState', 'user_QueueSequenceSlice'], 'readonly');
+        const states = await getAll(transaction.objectStore('user_DevicePlaybackState'));
+        const active = states.find((state) => state.playbackState === 'PLAYING') || states.find((state) => state.playbackState === 'PAUSED') || states[0];
+        const reference = asin(active && active.deviceCurrentPlaybackState && active.deviceCurrentPlaybackState.referenceId);
+        if (reference) {
+          return reference;
+        }
+        const queueId = active && active.queueId;
+        const sequenceName = active && active.sequenceName;
+        const sequenceVersion = active && active.sequenceVersion;
+        if (!queueId) {
+          return '';
+        }
+        const slices = (await getAll(transaction.objectStore('user_QueueSequenceSlice')))
+          .filter((slice) => slice.queueId === queueId && (!sequenceName || slice.sequenceName === sequenceName) && (!sequenceVersion || slice.sequenceVersion === sequenceVersion))
+          .sort((left, right) => (left.sliceOrdinal || 0) - (right.sliceOrdinal || 0));
+        const firstReference = slices.flatMap((slice) => slice.entityReferences || []).map((item) => asin(item.identifier)).find(Boolean);
+        return firstReference || '';
+      } finally {
+        db.close();
+      }
+    } catch (_) {
+      return '';
+    }
+  };
   const root = document.querySelector('#transportContainer.hasTrackLoaded') || document.querySelector('#transportContainer') || document.querySelector('#transport');
   if (!root) {
     return { status: 'no_match', detail: 'Amazon Music transport was not found' };
@@ -249,6 +338,7 @@ _TRANSPORT_EXPRESSION = r"""
   }
   const title = clean((titleEl && (titleEl.getAttribute('title') || titleEl.innerText || titleEl.textContent)) || '');
   const secondary = clean((secondaryEl && (secondaryEl.getAttribute('title') || secondaryEl.innerText || secondaryEl.textContent)) || '');
+  const trackAsin = await queueTrackAsin();
   return {
     status: title && (secondaryParts[0] || secondary) ? 'found' : 'no_match',
     detail: title ? 'Amazon Music transport found' : 'Amazon Music transport had no title',
@@ -258,6 +348,10 @@ _TRANSPORT_EXPRESSION = r"""
     secondary,
     art_url: img ? img.src : '',
     track_link: titleLink ? titleLink.href : '',
+    track_asin: trackAsin,
+    album_asin: albumAsinFromLocation(),
+    music_host: musicHost(),
+    page_url: location.href,
     position_text: positionEl ? clean(positionEl.innerText || positionEl.textContent) : '',
     remaining_text: remainingEl ? clean(remainingEl.innerText || remainingEl.textContent) : '',
     playback_status: playbackStatus

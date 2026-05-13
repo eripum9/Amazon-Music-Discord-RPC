@@ -24,7 +24,7 @@ DEFAULTS = {
     "start_minimized": True,
     "track_mappings": {},
     "custom_albums": [],
-    "song_link_enabled": False,
+    "song_link_enabled": True,
     "song_link_provider": "amazon",
     "show_paused": True,
     "lastfm_enabled": False,

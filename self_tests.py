@@ -123,10 +123,13 @@ def run_self_tests(log_dir, diagnostics_path):
             "position_text": "02:18",
             "remaining_text": "-00:41",
             "playback_status": "paused",
+            "track_asin": "B00C3O5D3A",
+            "album_asin": "B00C3O5AD8",
+            "music_host": "music.amazon.de",
         })
         merged, changed = apply_devtools_to_track({"title": "Treehome95", "artist": "", "album": "", "status": "playing"}, devtools)
-        ok = changed and merged["artist"].startswith("Tyler") and merged["album"] == "Wolf" and merged["duration"] == 179 and merged["position"] == 138 and merged["status"] == "paused"
-        results.append(_result("Amazon DevTools metadata", ok, "DevTools metadata can repair artist, album, art, position, duration, and status"))
+        ok = changed and merged["artist"].startswith("Tyler") and merged["album"] == "Wolf" and merged["duration"] == 179 and merged["position"] == 138 and merged["status"] == "paused" and merged["_amazon_track_link"] == "https://music.amazon.de/albums/B00C3O5AD8?trackAsin=B00C3O5D3A"
+        results.append(_result("Amazon DevTools metadata", ok, "DevTools metadata can repair artist, album, art, position, duration, status, and link"))
     except Exception as e:
         results.append(_result("Amazon DevTools metadata", False, str(e)))
 
