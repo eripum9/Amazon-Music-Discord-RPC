@@ -1,7 +1,6 @@
 # MIT License - Copyright (c) 2026 eripum9
 
 import base64
-import ctypes
 import hashlib
 import json
 import os
@@ -12,7 +11,6 @@ import subprocess
 import sys
 import time
 import urllib.request
-from ctypes import wintypes
 from urllib.parse import urlparse
 
 
@@ -176,9 +174,9 @@ class _CdpSocket:
         if accept.encode("ascii") not in response:
             raise ConnectionError("DevTools websocket accept key did not match")
 
-    def _send_frame(self, payload):
-        data = payload.encode("utf-8")
-        header = bytearray([0x81])
+    def _send_frame(self, payload, opcode=1):
+        data = payload if isinstance(payload, bytes) else payload.encode("utf-8")
+        header = bytearray([0x80 | opcode])
         if len(data) < 126:
             header.append(0x80 | len(data))
         elif len(data) <= 0xFFFF:
@@ -216,6 +214,9 @@ class _CdpSocket:
             if opcode == 8:
                 raise ConnectionError("DevTools websocket closed")
             if opcode == 9:
+                self._send_frame(payload, opcode=10)
+                continue
+            if opcode == 10:
                 continue
             if opcode != 1:
                 continue

@@ -23,7 +23,7 @@ Discord Rich Presence for Amazon Music on Windows. Shows what you're listening t
 - **Pause state** — keeps your presence visible when paused, with a frozen progress bar and pause icon
 - **Last.fm scrobbling** — authenticate with one click and scrobble tracks automatically
 - **ListenBrainz scrobbling** — paste your user token, validate it in Settings, and scrobble tracks
-- **Listen on Deezer button** — adds a clickable link on your Discord presence (toggleable)
+- **Listen button** — adds an Amazon Music link by default, with Deezer as an optional source
 - **Privacy controls** — private session mode and keyword filters for tracks you do not want to share
 - **Diagnostics window** — overview health checks, development tests, log history, and live console output in one resizable window
 - **Report issue shortcut** — opens the GitHub issue page from Settings or Diagnostics

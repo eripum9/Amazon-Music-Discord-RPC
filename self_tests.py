@@ -208,6 +208,9 @@ def run_self_tests(log_dir, diagnostics_path):
             and "async function init()" in script
             and "renderCustomAlbums" in script
             and "custom_albums" in script
+            and "song_link_provider" in script
+            and "songLinkProvider" in script
+            and "Show listen button" in html
             and "amazon_devtools_enabled" in script
             and "amazon_devtools_auto_launch" in script
             and "launchAmazonDevtools" in script

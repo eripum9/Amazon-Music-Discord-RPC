@@ -25,6 +25,7 @@ DEFAULTS = {
     "track_mappings": {},
     "custom_albums": [],
     "song_link_enabled": False,
+    "song_link_provider": "amazon",
     "show_paused": True,
     "lastfm_enabled": False,
     "lastfm_api_key": "2c2d97048ae5546831b1b1a025a8f9ec",

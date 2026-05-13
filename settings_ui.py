@@ -77,6 +77,7 @@ def _settings_payload():
         "privacy_disable_scrobbling",
         "privacy_blocked_keywords",
         "song_link_enabled",
+        "song_link_provider",
         "notification_enrichment_enabled",
         "amazon_devtools_enabled",
         "amazon_devtools_auto_launch",
@@ -756,14 +757,25 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <div class="card-title">Song Link</div>
   <div class="row">
     <div class="row-labels">
-      <span class="row-label">Show "Listen on Deezer" button</span>
-      <div class="row-desc">Adds a clickable link button on your Discord presence</div>
+      <span class="row-label">Show listen button</span>
+      <div class="row-desc">Adds a clickable Amazon Music or Deezer link on your Discord presence</div>
     </div>
     <label class="toggle">
-      <input type="checkbox" id="songLinkEnabled" aria-label="Show listen on Deezer button">
+      <input type="checkbox" id="songLinkEnabled" aria-label="Show listen button">
       <div class="toggle-track"></div>
       <div class="toggle-knob"></div>
     </label>
+  </div>
+  <div class="separator"></div>
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Button source</span>
+      <div class="row-desc">Amazon Music is used by default when available</div>
+    </div>
+    <select id="songLinkProvider" aria-label="Listen button source">
+      <option value="amazon">Amazon Music</option>
+      <option value="deezer">Deezer</option>
+    </select>
   </div>
 </div>
 
@@ -1067,6 +1079,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       privacy_blocked_keywords: document.getElementById('privacyBlockedKeywords').value.trim(),
       custom_albums: collectCustomAlbums(false),
       song_link_enabled: document.getElementById('songLinkEnabled').checked,
+      song_link_provider: document.getElementById('songLinkProvider').value,
       notification_enrichment_enabled: document.getElementById('notifEnrichEnabled').checked,
       amazon_devtools_enabled: document.getElementById('amazonDevtoolsEnabled').checked,
       amazon_devtools_auto_launch: document.getElementById('amazonDevtoolsAutoLaunch').checked,
@@ -1113,6 +1126,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     document.getElementById('privacyBlockedKeywords').value = cfg.privacy_blocked_keywords || '';
     renderCustomAlbums(cfg.custom_albums || []);
     document.getElementById('songLinkEnabled').checked = !!cfg.song_link_enabled;
+    document.getElementById('songLinkProvider').value = cfg.song_link_provider === 'deezer' ? 'deezer' : 'amazon';
     document.getElementById('notifEnrichEnabled').checked = !!cfg.notification_enrichment_enabled;
     document.getElementById('amazonDevtoolsEnabled').checked = !!cfg.amazon_devtools_enabled;
     document.getElementById('amazonDevtoolsAutoLaunch').checked = cfg.amazon_devtools_auto_launch !== false;
@@ -1406,6 +1420,7 @@ class _Api:
             "privacy_blocked_keywords": data.get("privacy_blocked_keywords", "").strip(),
             "custom_albums": _clean_custom_albums(data.get("custom_albums", [])),
             "song_link_enabled": bool(data.get("song_link_enabled")),
+            "song_link_provider": data.get("song_link_provider") if data.get("song_link_provider") in ("amazon", "deezer") else "amazon",
             "notification_enrichment_enabled": bool(data.get("notification_enrichment_enabled")),
             "amazon_devtools_enabled": bool(data.get("amazon_devtools_enabled")),
             "amazon_devtools_auto_launch": bool(data.get("amazon_devtools_auto_launch", True)),
