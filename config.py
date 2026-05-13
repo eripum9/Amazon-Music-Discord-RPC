@@ -15,7 +15,7 @@ if not os.environ.get("APPDATA") or getattr(sys, "frozen", False) is False:
     CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
     CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
-APP_VERSION = "2.2.3"
+APP_VERSION = "3.0.0"
 
 DEFAULTS = {
     "discord_client_id": DEFAULT_CLIENT_ID,
@@ -25,6 +25,7 @@ DEFAULTS = {
     "track_mappings": {},
     "custom_albums": [],
     "song_link_enabled": False,
+    "song_link_provider": "amazon",
     "show_paused": True,
     "lastfm_enabled": False,
     "lastfm_api_key": "2c2d97048ae5546831b1b1a025a8f9ec",
@@ -34,6 +35,8 @@ DEFAULTS = {
     "listenbrainz_enabled": False,
     "listenbrainz_token": "",
     "notification_enrichment_enabled": False,
+    "amazon_devtools_enabled": True,
+    "amazon_devtools_auto_launch": True,
     "privacy_private_session": False,
     "privacy_blocked_keywords": "",
     "privacy_disable_scrobbling": True,

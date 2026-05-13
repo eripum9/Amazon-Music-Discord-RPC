@@ -26,6 +26,7 @@ a = Analysis(
         'listenbrainz_scrobbler',
         'liblistenbrainz',
         'notification_reader',
+        'amazon_devtools',
         'winsdk.windows.ui.notifications',
         'winsdk.windows.ui.notifications.management',
     ],

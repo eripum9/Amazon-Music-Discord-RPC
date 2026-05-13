@@ -16,6 +16,7 @@ import pystray
 from media_reader import get_track_sync
 from notification_reader import get_notification_track_sync, is_new_notification
 from album_art import get_album_art, search_tracks, find_custom_album_art
+from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, launch_amazon_music_devtools, restart_amazon_music_devtools
 from discord_rpc import DiscordRPC
 from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION
 from updater import check_for_update, prompt_for_update
@@ -38,6 +39,7 @@ else:
 LOG_PATH = os.path.join(LOG_DIR, "console.log")
 DIAGNOSTICS_PATH = os.path.join(LOG_DIR, "diagnostics.json")
 MAX_OLD_LOGS = 5
+DEVTOOLS_REPAIR_GRACE_SECONDS = 7
 
 rpc_thread = None
 rpc_running = False
@@ -61,6 +63,7 @@ RPC_CONFIG_KEYS = {
     "track_mappings",
     "custom_albums",
     "song_link_enabled",
+    "song_link_provider",
     "show_paused",
     "lastfm_enabled",
     "lastfm_api_key",
@@ -69,6 +72,8 @@ RPC_CONFIG_KEYS = {
     "listenbrainz_enabled",
     "listenbrainz_token",
     "notification_enrichment_enabled",
+    "amazon_devtools_enabled",
+    "amazon_devtools_auto_launch",
     "privacy_private_session",
     "privacy_blocked_keywords",
     "privacy_disable_scrobbling",
@@ -256,6 +261,19 @@ def _track_start_ts(track, raw_key):
         "updated_at": time.time(),
     }
     return start_ts
+
+
+def _devtools_no_track_state(enabled, current_state):
+    if not enabled:
+        return current_state
+    current_state = current_state if isinstance(current_state, dict) else {}
+    if current_state.get("status") in {"unavailable", "error", "launching", "restarting"}:
+        return current_state
+    return {
+        "enabled": True,
+        "status": "waiting",
+        "detail": "No Amazon Music metadata or SMTC fallback session",
+    }
 
 
 def _rotated_log_path(index):
@@ -458,16 +476,31 @@ def rpc_loop():
     last_album_name = None
     last_art_fetch_key = None
     last_start_ts = None
-    last_track_link = None
+    last_amazon_track_link = None
+    last_deezer_track_link = None
     presence_visible = False
     paused_position = None
 
     song_link_enabled = config.get("song_link_enabled", False)
+    song_link_provider = config.get("song_link_provider", "amazon")
+    if song_link_provider not in {"amazon", "deezer"}:
+        song_link_provider = "amazon"
     show_paused = config.get("show_paused", True)
     notification_enrichment_enabled = config.get("notification_enrichment_enabled", False)
+    amazon_devtools_enabled = config.get("amazon_devtools_enabled", False)
+    amazon_devtools_auto_launch = config.get("amazon_devtools_auto_launch", True)
     privacy_disable_scrobbling = config.get("privacy_disable_scrobbling", True)
+    devtools_auto_launch_attempted = False
+    devtools_restart_attempted = False
+    devtools_unavailable_since = None
+    last_amazon_metadata_key = None
     _current_notif_data = None
     _notif_art_fetched_for = None
+    _current_amazon_devtools = {
+        "enabled": bool(amazon_devtools_enabled),
+        "status": "waiting" if amazon_devtools_enabled else "off",
+        "detail": "Amazon Music metadata enabled" if amazon_devtools_enabled else "Amazon Music metadata disabled",
+    }
 
     scrobbler = None
     lastfm_state = "disabled"
@@ -511,6 +544,32 @@ def rpc_loop():
         "listenbrainz": listenbrainz_state,
     }
 
+    def _selected_button_link():
+        if song_link_provider == "deezer":
+            return "Listen on Deezer", last_deezer_track_link
+        return "Listen on Amazon Music", last_amazon_track_link
+
+    def _link_buttons():
+        if not song_link_enabled:
+            return None
+        label, url = _selected_button_link()
+        if not url:
+            return None
+        return [{"label": label, "url": url}]
+
+    def _diagnostics_track_link():
+        _, url = _selected_button_link()
+        return url or last_amazon_track_link or last_deezer_track_link or ""
+
+    def _ensure_deezer_button_link(title, artist):
+        nonlocal last_deezer_track_link, last_deezer_duration
+        if song_link_provider != "deezer" or last_deezer_track_link or not title or not artist:
+            return
+        _, _, deezer_link, deezer_duration = get_album_art(title, artist)
+        last_deezer_track_link = deezer_link or ""
+        if deezer_duration:
+            last_deezer_duration = deezer_duration
+
     def _update_state(track=None, presence=False, error="", privacy_reason=""):
         _write_diagnostics_state(
             rpc_status="running" if rpc_running else "stopped",
@@ -520,9 +579,10 @@ def rpc_loop():
             presence_visible=presence,
             album_art_url=last_art_url or "",
             album_name=last_album_name or "",
-            track_link=last_track_link or "",
+            track_link=_diagnostics_track_link(),
             notification_enabled=notification_enrichment_enabled,
             notification=_current_notif_data,
+            amazon_devtools=_current_amazon_devtools,
             scrobbling=scrobbling_state,
             privacy={
                 "private_session": bool(config.get("privacy_private_session")),
@@ -538,10 +598,87 @@ def rpc_loop():
 
     while rpc_running:
         try:
-            track = get_track_sync()
+            track = None
+
+            devtools_found = False
+            if amazon_devtools_enabled:
+                try:
+                    devtools = get_devtools_track_sync()
+                    _current_amazon_devtools = {"enabled": True, **devtools}
+                    if devtools.get("status") == "found":
+                        devtools_unavailable_since = None
+                        devtools_auto_launch_attempted = False
+                        devtools_restart_attempted = False
+                        devtools_found = True
+                        _current_notif_data = None
+                        _notif_art_fetched_for = None
+                        track = {
+                            "title": "",
+                            "artist": "",
+                            "album": "",
+                            "status": "playing",
+                            "position": None,
+                            "duration": 0,
+                        }
+                        track, devtools_changed = apply_devtools_to_track(track, devtools)
+                        amazon_metadata_key = f"{track.get('title', '')}|{track.get('artist', '')}|{track.get('album', '')}|{track.get('status', '')}"
+                        if devtools_changed and amazon_metadata_key != last_amazon_metadata_key:
+                            last_amazon_metadata_key = amazon_metadata_key
+                            print(f"[Amazon] Metadata: '{track.get('title', '')}' by '{track.get('artist', '')}'")
+                    elif devtools.get("status") == "unavailable" and amazon_devtools_auto_launch:
+                        now = time.time()
+                        if devtools_unavailable_since is None:
+                            devtools_unavailable_since = now
+                        if not devtools_auto_launch_attempted:
+                            devtools_auto_launch_attempted = True
+                            launch_result = launch_amazon_music_devtools()
+                            if launch_result.get("ok"):
+                                devtools_unavailable_since = time.time()
+                                _current_amazon_devtools = {
+                                    "enabled": True,
+                                    "status": "launching",
+                                    "detail": "Amazon Music launched for metadata",
+                                    "source": "amazon_devtools",
+                                }
+                                print("[Amazon] Launched Amazon Music for metadata.")
+                            else:
+                                _current_amazon_devtools = {
+                                    "enabled": True,
+                                    "status": "error",
+                                    "detail": launch_result.get("error") or "Could not launch Amazon Music for metadata",
+                                    "source": "amazon_devtools",
+                                }
+                        elif not devtools_restart_attempted and now - devtools_unavailable_since >= DEVTOOLS_REPAIR_GRACE_SECONDS:
+                            devtools_restart_attempted = True
+                            restart_result = restart_amazon_music_devtools()
+                            if restart_result.get("ok"):
+                                _current_amazon_devtools = {
+                                    "enabled": True,
+                                    "status": "restarting",
+                                    "detail": "Restarted Amazon Music for metadata",
+                                    "source": "amazon_devtools",
+                                }
+                                print("[Amazon] Restarted Amazon Music for metadata.")
+                            else:
+                                _current_amazon_devtools = {
+                                    "enabled": True,
+                                    "status": "error",
+                                    "detail": restart_result.get("error") or "Could not restart Amazon Music for metadata",
+                                    "source": "amazon_devtools",
+                                }
+                except Exception as e:
+                    _current_amazon_devtools = {
+                        "enabled": True,
+                        "status": "error",
+                        "detail": str(e),
+                        "source": "amazon_devtools",
+                    }
 
             _notif_album = None
-            if notification_enrichment_enabled and track and track["status"] == "playing":
+            if not devtools_found:
+                track = get_track_sync()
+
+            if notification_enrichment_enabled and not devtools_found and track and track["status"] == "playing":
                 try:
                     notif = get_notification_track_sync()
                 except Exception:
@@ -564,6 +701,7 @@ def rpc_loop():
                         _current_notif_data = None
 
             if track is None:
+                _current_amazon_devtools = _devtools_no_track_state(amazon_devtools_enabled, _current_amazon_devtools)
                 if presence_visible:
                     rpc.clear()
                     presence_visible = False
@@ -572,7 +710,8 @@ def rpc_loop():
                 last_album_name = None
                 last_art_fetch_key = None
                 last_start_ts = None
-                last_track_link = None
+                last_amazon_track_link = None
+                last_deezer_track_link = None
                 _current_notif_data = None
                 _notif_art_fetched_for = None
                 _update_state(track=None, presence=False)
@@ -592,7 +731,8 @@ def rpc_loop():
                     last_track_key = None
                     last_art_url = None
                     last_album_name = None
-                    last_track_link = None
+                    last_amazon_track_link = None
+                    last_deezer_track_link = None
                     hidden_track = {
                         "title": "Hidden by privacy controls",
                         "artist": "",
@@ -604,13 +744,29 @@ def rpc_loop():
                     _update_state(track=hidden_track, presence=False, privacy_reason=privacy_reason)
                     time.sleep(3)
                     continue
+                paused_key = f"{track.get('title', '')}|{track.get('artist', '')}"
+                if paused_key != "|":
+                    last_track_key = paused_key
+                    if not last_album_name and track.get("album"):
+                        last_album_name = track.get("album")
+                    if track.get("_amazon_art_url"):
+                        last_art_url = track.get("_amazon_art_url")
+                    if track.get("_amazon_track_link"):
+                        last_amazon_track_link = track.get("_amazon_track_link")
+                    if track.get("duration"):
+                        last_deezer_duration = track.get("duration")
+                    _ensure_deezer_button_link(track.get("title", ""), track.get("artist", ""))
                 if show_paused and last_track_key:
-                    if last_start_ts is not None:
+                    if track.get("position") is not None:
+                        try:
+                            paused_position = float(track.get("position"))
+                            last_start_ts = None
+                        except (TypeError, ValueError):
+                            paused_position = None
+                    elif last_start_ts is not None:
                         paused_position = time.time() - last_start_ts
                         last_start_ts = None
-                    buttons = None
-                    if song_link_enabled and last_track_link:
-                        buttons = [{"label": "Listen on Deezer", "url": last_track_link}]
+                    buttons = _link_buttons()
                     title_parts = last_track_key.split("|", 1)
                     pause_start_ts = None
                     pause_duration = 0
@@ -666,7 +822,8 @@ def rpc_loop():
                 last_album_name = None
                 last_art_fetch_key = None
                 last_start_ts = None
-                last_track_link = None
+                last_amazon_track_link = None
+                last_deezer_track_link = None
                 _update_state(track=track, presence=False)
                 time.sleep(3)
                 continue
@@ -687,7 +844,8 @@ def rpc_loop():
                     scrobbled = True
                     last_art_url = None
                     last_art_fetch_key = None
-                    last_track_link = None
+                    last_amazon_track_link = None
+                    last_deezer_track_link = None
                     hidden_track = {
                         "title": "Hidden by privacy controls",
                         "artist": "",
@@ -715,16 +873,32 @@ def rpc_loop():
 
                 _current_notif_data = None
                 _notif_art_fetched_for = None
+                last_amazon_track_link = None
+                last_deezer_track_link = None
 
                 resolved = _resolved_art(raw_key, title, artist, track.get("album", ""))
                 if resolved:
-                    last_art_url, last_album_name, last_track_link, last_deezer_duration = resolved
+                    last_art_url, last_album_name, last_deezer_track_link, last_deezer_duration = resolved
+                elif track.get("_amazon_art_url"):
+                    last_art_url = track.get("_amazon_art_url")
+                    last_album_name = track.get("album", "")
+                    last_amazon_track_link = track.get("_amazon_track_link", "")
+                    last_deezer_track_link = None
+                    last_deezer_duration = track.get("duration") or 0
                 else:
-                    last_art_url, last_album_name, last_track_link, last_deezer_duration = get_album_art(title, artist)
+                    last_art_url, last_album_name, last_deezer_track_link, last_deezer_duration = get_album_art(title, artist)
+                    last_amazon_track_link = None
                 if _notif_album:
                     last_album_name = _notif_album
                 elif not last_album_name and track["album"]:
                     last_album_name = track["album"]
+                if track.get("_amazon_art_url"):
+                    last_art_url = track.get("_amazon_art_url")
+                    last_album_name = track.get("album", "") or last_album_name
+                    last_deezer_duration = track.get("duration") or last_deezer_duration
+                if track.get("_amazon_track_link"):
+                    last_amazon_track_link = track.get("_amazon_track_link")
+                _ensure_deezer_button_link(title, artist)
                 last_art_url, last_album_name = _apply_custom_album_override(
                     config, last_art_url, last_album_name, _notif_album, track.get("album", "")
                 )
@@ -756,13 +930,27 @@ def rpc_loop():
             elif raw_key in _resolved_cache and last_art_fetch_key != track_art_key:
                 resolved = _resolved_art(raw_key, title, artist, track.get("album", ""))
                 if resolved:
-                    last_art_url, last_album_name, last_track_link, last_deezer_duration = resolved
+                    last_art_url, last_album_name, last_deezer_track_link, last_deezer_duration = resolved
+                elif track.get("_amazon_art_url"):
+                    last_art_url = track.get("_amazon_art_url")
+                    last_album_name = track.get("album", "")
+                    last_amazon_track_link = track.get("_amazon_track_link", "")
+                    last_deezer_track_link = None
+                    last_deezer_duration = track.get("duration") or 0
                 else:
-                    last_art_url, last_album_name, last_track_link, last_deezer_duration = get_album_art(title, artist)
+                    last_art_url, last_album_name, last_deezer_track_link, last_deezer_duration = get_album_art(title, artist)
+                    last_amazon_track_link = None
                 if _notif_album:
                     last_album_name = _notif_album
                 elif not last_album_name and track["album"]:
                     last_album_name = track["album"]
+                if track.get("_amazon_art_url"):
+                    last_art_url = track.get("_amazon_art_url")
+                    last_album_name = track.get("album", "") or last_album_name
+                    last_deezer_duration = track.get("duration") or last_deezer_duration
+                if track.get("_amazon_track_link"):
+                    last_amazon_track_link = track.get("_amazon_track_link")
+                _ensure_deezer_button_link(title, artist)
                 last_art_url, last_album_name = _apply_custom_album_override(
                     config, last_art_url, last_album_name, _notif_album, track.get("album", "")
                 )
@@ -798,7 +986,7 @@ def rpc_loop():
                     if _notif_art:
                         last_art_url = _notif_art
                         if _notif_link:
-                            last_track_link = _notif_link
+                            last_deezer_track_link = _notif_link
                         if _notif_dur:
                             last_deezer_duration = _notif_dur
                         print(f"[Art] Re-fetched art for notification album: '{_notif_album}'")
@@ -807,14 +995,14 @@ def rpc_loop():
                 config, last_art_url, last_album_name, _notif_album, track.get("album", "")
             )
 
-            buttons = None
-            if song_link_enabled and last_track_link:
-                buttons = [{"label": "Listen on Deezer", "url": last_track_link}]
+            buttons = _link_buttons()
 
             state_track = dict(track)
             state_track["title"] = title
             state_track["artist"] = artist
             state_track["album"] = last_album_name or track.get("album", "")
+            state_track.pop("_amazon_art_url", None)
+            state_track.pop("_amazon_track_link", None)
             if privacy_reason:
                 hidden_track = {
                     "title": "Hidden by privacy controls",
@@ -995,6 +1183,17 @@ def open_diagnostics(icon=None, item=None):
         )
 
 
+def launch_amazon_devtools_from_tray(icon=None, item=None):
+    def _worker():
+        result = launch_amazon_music_devtools()
+        if result.get("ok"):
+            print("[Amazon] Launched Amazon Music for metadata.")
+        else:
+            print(f"[Amazon] Could not launch metadata mode: {result.get('error')}")
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 def wrong_song_handler(icon=None, item=None):
     global _current_track_raw
     raw_key = _current_track_raw
@@ -1071,6 +1270,7 @@ def build_menu():
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Settings", open_settings),
         pystray.MenuItem("Diagnostics", open_diagnostics),
+        pystray.MenuItem("Launch Amazon Music", launch_amazon_devtools_from_tray),
         pystray.MenuItem("Private Session", toggle_private_session,
                          checked=lambda item: bool(current_config.get("privacy_private_session"))),
         pystray.MenuItem("Wrong Song?", wrong_song_handler),
@@ -1096,6 +1296,20 @@ def main():
     if '--diagnostics' in sys.argv:
         from diagnostics_ui import DiagnosticsWindow
         DiagnosticsWindow().show()
+        return
+
+    if '--launch-amazon-devtools' in sys.argv:
+        result = launch_amazon_music_devtools()
+        if not result.get("ok"):
+            try:
+                ctypes.windll.user32.MessageBoxW(
+                    0,
+                    result.get("error") or "Could not launch Amazon Music for metadata.",
+                    "Amazon Music RPC",
+                    0x10 | 0x40000,
+                )
+            except Exception:
+                pass
         return
 
     if '--picker' in sys.argv:

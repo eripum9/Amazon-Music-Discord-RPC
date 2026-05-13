@@ -114,9 +114,65 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Track correction cache", False, str(e)))
 
     try:
+        from amazon_devtools import _normalise_track_payload, apply_devtools_to_track
+        devtools = _normalise_track_payload({
+            "status": "found",
+            "title": "Treehome95 [Explicit]",
+            "secondary": "Tyler, The Creator feat. Coco O. & Erykah Badu \u2022 Wolf [Explicit]",
+            "art_url": "https://m.media-amazon.com/images/I/41SsO6U8VML.jpg",
+            "position_text": "02:18",
+            "remaining_text": "-00:41",
+            "playback_status": "paused",
+        })
+        merged, changed = apply_devtools_to_track({"title": "Treehome95", "artist": "", "album": "", "status": "playing"}, devtools)
+        ok = changed and merged["artist"].startswith("Tyler") and merged["album"] == "Wolf" and merged["duration"] == 179 and merged["position"] == 138 and merged["status"] == "paused"
+        results.append(_result("Amazon DevTools metadata", ok, "DevTools metadata can repair artist, album, art, position, duration, and status"))
+    except Exception as e:
+        results.append(_result("Amazon DevTools metadata", False, str(e)))
+
+    try:
+        from amazon_devtools import _normalise_track_payload
+        devtools = _normalise_track_payload({
+            "status": "found",
+            "title": "Song",
+            "secondary": "Artist Only",
+        })
+        ok = devtools.get("status") == "found" and devtools.get("artist") == "Artist Only" and devtools.get("album") == ""
+        results.append(_result("Amazon DevTools secondary fallback", ok, "Single secondary label is treated as artist"))
+    except Exception as e:
+        results.append(_result("Amazon DevTools secondary fallback", False, str(e)))
+
+    try:
+        import main
+        unavailable = {"enabled": True, "status": "unavailable", "detail": "DevTools unavailable"}
+        error = {"enabled": True, "status": "error", "detail": "Socket failed"}
+        launching = {"enabled": True, "status": "launching", "detail": "Starting Amazon Music"}
+        restarting = {"enabled": True, "status": "restarting", "detail": "Restarting Amazon Music"}
+        waiting = main._devtools_no_track_state(True, {"enabled": True, "status": "no_match", "detail": "No title"})
+        ok = (
+            main._devtools_no_track_state(True, unavailable) == unavailable
+            and main._devtools_no_track_state(True, error) == error
+            and main._devtools_no_track_state(True, launching) == launching
+            and main._devtools_no_track_state(True, restarting) == restarting
+            and waiting.get("status") == "waiting"
+        )
+        results.append(_result("Amazon DevTools diagnostics state", ok, "Unavailable, launch, restart, and error states are preserved without a track"))
+    except Exception as e:
+        results.append(_result("Amazon DevTools diagnostics state", False, str(e)))
+
+    try:
+        from amazon_devtools import amazon_devtools_launcher_state, _shortcut_launcher_command
+        state = amazon_devtools_launcher_state()
+        target, arguments, working_dir, icon_path = _shortcut_launcher_command()
+        ok = state.get("path", "").endswith("Amazon Music Metadata.lnk") and target and "--launch-amazon-devtools" in arguments and working_dir and icon_path
+        results.append(_result("Amazon DevTools launcher", ok, "Launcher command and cleanup path are available"))
+    except Exception as e:
+        results.append(_result("Amazon DevTools launcher", False, str(e)))
+
+    try:
         import diagnostics_ui
         cards = diagnostics_ui._build_cards({}, load_config(), {"value": "Unavailable", "state": "bad"})
-        results.append(_result("Diagnostics cards", len(cards) == 7, f"{len(cards)} cards"))
+        results.append(_result("Diagnostics cards", len(cards) == 8, f"{len(cards)} cards"))
     except Exception as e:
         results.append(_result("Diagnostics cards", False, str(e)))
 
@@ -146,12 +202,36 @@ def run_self_tests(log_dir, diagnostics_path):
             .replace("{config_json}", json.dumps(settings_ui._settings_payload()))
         )
         script = html[html.index("<script>") + len("<script>"):html.index("</script>")]
+        card_order = [
+            html.index('<div class="card-title">Amazon Metadata</div>'),
+            html.index('<div class="card-title">Song Link</div>'),
+            html.index('<div class="card-title">Privacy</div>'),
+            html.index('<div class="card-title">Custom Album Art</div>'),
+            html.index('<div class="card-title">Startup & Presence</div>'),
+            html.index('<div class="card-title">Fallback Metadata</div>'),
+            html.index('<div class="card-title">Discord Client ID</div>'),
+        ]
         ok = (
             "What\\\\'s new" not in script
             and "\\n\\nWhat's new:\\n" in script
             and "async function init()" in script
             and "renderCustomAlbums" in script
             and "custom_albums" in script
+            and "song_link_provider" in script
+            and "songLinkProvider" in script
+            and "Show listen button" in html
+            and card_order == sorted(card_order)
+            and "metadataWarning" in html
+            and "closeMetadataWarning" in script
+            and "acceptMetadataWarning" in script
+            and "window.confirm" not in script
+            and "amazon_devtools_enabled" in script
+            and "amazon_devtools_auto_launch" in script
+            and "launchAmazonDevtools" in script
+            and "toggleAmazonLauncher" in script
+            and "onAmazonMetadataToggle" in script
+            and "not recommended" in html
+            and "beta metadata" not in html.lower()
         )
         results.append(_result("Settings script", ok, "Settings JavaScript guard"))
     except Exception as e:

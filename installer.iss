@@ -1,5 +1,5 @@
 #define MyAppName "Amazon Music RPC"
-#define MyAppVersion "2.2.3"
+#define MyAppVersion "3.0.0"
 #define MyAppPublisher "PumpgunStudios"
 #define MyAppExeName "AmazonMusicRPC.exe"
 
@@ -52,8 +52,14 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: no
 Filename: "taskkill"; Parameters: "/F /IM {#MyAppExeName}"; Flags: runhidden; RunOnceId: "KillApp"
 
 [UninstallDelete]
+Type: files; Name: "{userprograms}\{#MyAppName}\Amazon Music Metadata.lnk"
+Type: files; Name: "{userprograms}\{#MyAppName}\Amazon Music Beta Metadata.lnk"
+Type: files; Name: "{commonprograms}\{#MyAppName}\Amazon Music Metadata.lnk"
+Type: files; Name: "{commonprograms}\{#MyAppName}\Amazon Music Beta Metadata.lnk"
 Type: files; Name: "{userappdata}\AmazonMusicRPC\*"
 Type: dirifempty; Name: "{userappdata}\AmazonMusicRPC"
+Type: dirifempty; Name: "{userprograms}\{#MyAppName}"
+Type: dirifempty; Name: "{commonprograms}\{#MyAppName}"
 
 [Code]
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

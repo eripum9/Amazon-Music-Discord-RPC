@@ -77,7 +77,10 @@ def _settings_payload():
         "privacy_disable_scrobbling",
         "privacy_blocked_keywords",
         "song_link_enabled",
+        "song_link_provider",
         "notification_enrichment_enabled",
+        "amazon_devtools_enabled",
+        "amazon_devtools_auto_launch",
         "lastfm_enabled",
         "lastfm_username",
         "listenbrainz_enabled",
@@ -86,6 +89,14 @@ def _settings_payload():
     ]
     payload = {key: cfg.get(key) for key in keys}
     payload["custom_albums"] = _clean_custom_albums(payload.get("custom_albums"))
+    try:
+        from amazon_devtools import amazon_devtools_launcher_state
+        launcher_state = amazon_devtools_launcher_state()
+        payload["amazon_devtools_launcher_installed"] = bool(launcher_state.get("installed"))
+        payload["amazon_devtools_launcher_path"] = launcher_state.get("path", "")
+    except Exception:
+        payload["amazon_devtools_launcher_installed"] = False
+        payload["amazon_devtools_launcher_path"] = ""
     return payload
 
 
@@ -431,6 +442,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
   .update-btn:hover { background: #404040; border-color: #5865f2; }
   .update-btn:disabled { color: #888; cursor: default; }
+  .primary-action {
+    background: #5865f2;
+    border-color: #5865f2;
+    color: #fff;
+  }
+  .primary-action:hover { background: #4752c4; }
   .update-status {
     font-size: 12px;
     margin-top: 8px;
@@ -549,6 +566,61 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     color: #ddd;
     font-size: 12px;
   }
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(18, 18, 18, 0.86);
+    backdrop-filter: blur(16px);
+  }
+  .modal-overlay.visible { display: flex; }
+  .modal {
+    width: min(460px, 100%);
+    background: #2d2d2d;
+    border: 1px solid #4a4a4a;
+    border-radius: 10px;
+    padding: 22px;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+  }
+  .modal-title {
+    color: #fff;
+    font-size: 18px;
+    font-weight: 650;
+    margin-bottom: 8px;
+  }
+  .modal-copy {
+    color: #bbb;
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 16px;
+  }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .modal-actions button {
+    font-family: inherit;
+    border: 1px solid #4a4a4a;
+    background: #383838;
+    color: #e4e4e4;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .modal-actions button:hover { border-color: #5865f2; background: #404040; }
+  .modal-actions button.primary-action {
+    background: #5865f2;
+    border-color: #5865f2;
+    color: #fff;
+  }
+  .modal-actions button.primary-action:hover { background: #4752c4; }
   @keyframes introRise {
     from { opacity: 0; transform: translateY(18px) scale(0.98); }
     to { opacity: 1; transform: translateY(0) scale(1); }
@@ -566,12 +638,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="intro-title">Amazon Music RPC</div>
     <div class="intro-copy">An RPC for Amazon Music. These are the main settings worth checking before you leave it running in the tray.</div>
     <div class="intro-list">
-      <div class="intro-item">Discord Client ID can stay on Default unless you use your own app.</div>
-      <div class="intro-item">Notification enrichment can improve artist and album metadata.</div>
+      <div class="intro-item">Amazon Metadata is the main source for track info, artwork, pause state, and timing.</div>
       <div class="intro-item">Privacy controls hide tracks you do not want to share.</div>
+      <div class="intro-item">Song Link controls the button shown on your Discord presence.</div>
       <div class="intro-item">Diagnostics shows status, logs, and development checks.</div>
     </div>
     <button class="save-btn" onclick="finishIntro()">Get Started</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="metadataWarning">
+  <div class="modal">
+    <div class="modal-title">Amazon Metadata</div>
+    <div class="modal-copy">Disabling enhanced Amazon metadata is not recommended. It is the most reliable source for track info, artwork, pause state, and timing. If you disable it, Amazon Music RPC will fall back to SMTC and notifications, which can be less accurate.</div>
+    <div class="modal-actions">
+      <button onclick="closeMetadataWarning()">Keep Enabled</button>
+      <button class="primary-action" onclick="acceptMetadataWarning()">Disable Anyway</button>
+    </div>
   </div>
 </div>
 
@@ -585,46 +668,93 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </div>
 
 <div class="card">
-  <div class="card-title">Discord Client ID</div>
-  <div class="row">
-    <div class="row-labels"><span class="row-label">Mode</span></div>
-    <select id="idMode" aria-label="Client ID mode" onchange="onModeChange()">
-      <option value="default">Default</option>
-      <option value="custom">Custom</option>
-    </select>
-  </div>
-  <div class="custom-id-group" id="customIdGroup">
-    <label>Application ID</label>
-    <input type="text" id="clientId" placeholder="Enter your Discord Application ID">
-    <div class="error-msg" id="idError">Please enter a valid Client ID or switch back to Default.</div>
-  </div>
-</div>
-
-<div class="card">
-  <div class="card-title">Notification Enrichment</div>
+  <div class="card-title">Amazon Metadata</div>
   <div class="row">
     <div class="row-labels">
-      <span class="row-label">Enable notification enrichment</span>
-      <div class="row-desc">Use Windows notifications for more accurate track info</div>
+      <span class="row-label">Enhanced Amazon metadata</span>
+      <div class="row-desc">Use Amazon Music's local playback metadata for better track info</div>
     </div>
     <label class="toggle">
-      <input type="checkbox" id="notifEnrichEnabled" aria-label="Enable notification enrichment" onchange="onNotifEnrichToggle()">
+      <input type="checkbox" id="amazonDevtoolsEnabled" aria-label="Enable enhanced Amazon metadata" onchange="onAmazonMetadataToggle()">
       <div class="toggle-track"></div>
       <div class="toggle-knob"></div>
     </label>
   </div>
-  <div class="lastfm-fields" id="notifEnrichInfo">
-    <div style="margin-top:6px; font-size:11px; color:#bbb; line-height:1.5;">
-      <strong style="color:#e4e4e4;">Requirements:</strong><br>
-      &bull; Notifications must be enabled in Amazon Music settings<br>
-      &bull; Amazon Music must be <strong>minimized</strong> for notifications to appear
+  <div class="separator"></div>
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Auto-launch Amazon Music</span>
+      <div class="row-desc">Start or restart Amazon Music for metadata when RPC starts</div>
     </div>
-    <div style="margin-top:8px;">
-      <a href="#" onclick="pywebview.api.open_url('https://eripum9.github.io/Amazon-Music-Discord-RPC/notification-setup'); return false;"
-         style="color:#5865f2; font-size:12px; text-decoration:none; font-weight:600;">
-        Learn how to enable it &rarr;
-      </a>
+    <label class="toggle">
+      <input type="checkbox" id="amazonDevtoolsAutoLaunch" aria-label="Auto-launch Amazon Music metadata">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <button class="update-btn" type="button" onclick="launchAmazonDevtools()">Launch Amazon Music Now</button>
+  <button class="update-btn" id="amazonLauncherBtn" type="button" onclick="toggleAmazonLauncher()">Add Start Menu Launcher</button>
+</div>
+
+<div class="card">
+  <div class="card-title">Song Link</div>
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Show listen button</span>
+      <div class="row-desc">Adds a clickable Amazon Music or Deezer link on your Discord presence</div>
     </div>
+    <label class="toggle">
+      <input type="checkbox" id="songLinkEnabled" aria-label="Show listen button">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <div class="separator"></div>
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Button source</span>
+      <div class="row-desc">Amazon Music is used by default when available</div>
+    </div>
+    <select id="songLinkProvider" aria-label="Listen button source">
+      <option value="amazon">Amazon Music</option>
+      <option value="deezer">Deezer</option>
+    </select>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">Privacy</div>
+
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Private session</span>
+      <div class="row-desc">Hide Discord presence and skip protected activity</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="privacyPrivateSession" aria-label="Private session">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <div class="separator"></div>
+
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Disable scrobbling while private</span>
+      <div class="row-desc">Do not send Last.fm or ListenBrainz updates for hidden tracks</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="privacyDisableScrobbling" aria-label="Disable scrobbling while private">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <div class="separator"></div>
+
+  <div style="padding:6px 0;">
+    <div class="row-label">Blocked keywords</div>
+    <div class="row-desc" style="margin-bottom:8px;">Comma-separated words that hide matching tracks, artists, or albums</div>
+    <textarea id="privacyBlockedKeywords" placeholder="artist name, track title, album keyword"></textarea>
   </div>
 </div>
 
@@ -636,7 +766,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </div>
 
 <div class="card">
-  <div class="card-title">Settings</div>
+  <div class="card-title">Startup & Presence</div>
 
   <div class="row">
     <div class="row-labels">
@@ -678,53 +808,46 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </div>
 
 <div class="card">
-  <div class="card-title">Privacy</div>
-
+  <div class="card-title">Fallback Metadata</div>
   <div class="row">
     <div class="row-labels">
-      <span class="row-label">Private session</span>
-      <div class="row-desc">Hide Discord presence and skip protected activity</div>
+      <span class="row-label">Notification fallback</span>
+      <div class="row-desc">Use Windows notifications only when Amazon metadata is unavailable</div>
     </div>
     <label class="toggle">
-      <input type="checkbox" id="privacyPrivateSession" aria-label="Private session">
+      <input type="checkbox" id="notifEnrichEnabled" aria-label="Enable notification fallback" onchange="onNotifEnrichToggle()">
       <div class="toggle-track"></div>
       <div class="toggle-knob"></div>
     </label>
   </div>
-  <div class="separator"></div>
-
-  <div class="row">
-    <div class="row-labels">
-      <span class="row-label">Disable scrobbling while private</span>
-      <div class="row-desc">Do not send Last.fm or ListenBrainz updates for hidden tracks</div>
+  <div class="lastfm-fields" id="notifEnrichInfo">
+    <div style="margin-top:6px; font-size:11px; color:#bbb; line-height:1.5;">
+      <strong style="color:#e4e4e4;">Requirements:</strong><br>
+      &bull; Notifications must be enabled in Amazon Music settings<br>
+      &bull; Amazon Music must be <strong>minimized</strong> for notifications to appear
     </div>
-    <label class="toggle">
-      <input type="checkbox" id="privacyDisableScrobbling" aria-label="Disable scrobbling while private">
-      <div class="toggle-track"></div>
-      <div class="toggle-knob"></div>
-    </label>
-  </div>
-  <div class="separator"></div>
-
-  <div style="padding:6px 0;">
-    <div class="row-label">Blocked keywords</div>
-    <div class="row-desc" style="margin-bottom:8px;">Comma-separated words that hide matching tracks, artists, or albums</div>
-    <textarea id="privacyBlockedKeywords" placeholder="artist name, track title, album keyword"></textarea>
+    <div style="margin-top:8px;">
+      <a href="#" onclick="pywebview.api.open_url('https://eripum9.github.io/Amazon-Music-Discord-RPC/notification-setup'); return false;"
+         style="color:#5865f2; font-size:12px; text-decoration:none; font-weight:600;">
+        Learn how to enable it &rarr;
+      </a>
+    </div>
   </div>
 </div>
 
 <div class="card">
-  <div class="card-title">Song Link</div>
+  <div class="card-title">Discord Client ID</div>
   <div class="row">
-    <div class="row-labels">
-      <span class="row-label">Show "Listen on Deezer" button</span>
-      <div class="row-desc">Adds a clickable link button on your Discord presence</div>
-    </div>
-    <label class="toggle">
-      <input type="checkbox" id="songLinkEnabled" aria-label="Show listen on Deezer button">
-      <div class="toggle-track"></div>
-      <div class="toggle-knob"></div>
-    </label>
+    <div class="row-labels"><span class="row-label">Mode</span></div>
+    <select id="idMode" aria-label="Client ID mode" onchange="onModeChange()">
+      <option value="default">Default</option>
+      <option value="custom">Custom</option>
+    </select>
+  </div>
+  <div class="custom-id-group" id="customIdGroup">
+    <label>Application ID</label>
+    <input type="text" id="clientId" placeholder="Enter your Discord Application ID">
+    <div class="error-msg" id="idError">Please enter a valid Client ID or switch back to Default.</div>
   </div>
 </div>
 
@@ -792,6 +915,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <script>
   const BOOTSTRAP_CONFIG = {config_json};
   let customAlbums = [];
+  let amazonLauncherInstalled = false;
 
   function showSettingsStatus(text, kind) {
     const status = document.getElementById('updateStatus');
@@ -907,6 +1031,24 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
   }
 
+  function onAmazonMetadataToggle() {
+    const input = document.getElementById('amazonDevtoolsEnabled');
+    if (input.checked) {
+      return;
+    }
+    document.getElementById('metadataWarning').classList.add('visible');
+  }
+
+  function closeMetadataWarning() {
+    document.getElementById('metadataWarning').classList.remove('visible');
+    document.getElementById('amazonDevtoolsEnabled').checked = true;
+  }
+
+  function acceptMetadataWarning() {
+    document.getElementById('metadataWarning').classList.remove('visible');
+    document.getElementById('amazonDevtoolsEnabled').checked = false;
+  }
+
   function onLbToggle() {
     const fields = document.getElementById('lbFields');
     if (document.getElementById('lbEnabled').checked) {
@@ -1016,7 +1158,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       privacy_blocked_keywords: document.getElementById('privacyBlockedKeywords').value.trim(),
       custom_albums: collectCustomAlbums(false),
       song_link_enabled: document.getElementById('songLinkEnabled').checked,
+      song_link_provider: document.getElementById('songLinkProvider').value,
       notification_enrichment_enabled: document.getElementById('notifEnrichEnabled').checked,
+      amazon_devtools_enabled: document.getElementById('amazonDevtoolsEnabled').checked,
+      amazon_devtools_auto_launch: document.getElementById('amazonDevtoolsAutoLaunch').checked,
       lastfm_enabled: document.getElementById('lastfmEnabled').checked,
       listenbrainz_enabled: document.getElementById('lbEnabled').checked,
       listenbrainz_token: document.getElementById('lbToken').value.trim()
@@ -1060,7 +1205,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     document.getElementById('privacyBlockedKeywords').value = cfg.privacy_blocked_keywords || '';
     renderCustomAlbums(cfg.custom_albums || []);
     document.getElementById('songLinkEnabled').checked = !!cfg.song_link_enabled;
+    document.getElementById('songLinkProvider').value = cfg.song_link_provider === 'deezer' ? 'deezer' : 'amazon';
     document.getElementById('notifEnrichEnabled').checked = !!cfg.notification_enrichment_enabled;
+    document.getElementById('amazonDevtoolsEnabled').checked = !!cfg.amazon_devtools_enabled;
+    document.getElementById('amazonDevtoolsAutoLaunch').checked = cfg.amazon_devtools_auto_launch !== false;
+    amazonLauncherInstalled = !!cfg.amazon_devtools_launcher_installed;
+    renderAmazonLauncherButton();
     if (cfg.notification_enrichment_enabled) {
       document.getElementById('notifEnrichInfo').classList.add('visible');
     } else {
@@ -1163,6 +1313,48 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
     btn.disabled = false;
     btn.textContent = '\u2191 Check for Updates';
+  }
+
+  function renderAmazonLauncherButton() {
+    const btn = document.getElementById('amazonLauncherBtn');
+    if (!btn) {
+      return;
+    }
+    btn.textContent = amazonLauncherInstalled ? 'Remove Start Menu Launcher' : 'Add Start Menu Launcher';
+  }
+
+  async function launchAmazonDevtools() {
+    try {
+      const result = await pywebview.api.launch_amazon_devtools();
+      if (result && result.ok) {
+        showSettingsStatus('\u2713 Amazon Music launched for metadata.', 'up-to-date');
+      } else {
+        showSettingsStatus('\u2717 ' + ((result && result.error) || 'Could not launch Amazon Music for metadata.'), 'update-error');
+      }
+    } catch (e) {
+      showSettingsStatus('\u2717 Could not launch Amazon Music for metadata.', 'update-error');
+    }
+  }
+
+  async function toggleAmazonLauncher() {
+    const btn = document.getElementById('amazonLauncherBtn');
+    btn.disabled = true;
+    btn.textContent = amazonLauncherInstalled ? 'Removing...' : 'Adding...';
+    try {
+      const result = await pywebview.api.set_amazon_devtools_launcher(!amazonLauncherInstalled);
+      if (result && result.ok) {
+        amazonLauncherInstalled = !!result.installed;
+        renderAmazonLauncherButton();
+        showSettingsStatus(amazonLauncherInstalled ? '\u2713 Start Menu launcher added.' : '\u2713 Start Menu launcher removed.', 'up-to-date');
+      } else {
+        showSettingsStatus('\u2717 ' + ((result && result.error) || 'Could not update Start Menu launcher.'), 'update-error');
+        renderAmazonLauncherButton();
+      }
+    } catch (e) {
+      showSettingsStatus('\u2717 Could not update Start Menu launcher.', 'update-error');
+      renderAmazonLauncherButton();
+    }
+    btn.disabled = false;
   }
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -1274,6 +1466,22 @@ class _Api:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    def launch_amazon_devtools(self):
+        try:
+            from amazon_devtools import launch_amazon_music_devtools
+            return launch_amazon_music_devtools()
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def set_amazon_devtools_launcher(self, install):
+        try:
+            from amazon_devtools import install_amazon_devtools_launcher, remove_amazon_devtools_launcher
+            if install:
+                return install_amazon_devtools_launcher()
+            return remove_amazon_devtools_launcher()
+        except Exception as e:
+            return {"ok": False, "error": str(e), "installed": False}
+
     def save_settings(self, data):
         use_custom = data.get("use_custom", False)
         client_id = data.get("client_id", "").strip() if use_custom else DEFAULT_CLIENT_ID
@@ -1291,7 +1499,10 @@ class _Api:
             "privacy_blocked_keywords": data.get("privacy_blocked_keywords", "").strip(),
             "custom_albums": _clean_custom_albums(data.get("custom_albums", [])),
             "song_link_enabled": bool(data.get("song_link_enabled")),
+            "song_link_provider": data.get("song_link_provider") if data.get("song_link_provider") in ("amazon", "deezer") else "amazon",
             "notification_enrichment_enabled": bool(data.get("notification_enrichment_enabled")),
+            "amazon_devtools_enabled": bool(data.get("amazon_devtools_enabled")),
+            "amazon_devtools_auto_launch": bool(data.get("amazon_devtools_auto_launch", True)),
             "lastfm_enabled": bool(data.get("lastfm_enabled")),
             "listenbrainz_enabled": bool(data.get("listenbrainz_enabled")),
             "listenbrainz_token": data.get("listenbrainz_token", "").strip(),

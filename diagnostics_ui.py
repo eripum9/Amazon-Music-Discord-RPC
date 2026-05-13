@@ -146,13 +146,40 @@ def _build_cards(state, config, access):
         card_state = "good" if status == "playing" else "warn" if status == "paused" else "muted"
         cards.append({"label": "Amazon Music", "value": status.title(), "detail": title, "state": card_state})
     else:
-        cards.append({"label": "Amazon Music", "value": "Not detected", "detail": "No SMTC session found", "state": "bad" if state and not stale else "muted"})
+        cards.append({"label": "Amazon Music", "value": "Not detected", "detail": "No active Amazon Music session found", "state": "bad" if state and not stale else "muted"})
 
     if config.get("notification_enrichment_enabled"):
-        detail = access.get("detail") or "Notification enrichment enabled"
+        detail = access.get("detail") or "Notification fallback enabled"
         cards.append({"label": "Notifications", "value": access["value"], "detail": detail, "state": access["state"]})
     else:
-        cards.append({"label": "Notifications", "value": "Off", "detail": "Notification enrichment disabled", "state": "muted"})
+        cards.append({"label": "Notifications", "value": "Off", "detail": "Notification fallback disabled", "state": "muted"})
+
+    amazon_devtools = state.get("amazon_devtools") or {}
+    if config.get("amazon_devtools_enabled"):
+        devtools_status = amazon_devtools.get("status") or "waiting"
+        if devtools_status == "found":
+            value = "Found"
+            detail = amazon_devtools.get("title") or amazon_devtools.get("detail") or "Amazon Music metadata available"
+            card_state = "good"
+        elif devtools_status == "launching":
+            value = "Launching"
+            detail = amazon_devtools.get("detail") or "Amazon Music is starting for metadata"
+            card_state = "warn"
+        elif devtools_status == "restarting":
+            value = "Restarting"
+            detail = amazon_devtools.get("detail") or "Amazon Music is restarting for metadata"
+            card_state = "warn"
+        elif devtools_status in ("error", "unavailable"):
+            value = "Unavailable"
+            detail = amazon_devtools.get("detail") or "Amazon Music metadata failed"
+            card_state = "bad"
+        else:
+            value = "Waiting"
+            detail = amazon_devtools.get("detail") or "Waiting for Amazon Music metadata"
+            card_state = "warn"
+        cards.append({"label": "Amazon Metadata", "value": value, "detail": detail, "state": card_state})
+    else:
+        cards.append({"label": "Amazon Metadata", "value": "Off", "detail": "Enhanced metadata disabled", "state": "muted"})
 
     privacy = state.get("privacy") or {}
     if privacy.get("hidden"):
