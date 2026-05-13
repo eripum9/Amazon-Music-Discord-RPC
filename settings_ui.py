@@ -442,6 +442,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
   .update-btn:hover { background: #404040; border-color: #5865f2; }
   .update-btn:disabled { color: #888; cursor: default; }
+  .primary-action {
+    background: #5865f2;
+    border-color: #5865f2;
+    color: #fff;
+  }
+  .primary-action:hover { background: #4752c4; }
   .update-status {
     font-size: 12px;
     margin-top: 8px;
@@ -560,6 +566,61 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     color: #ddd;
     font-size: 12px;
   }
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(18, 18, 18, 0.86);
+    backdrop-filter: blur(16px);
+  }
+  .modal-overlay.visible { display: flex; }
+  .modal {
+    width: min(460px, 100%);
+    background: #2d2d2d;
+    border: 1px solid #4a4a4a;
+    border-radius: 10px;
+    padding: 22px;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+  }
+  .modal-title {
+    color: #fff;
+    font-size: 18px;
+    font-weight: 650;
+    margin-bottom: 8px;
+  }
+  .modal-copy {
+    color: #bbb;
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 16px;
+  }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .modal-actions button {
+    font-family: inherit;
+    border: 1px solid #4a4a4a;
+    background: #383838;
+    color: #e4e4e4;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .modal-actions button:hover { border-color: #5865f2; background: #404040; }
+  .modal-actions button.primary-action {
+    background: #5865f2;
+    border-color: #5865f2;
+    color: #fff;
+  }
+  .modal-actions button.primary-action:hover { background: #4752c4; }
   @keyframes introRise {
     from { opacity: 0; transform: translateY(18px) scale(0.98); }
     to { opacity: 1; transform: translateY(0) scale(1); }
@@ -577,12 +638,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="intro-title">Amazon Music RPC</div>
     <div class="intro-copy">An RPC for Amazon Music. These are the main settings worth checking before you leave it running in the tray.</div>
     <div class="intro-list">
-      <div class="intro-item">Discord Client ID can stay on Default unless you use your own app.</div>
-      <div class="intro-item">Fallback metadata can help when Amazon metadata is unavailable.</div>
+      <div class="intro-item">Amazon Metadata is the main source for track info, artwork, pause state, and timing.</div>
       <div class="intro-item">Privacy controls hide tracks you do not want to share.</div>
+      <div class="intro-item">Song Link controls the button shown on your Discord presence.</div>
       <div class="intro-item">Diagnostics shows status, logs, and development checks.</div>
     </div>
     <button class="save-btn" onclick="finishIntro()">Get Started</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="metadataWarning">
+  <div class="modal">
+    <div class="modal-title">Amazon Metadata</div>
+    <div class="modal-copy">Disabling enhanced Amazon metadata is not recommended. It is the most reliable source for track info, artwork, pause state, and timing. If you disable it, Amazon Music RPC will fall back to SMTC and notifications, which can be less accurate.</div>
+    <div class="modal-actions">
+      <button onclick="closeMetadataWarning()">Keep Enabled</button>
+      <button class="primary-action" onclick="acceptMetadataWarning()">Disable Anyway</button>
+    </div>
   </div>
 </div>
 
@@ -593,50 +665,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <p>Discord Rich Presence for Amazon Music</p>
   </div>
   <span class="version-badge">v{version}</span>
-</div>
-
-<div class="card">
-  <div class="card-title">Discord Client ID</div>
-  <div class="row">
-    <div class="row-labels"><span class="row-label">Mode</span></div>
-    <select id="idMode" aria-label="Client ID mode" onchange="onModeChange()">
-      <option value="default">Default</option>
-      <option value="custom">Custom</option>
-    </select>
-  </div>
-  <div class="custom-id-group" id="customIdGroup">
-    <label>Application ID</label>
-    <input type="text" id="clientId" placeholder="Enter your Discord Application ID">
-    <div class="error-msg" id="idError">Please enter a valid Client ID or switch back to Default.</div>
-  </div>
-</div>
-
-<div class="card">
-  <div class="card-title">Fallback Metadata</div>
-  <div class="row">
-    <div class="row-labels">
-      <span class="row-label">Notification fallback</span>
-      <div class="row-desc">Use Windows notifications only when Amazon metadata is unavailable</div>
-    </div>
-    <label class="toggle">
-      <input type="checkbox" id="notifEnrichEnabled" aria-label="Enable notification fallback" onchange="onNotifEnrichToggle()">
-      <div class="toggle-track"></div>
-      <div class="toggle-knob"></div>
-    </label>
-  </div>
-  <div class="lastfm-fields" id="notifEnrichInfo">
-    <div style="margin-top:6px; font-size:11px; color:#bbb; line-height:1.5;">
-      <strong style="color:#e4e4e4;">Requirements:</strong><br>
-      &bull; Notifications must be enabled in Amazon Music settings<br>
-      &bull; Amazon Music must be <strong>minimized</strong> for notifications to appear
-    </div>
-    <div style="margin-top:8px;">
-      <a href="#" onclick="pywebview.api.open_url('https://eripum9.github.io/Amazon-Music-Discord-RPC/notification-setup'); return false;"
-         style="color:#5865f2; font-size:12px; text-decoration:none; font-weight:600;">
-        Learn how to enable it &rarr;
-      </a>
-    </div>
-  </div>
 </div>
 
 <div class="card">
@@ -669,6 +697,68 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </div>
 
 <div class="card">
+  <div class="card-title">Song Link</div>
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Show listen button</span>
+      <div class="row-desc">Adds a clickable Amazon Music or Deezer link on your Discord presence</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="songLinkEnabled" aria-label="Show listen button">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <div class="separator"></div>
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Button source</span>
+      <div class="row-desc">Amazon Music is used by default when available</div>
+    </div>
+    <select id="songLinkProvider" aria-label="Listen button source">
+      <option value="amazon">Amazon Music</option>
+      <option value="deezer">Deezer</option>
+    </select>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">Privacy</div>
+
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Private session</span>
+      <div class="row-desc">Hide Discord presence and skip protected activity</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="privacyPrivateSession" aria-label="Private session">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <div class="separator"></div>
+
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Disable scrobbling while private</span>
+      <div class="row-desc">Do not send Last.fm or ListenBrainz updates for hidden tracks</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="privacyDisableScrobbling" aria-label="Disable scrobbling while private">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <div class="separator"></div>
+
+  <div style="padding:6px 0;">
+    <div class="row-label">Blocked keywords</div>
+    <div class="row-desc" style="margin-bottom:8px;">Comma-separated words that hide matching tracks, artists, or albums</div>
+    <textarea id="privacyBlockedKeywords" placeholder="artist name, track title, album keyword"></textarea>
+  </div>
+</div>
+
+<div class="card">
   <div class="card-title">Custom Album Art</div>
   <div class="row-desc" style="margin-bottom:10px;">Match album names or aliases to a custom cover image URL</div>
   <div class="custom-album-list" id="customAlbumList"></div>
@@ -676,7 +766,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </div>
 
 <div class="card">
-  <div class="card-title">Settings</div>
+  <div class="card-title">Startup & Presence</div>
 
   <div class="row">
     <div class="row-labels">
@@ -718,64 +808,46 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </div>
 
 <div class="card">
-  <div class="card-title">Privacy</div>
-
+  <div class="card-title">Fallback Metadata</div>
   <div class="row">
     <div class="row-labels">
-      <span class="row-label">Private session</span>
-      <div class="row-desc">Hide Discord presence and skip protected activity</div>
+      <span class="row-label">Notification fallback</span>
+      <div class="row-desc">Use Windows notifications only when Amazon metadata is unavailable</div>
     </div>
     <label class="toggle">
-      <input type="checkbox" id="privacyPrivateSession" aria-label="Private session">
+      <input type="checkbox" id="notifEnrichEnabled" aria-label="Enable notification fallback" onchange="onNotifEnrichToggle()">
       <div class="toggle-track"></div>
       <div class="toggle-knob"></div>
     </label>
   </div>
-  <div class="separator"></div>
-
-  <div class="row">
-    <div class="row-labels">
-      <span class="row-label">Disable scrobbling while private</span>
-      <div class="row-desc">Do not send Last.fm or ListenBrainz updates for hidden tracks</div>
+  <div class="lastfm-fields" id="notifEnrichInfo">
+    <div style="margin-top:6px; font-size:11px; color:#bbb; line-height:1.5;">
+      <strong style="color:#e4e4e4;">Requirements:</strong><br>
+      &bull; Notifications must be enabled in Amazon Music settings<br>
+      &bull; Amazon Music must be <strong>minimized</strong> for notifications to appear
     </div>
-    <label class="toggle">
-      <input type="checkbox" id="privacyDisableScrobbling" aria-label="Disable scrobbling while private">
-      <div class="toggle-track"></div>
-      <div class="toggle-knob"></div>
-    </label>
-  </div>
-  <div class="separator"></div>
-
-  <div style="padding:6px 0;">
-    <div class="row-label">Blocked keywords</div>
-    <div class="row-desc" style="margin-bottom:8px;">Comma-separated words that hide matching tracks, artists, or albums</div>
-    <textarea id="privacyBlockedKeywords" placeholder="artist name, track title, album keyword"></textarea>
+    <div style="margin-top:8px;">
+      <a href="#" onclick="pywebview.api.open_url('https://eripum9.github.io/Amazon-Music-Discord-RPC/notification-setup'); return false;"
+         style="color:#5865f2; font-size:12px; text-decoration:none; font-weight:600;">
+        Learn how to enable it &rarr;
+      </a>
+    </div>
   </div>
 </div>
 
 <div class="card">
-  <div class="card-title">Song Link</div>
+  <div class="card-title">Discord Client ID</div>
   <div class="row">
-    <div class="row-labels">
-      <span class="row-label">Show listen button</span>
-      <div class="row-desc">Adds a clickable Amazon Music or Deezer link on your Discord presence</div>
-    </div>
-    <label class="toggle">
-      <input type="checkbox" id="songLinkEnabled" aria-label="Show listen button">
-      <div class="toggle-track"></div>
-      <div class="toggle-knob"></div>
-    </label>
-  </div>
-  <div class="separator"></div>
-  <div class="row">
-    <div class="row-labels">
-      <span class="row-label">Button source</span>
-      <div class="row-desc">Amazon Music is used by default when available</div>
-    </div>
-    <select id="songLinkProvider" aria-label="Listen button source">
-      <option value="amazon">Amazon Music</option>
-      <option value="deezer">Deezer</option>
+    <div class="row-labels"><span class="row-label">Mode</span></div>
+    <select id="idMode" aria-label="Client ID mode" onchange="onModeChange()">
+      <option value="default">Default</option>
+      <option value="custom">Custom</option>
     </select>
+  </div>
+  <div class="custom-id-group" id="customIdGroup">
+    <label>Application ID</label>
+    <input type="text" id="clientId" placeholder="Enter your Discord Application ID">
+    <div class="error-msg" id="idError">Please enter a valid Client ID or switch back to Default.</div>
   </div>
 </div>
 
@@ -964,10 +1036,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     if (input.checked) {
       return;
     }
-    const confirmed = window.confirm('Disabling enhanced Amazon metadata is not recommended. It is the most reliable source for track info, artwork, pause state, and timing. If you disable it, Amazon Music RPC will fall back to SMTC and notifications, which can be less accurate. Disable it anyway?');
-    if (!confirmed) {
-      input.checked = true;
-    }
+    document.getElementById('metadataWarning').classList.add('visible');
+  }
+
+  function closeMetadataWarning() {
+    document.getElementById('metadataWarning').classList.remove('visible');
+    document.getElementById('amazonDevtoolsEnabled').checked = true;
+  }
+
+  function acceptMetadataWarning() {
+    document.getElementById('metadataWarning').classList.remove('visible');
+    document.getElementById('amazonDevtoolsEnabled').checked = false;
   }
 
   function onLbToggle() {

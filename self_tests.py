@@ -202,6 +202,15 @@ def run_self_tests(log_dir, diagnostics_path):
             .replace("{config_json}", json.dumps(settings_ui._settings_payload()))
         )
         script = html[html.index("<script>") + len("<script>"):html.index("</script>")]
+        card_order = [
+            html.index('<div class="card-title">Amazon Metadata</div>'),
+            html.index('<div class="card-title">Song Link</div>'),
+            html.index('<div class="card-title">Privacy</div>'),
+            html.index('<div class="card-title">Custom Album Art</div>'),
+            html.index('<div class="card-title">Startup & Presence</div>'),
+            html.index('<div class="card-title">Fallback Metadata</div>'),
+            html.index('<div class="card-title">Discord Client ID</div>'),
+        ]
         ok = (
             "What\\\\'s new" not in script
             and "\\n\\nWhat's new:\\n" in script
@@ -211,12 +220,17 @@ def run_self_tests(log_dir, diagnostics_path):
             and "song_link_provider" in script
             and "songLinkProvider" in script
             and "Show listen button" in html
+            and card_order == sorted(card_order)
+            and "metadataWarning" in html
+            and "closeMetadataWarning" in script
+            and "acceptMetadataWarning" in script
+            and "window.confirm" not in script
             and "amazon_devtools_enabled" in script
             and "amazon_devtools_auto_launch" in script
             and "launchAmazonDevtools" in script
             and "toggleAmazonLauncher" in script
             and "onAmazonMetadataToggle" in script
-            and "not recommended" in script
+            and "not recommended" in html
             and "beta metadata" not in html.lower()
         )
         results.append(_result("Settings script", ok, "Settings JavaScript guard"))
