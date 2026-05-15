@@ -27,6 +27,7 @@ a = Analysis(
         'liblistenbrainz',
         'notification_reader',
         'amazon_devtools',
+        'amazon_status_overlay',
         'winsdk.windows.ui.notifications',
         'winsdk.windows.ui.notifications.management',
     ],

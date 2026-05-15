@@ -17,6 +17,7 @@ from media_reader import get_track_sync
 from notification_reader import get_notification_track_sync, is_new_notification
 from album_art import get_album_art, search_tracks, find_custom_album_art
 from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, launch_amazon_music_devtools, restart_amazon_music_devtools, amazon_music_is_running
+from amazon_status_overlay import AmazonStatusOverlay
 from discord_rpc import DiscordRPC
 from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION
 from updater import check_for_update, prompt_for_update
@@ -47,6 +48,7 @@ tray_icon = None
 current_config = {}
 settings_proc = None
 diagnostics_proc = None
+status_overlay = None
 _picker_lock = threading.Lock()
 _picker_pending_key = None
 _resolved_cache = {}
@@ -56,6 +58,7 @@ _wrong_song_prompted_keys = set()
 _current_track_raw = None
 active_rpc = None
 _track_timing_cache = {}
+_privacy_restart_lock = threading.Lock()
 
 RPC_CONFIG_KEYS = {
     "discord_client_id",
@@ -98,6 +101,56 @@ def _write_diagnostics_state(**state):
         os.replace(tmp_path, DIAGNOSTICS_PATH)
     except Exception:
         pass
+
+
+def _read_diagnostics_state():
+    try:
+        with open(DIAGNOSTICS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _set_private_session_enabled(enabled):
+    global current_config
+    enabled = bool(enabled)
+    config = load_config()
+    if bool(config.get("privacy_private_session")) == enabled:
+        current_config = config
+        update_tray_menu()
+        return
+    config["privacy_private_session"] = enabled
+    save_config(config)
+    current_config = config
+    update_tray_menu()
+    if enabled:
+        clear_current_presence("private session enabled")
+
+    def _restart():
+        with _privacy_restart_lock:
+            restart_rpc()
+            print(f"[Privacy] Private session {'enabled' if enabled else 'disabled'} from Amazon Music.")
+
+    threading.Thread(target=_restart, daemon=True).start()
+
+
+def _sync_status_overlay(config=None):
+    global status_overlay
+    config = config or load_config()
+    if config.get("amazon_devtools_enabled"):
+        if status_overlay is None:
+            status_overlay = AmazonStatusOverlay(
+                ICON_PATH,
+                load_config,
+                _read_diagnostics_state,
+                lambda: bool(rpc_running),
+                _set_private_session_enabled,
+            )
+        status_overlay.start()
+        return
+    if status_overlay is not None:
+        status_overlay.stop()
+        status_overlay = None
 
 
 def _privacy_keywords(config):
@@ -246,21 +299,34 @@ def _cached_start_ts(raw_key):
     return cached.get("start_ts")
 
 
-def _track_start_ts(track, raw_key):
+def _track_start_ts(track, raw_key, use_cache=True):
     position = track.get("position")
     start_ts = None
     try:
-        if position is not None and float(position) > 0:
+        if position is not None and float(position) >= 0:
             start_ts = int(time.time() - float(position))
     except (TypeError, ValueError):
         start_ts = None
-    if start_ts is None:
+    if start_ts is None and use_cache:
         start_ts = _cached_start_ts(raw_key) or int(time.time())
+    if start_ts is None:
+        start_ts = int(time.time())
     _track_timing_cache[raw_key] = {
         "start_ts": start_ts,
         "updated_at": time.time(),
     }
     return start_ts
+
+
+def _playing_start_ts(track, raw_key, last_start_ts, paused_position, resumed_from_pause):
+    if resumed_from_pause and track.get("position") is not None:
+        return _track_start_ts(track, raw_key, use_cache=False), None, True
+    if last_start_ts is None:
+        if track.get("position") is not None:
+            return _track_start_ts(track, raw_key), None, False
+        if paused_position is not None:
+            return int(time.time() - paused_position), None, False
+    return last_start_ts, paused_position, False
 
 
 def _devtools_no_track_state(enabled, current_state):
@@ -480,6 +546,7 @@ def rpc_loop():
     last_deezer_track_link = None
     presence_visible = False
     paused_position = None
+    last_playback_status = None
 
     song_link_enabled = config.get("song_link_enabled", False)
     song_link_provider = config.get("song_link_provider", "amazon")
@@ -711,11 +778,14 @@ def rpc_loop():
                 last_deezer_track_link = None
                 _current_notif_data = None
                 _notif_art_fetched_for = None
+                paused_position = None
+                last_playback_status = None
                 _update_state(track=None, presence=False)
                 time.sleep(3)
                 continue
 
             if track["status"] == "paused":
+                last_playback_status = "paused"
                 privacy_reason = _privacy_match(config, track.get("title", ""), track.get("artist", ""), track.get("album", ""))
                 if privacy_reason:
                     if presence_visible:
@@ -799,6 +869,7 @@ def rpc_loop():
             title = track["title"]
             artist = track["artist"]
             raw_key = f"{title}|{artist}"
+            resumed_from_pause = last_playback_status == "paused"
 
             title, artist, resolved_applied = _apply_resolved_cache(raw_key, title, artist)
             if not resolved_applied and _same_track_field(title, artist):
@@ -821,6 +892,8 @@ def rpc_loop():
                 last_start_ts = None
                 last_amazon_track_link = None
                 last_deezer_track_link = None
+                paused_position = None
+                last_playback_status = "playing"
                 _update_state(track=track, presence=False)
                 time.sleep(3)
                 continue
@@ -851,6 +924,7 @@ def rpc_loop():
                         "position": track.get("position"),
                         "duration": track.get("duration"),
                     }
+                    last_playback_status = "playing"
                     _update_state(track=hidden_track, presence=False, privacy_reason=privacy_reason)
                     time.sleep(3)
                     continue
@@ -968,12 +1042,15 @@ def rpc_loop():
                         except Exception:
                             pass
 
-            if last_start_ts is None:
-                if paused_position is not None:
-                    last_start_ts = int(time.time() - paused_position)
-                    paused_position = None
-                elif track["position"] is not None:
-                    last_start_ts = _track_start_ts(track, raw_key)
+            last_start_ts, paused_position, time_refreshed = _playing_start_ts(
+                track,
+                raw_key,
+                last_start_ts,
+                paused_position,
+                resumed_from_pause,
+            )
+            if time_refreshed:
+                print(f"[RPC] Resumed, refreshed playback time for: {title}")
 
             if _notif_album:
                 last_album_name = _notif_album
@@ -1039,6 +1116,7 @@ def rpc_loop():
                     scrobbled = False
                 print(f"[RPC] Song ended, restarting: {title}")
 
+            last_playback_status = "playing"
             time.sleep(3)
 
         except Exception as e:
@@ -1147,6 +1225,7 @@ def open_settings(icon=None, item=None):
                 new_rpc_config = _rpc_config_snapshot(new_config)
                 if new_config != old_config:
                     current_config = new_config
+                    _sync_status_overlay(new_config)
                     if new_rpc_config != old_rpc_config:
                         if new_config.get("privacy_private_session") and not old_config.get("privacy_private_session"):
                             clear_current_presence("private session enabled")
@@ -1157,6 +1236,7 @@ def open_settings(icon=None, item=None):
             new_rpc_config = _rpc_config_snapshot(new_config)
             if new_config != old_config:
                 current_config = new_config
+                _sync_status_overlay(new_config)
                 old_config = dict(new_config)
                 if new_rpc_config != old_rpc_config:
                     if new_config.get("privacy_private_session") and not old_rpc_config.get("privacy_private_session"):
@@ -1242,8 +1322,11 @@ def _check_for_update_and_prompt():
 
 
 def on_quit(icon, item):
-    global rpc_running, settings_proc, diagnostics_proc
+    global rpc_running, settings_proc, diagnostics_proc, status_overlay
     rpc_running = False
+    if status_overlay is not None:
+        status_overlay.stop()
+        status_overlay = None
     if settings_proc and settings_proc.poll() is None:
         settings_proc.terminate()
         settings_proc = None
@@ -1362,6 +1445,7 @@ def main():
     )
 
     start_rpc()
+    _sync_status_overlay(current_config)
 
     def _check_update():
         _check_for_update_and_prompt()
@@ -1376,6 +1460,7 @@ def main():
     tray_icon.run()
 
     stop_rpc()
+    _sync_status_overlay({"amazon_devtools_enabled": False})
     if rpc_thread:
         rpc_thread.join(timeout=5)
     print("Goodbye.")

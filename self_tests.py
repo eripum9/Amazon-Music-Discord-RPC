@@ -126,6 +126,39 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Track correction cache", False, str(e)))
 
     try:
+        import main
+        from unittest.mock import patch
+        main._track_timing_cache.clear()
+        with patch("main.time.time", return_value=1000):
+            resumed_ts, resumed_paused, refreshed = main._playing_start_ts(
+                {"position": 104},
+                "Song|Artist",
+                None,
+                100,
+                True,
+            )
+            fallback_ts, fallback_paused, fallback_refreshed = main._playing_start_ts(
+                {"position": None},
+                "Song|Artist",
+                None,
+                100,
+                True,
+            )
+            zero_ts = main._track_start_ts({"position": 0}, "Fresh|Track", use_cache=False)
+        ok = (
+            resumed_ts == 896
+            and resumed_paused is None
+            and refreshed
+            and fallback_ts == 900
+            and fallback_paused is None
+            and not fallback_refreshed
+            and zero_ts == 1000
+        )
+        results.append(_result("Resume timing refresh", ok, "Playing after pause uses current playback position before paused fallback"))
+    except Exception as e:
+        results.append(_result("Resume timing refresh", False, str(e)))
+
+    try:
         from amazon_devtools import _normalise_track_payload, apply_devtools_to_track
         devtools = _normalise_track_payload({
             "status": "found",
@@ -183,6 +216,41 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Amazon DevTools launcher", ok, "Launcher command and cleanup path are available"))
     except Exception as e:
         results.append(_result("Amazon DevTools launcher", False, str(e)))
+
+    try:
+        from amazon_status_overlay import AmazonStatusOverlay, OVERLAY_VERSION, build_overlay_payload
+        private = build_overlay_payload(
+            {"privacy_private_session": True},
+            {"discord_status": "connected", "amazon_devtools": {"status": "found"}},
+            True,
+        )
+        paused = build_overlay_payload(
+            {"privacy_private_session": False},
+            {"discord_status": "connected", "track": {"status": "paused"}, "amazon_devtools": {"status": "found"}},
+            True,
+        )
+        overlay = AmazonStatusOverlay(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png"),
+            lambda: {},
+            lambda: {},
+            lambda: True,
+            lambda enabled: None,
+        )
+        overlay.bridge_url = "https://localhost:17680"
+        script = overlay._script()
+        ok = (
+            private.get("statusLabel") == "Private"
+            and private.get("privacy") is True
+            and paused.get("statusLabel") == "Paused"
+            and any(row.get("label") == "Source" and row.get("value") == "DevTools DOM" for row in paused.get("diagnostics", []))
+            and OVERLAY_VERSION in script
+            and "privacyBusy" in script
+            and "data-busy" in script
+            and "amrpc-toggle-track" in script
+        )
+        results.append(_result("Amazon status overlay", ok, "Overlay payload and injected privacy control are guarded"))
+    except Exception as e:
+        results.append(_result("Amazon status overlay", False, str(e)))
 
     try:
         import diagnostics_ui
@@ -246,6 +314,9 @@ def run_self_tests(log_dir, diagnostics_path):
             and "launchAmazonDevtools" in script
             and "toggleAmazonLauncher" in script
             and "onAmazonMetadataToggle" in script
+            and "collectSettingsData" in script
+            and "queueAutoSave" in script
+            and "syncExternalConfig" in script
             and "not recommended" in html
             and "beta metadata" not in html.lower()
         )

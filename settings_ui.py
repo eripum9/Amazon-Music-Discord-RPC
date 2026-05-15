@@ -385,7 +385,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
   .toggle input:checked ~ .toggle-knob { transform: translateX(18px); }
 
-  /* Save button */
   .save-btn {
     width: 100%;
     padding: 11px;
@@ -405,26 +404,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .save-btn:disabled { background: #4752c4; cursor: default; }
   .save-btn.saved { background: #43b581; }
   .save-btn.error { background: #f04747; }
-
-  .btn-row {
-    display: flex;
-    gap: 8px;
-    margin-top: 6px;
-  }
-  .close-btn {
-    flex: 0 0 auto;
-    padding: 11px 20px;
-    background: #383838;
-    color: #e4e4e4;
-    border: 1px solid #4a4a4a;
-    border-radius: 6px;
-    font-size: 14px;
-    font-weight: 600;
-    font-family: inherit;
-    cursor: pointer;
-    transition: background 0.15s;
-  }
-  .close-btn:hover { background: #404040; }
 
   .update-btn {
     width: 100%;
@@ -902,11 +881,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
 </div>
 
-<div class="btn-row">
-  <button class="save-btn" id="saveBtn" onclick="save()">Save Changes</button>
-  <button class="close-btn" onclick="pywebview.api.close_window()">Close</button>
-</div>
-
 <button class="update-btn" id="updateBtn" onclick="checkForUpdates()">↑ Check for Updates</button>
 <button class="update-btn" id="diagBtn" onclick="pywebview.api.open_diagnostics()">Open Diagnostics</button>
 <button class="update-btn" onclick="pywebview.api.open_url('https://github.com/eripum9/Amazon-Music-Discord-RPC/issues')">Report Issue</button>
@@ -916,6 +890,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   const BOOTSTRAP_CONFIG = {config_json};
   let customAlbums = [];
   let amazonLauncherInstalled = false;
+  let applyingConfig = false;
+  let autoApplyAttached = false;
+  let autoSaveTimer = null;
+  let externalSyncTimer = null;
+  let lastSavedSignature = '';
+  let lastLbValidationKey = '';
 
   function showSettingsStatus(text, kind) {
     const status = document.getElementById('updateStatus');
@@ -930,6 +910,124 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       status.style.display = 'none';
       status.className = 'update-status';
       status.textContent = '';
+    }
+  }
+
+  function collectSettingsData() {
+    const mode = document.getElementById('idMode').value;
+    return {
+      use_custom: mode === 'custom',
+      client_id: document.getElementById('clientId').value.trim(),
+      start_on_startup: document.getElementById('startOnStartup').checked,
+      start_minimized: document.getElementById('startMinimized').checked,
+      show_paused: document.getElementById('showPaused').checked,
+      privacy_private_session: document.getElementById('privacyPrivateSession').checked,
+      privacy_disable_scrobbling: document.getElementById('privacyDisableScrobbling').checked,
+      privacy_blocked_keywords: document.getElementById('privacyBlockedKeywords').value.trim(),
+      custom_albums: collectCustomAlbums(false),
+      song_link_enabled: document.getElementById('songLinkEnabled').checked,
+      song_link_provider: document.getElementById('songLinkProvider').value,
+      notification_enrichment_enabled: document.getElementById('notifEnrichEnabled').checked,
+      amazon_devtools_enabled: document.getElementById('amazonDevtoolsEnabled').checked,
+      amazon_devtools_auto_launch: document.getElementById('amazonDevtoolsAutoLaunch').checked,
+      lastfm_enabled: document.getElementById('lastfmEnabled').checked,
+      listenbrainz_enabled: document.getElementById('lbEnabled').checked,
+      listenbrainz_token: document.getElementById('lbToken').value.trim()
+    };
+  }
+
+  function settingsSignature(data) {
+    return JSON.stringify(data || collectSettingsData());
+  }
+
+  function markSaved(data) {
+    lastSavedSignature = settingsSignature(data);
+  }
+
+  function validateSettings(showErrors) {
+    const mode = document.getElementById('idMode').value;
+    const customId = document.getElementById('clientId').value.trim();
+    if (mode === 'custom' && !customId) {
+      if (showErrors) {
+        document.getElementById('idError').style.display = 'block';
+      }
+      return false;
+    }
+    if (mode === 'custom' && (!/^\\d+$/.test(customId) || customId.length < 15)) {
+      if (showErrors) {
+        document.getElementById('idError').textContent = 'Client ID must be numeric and at least 15 digits.';
+        document.getElementById('idError').style.display = 'block';
+        document.getElementById('clientId').style.borderColor = '#f04747';
+      }
+      return false;
+    }
+    document.getElementById('idError').style.display = 'none';
+    document.getElementById('clientId').style.borderColor = '';
+    return true;
+  }
+
+  function queueAutoSave(delay) {
+    if (applyingConfig || !apiReady()) {
+      return;
+    }
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(() => {
+      autoSaveTimer = null;
+      save({ auto: true });
+    }, delay || 500);
+  }
+
+  function shouldAutoApply(target) {
+    if (!target || !target.matches || !target.matches('input, select, textarea')) {
+      return false;
+    }
+    if (target.closest('#metadataWarning')) {
+      return false;
+    }
+    if (target.id === 'amazonDevtoolsEnabled' && !target.checked) {
+      return false;
+    }
+    return true;
+  }
+
+  function attachAutoApply() {
+    if (autoApplyAttached) {
+      return;
+    }
+    autoApplyAttached = true;
+    document.body.addEventListener('change', (event) => {
+      if (shouldAutoApply(event.target)) {
+        queueAutoSave(120);
+      }
+    }, true);
+    document.body.addEventListener('input', (event) => {
+      if (shouldAutoApply(event.target)) {
+        queueAutoSave(700);
+      }
+    }, true);
+    externalSyncTimer = setInterval(syncExternalConfig, 2500);
+  }
+
+  function userIsTyping() {
+    const active = document.activeElement;
+    if (!active || !active.matches) {
+      return false;
+    }
+    return active.matches('input[type="text"], textarea');
+  }
+
+  async function syncExternalConfig() {
+    if (!apiReady() || applyingConfig || autoSaveTimer || userIsTyping()) {
+      return;
+    }
+    try {
+      const cfg = await pywebview.api.get_config();
+      const currentSignature = settingsSignature();
+      applyConfig(cfg);
+      if (currentSignature !== lastSavedSignature) {
+        markSaved();
+      }
+    } catch (e) {
     }
   }
 
@@ -1005,12 +1103,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     customAlbums = collectCustomAlbums(true);
     customAlbums.push({ album: '', aliases: [], art_url: '' });
     renderCustomAlbums(customAlbums);
+    queueAutoSave(700);
   }
 
   function removeCustomAlbum(index) {
     customAlbums = collectCustomAlbums(true);
     customAlbums.splice(index, 1);
     renderCustomAlbums(customAlbums);
+    queueAutoSave(120);
   }
 
   function onLastfmToggle() {
@@ -1042,11 +1142,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   function closeMetadataWarning() {
     document.getElementById('metadataWarning').classList.remove('visible');
     document.getElementById('amazonDevtoolsEnabled').checked = true;
+    queueAutoSave(120);
   }
 
   function acceptMetadataWarning() {
     document.getElementById('metadataWarning').classList.remove('visible');
     document.getElementById('amazonDevtoolsEnabled').checked = false;
+    queueAutoSave(120);
   }
 
   function onLbToggle() {
@@ -1125,69 +1227,34 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
   }
 
-  async function save() {
-    const mode = document.getElementById('idMode').value;
-    const customId = document.getElementById('clientId').value.trim();
-    const btn = document.getElementById('saveBtn');
+  async function save(options) {
+    options = options || {};
+    const auto = !!options.auto;
 
-    if (mode === 'custom' && !customId) {
-      document.getElementById('idError').style.display = 'block';
+    if (!validateSettings(!auto)) {
       return;
     }
-    if (mode === 'custom' && (!/^\\d+$/.test(customId) || customId.length < 15)) {
-      document.getElementById('idError').textContent = 'Client ID must be numeric and at least 15 digits.';
-      document.getElementById('idError').style.display = 'block';
-      document.getElementById('clientId').style.borderColor = '#f04747';
+
+    const data = collectSettingsData();
+    if (auto && settingsSignature(data) === lastSavedSignature) {
       return;
     }
-    document.getElementById('idError').style.display = 'none';
-    document.getElementById('clientId').style.borderColor = '';
-
-    btn.disabled = true;
-    btn.textContent = 'Saving...';
-    btn.className = 'save-btn';
-
-    const data = {
-      use_custom: mode === 'custom',
-      client_id: customId,
-      start_on_startup: document.getElementById('startOnStartup').checked,
-      start_minimized: document.getElementById('startMinimized').checked,
-      show_paused: document.getElementById('showPaused').checked,
-      privacy_private_session: document.getElementById('privacyPrivateSession').checked,
-      privacy_disable_scrobbling: document.getElementById('privacyDisableScrobbling').checked,
-      privacy_blocked_keywords: document.getElementById('privacyBlockedKeywords').value.trim(),
-      custom_albums: collectCustomAlbums(false),
-      song_link_enabled: document.getElementById('songLinkEnabled').checked,
-      song_link_provider: document.getElementById('songLinkProvider').value,
-      notification_enrichment_enabled: document.getElementById('notifEnrichEnabled').checked,
-      amazon_devtools_enabled: document.getElementById('amazonDevtoolsEnabled').checked,
-      amazon_devtools_auto_launch: document.getElementById('amazonDevtoolsAutoLaunch').checked,
-      lastfm_enabled: document.getElementById('lastfmEnabled').checked,
-      listenbrainz_enabled: document.getElementById('lbEnabled').checked,
-      listenbrainz_token: document.getElementById('lbToken').value.trim()
-    };
 
     try {
       await pywebview.api.save_settings(data);
-      btn.textContent = '\u2713 Saved!';
-      btn.className = 'save-btn saved';
-      setTimeout(() => {
-        btn.textContent = 'Save Changes';
-        btn.className = 'save-btn';
-        btn.disabled = false;
-      }, 2000);
+      markSaved(data);
+      if (!auto) {
+        showSettingsStatus('\u2713 Settings saved', 'up-to-date');
+      }
     } catch (e) {
-      btn.textContent = '\u2717 Save failed';
-      btn.className = 'save-btn error';
-      setTimeout(() => {
-        btn.textContent = 'Save Changes';
-        btn.className = 'save-btn';
-        btn.disabled = false;
-      }, 2000);
+      if (!auto) {
+        showSettingsStatus('\u2717 Save failed', 'update-error');
+      }
     }
   }
 
   function applyConfig(cfg) {
+    applyingConfig = true;
     cfg = cfg || {};
     if (cfg.use_custom_client_id) {
       document.getElementById('idMode').value = 'custom';
@@ -1235,7 +1302,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     } else {
       document.getElementById('lbFields').classList.remove('visible');
     }
-    if (cfg.listenbrainz_enabled && cfg.listenbrainz_token && window.pywebview && window.pywebview.api) {
+    const lbValidationKey = cfg.listenbrainz_enabled ? (cfg.listenbrainz_token || '') : '';
+    if (!lbValidationKey) {
+      lastLbValidationKey = '';
+    }
+    if (cfg.listenbrainz_enabled && cfg.listenbrainz_token && window.pywebview && window.pywebview.api && lbValidationKey !== lastLbValidationKey) {
+      lastLbValidationKey = lbValidationKey;
       lbValidate();
     }
     if (!cfg.intro_seen) {
@@ -1243,6 +1315,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     } else {
       document.getElementById('introOverlay').classList.remove('visible');
     }
+    markSaved();
+    setTimeout(() => {
+      applyingConfig = false;
+    }, 0);
   }
 
   function apiReady() {
@@ -1265,6 +1341,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       await waitForApi();
       const cfg = await pywebview.api.get_config();
       applyConfig(cfg);
+      attachAutoApply();
       hideSettingsStatus();
     } catch (e) {
       showSettingsStatus('\u2717 Could not refresh settings from the app bridge. Showing saved config snapshot.', 'update-error');
