@@ -7,6 +7,22 @@ from pypresence import Presence
 from pypresence.types import ActivityType
 
 
+def _discord_asset_text(album_name, title):
+    album = str(album_name or "").strip()
+    if len(album) >= 2:
+        return album[:128]
+    if album:
+        return f"Album: {album}"[:128]
+
+    track = str(title or "").strip()
+    if len(track) >= 2:
+        return track[:128]
+    if track:
+        return f"Track: {track}"[:128]
+
+    return "Unknown Album"
+
+
 class DiscordRPC:
     def __init__(self, client_id):
         self.client_id = client_id
@@ -55,7 +71,7 @@ class DiscordRPC:
             "details": title[:128] if title else "Unknown Title",
             "state": f"by {artist}" if artist else "Unknown Artist",
             "assets": {
-                "large_text": album_name if album_name else f"{title}",
+                "large_text": _discord_asset_text(album_name, title),
             },
             "instance": True,
         }

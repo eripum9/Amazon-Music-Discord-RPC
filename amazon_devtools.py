@@ -482,6 +482,34 @@ Add-Type -TypeDefinition $code
     return {"ok": True, "pid": _clean(completed.stdout)}
 
 
+def amazon_music_is_running():
+    script = rf"""
+$package = '{AMAZON_PACKAGE_NAME}'
+$targets = @(Get-Process | Where-Object {{
+    $path = ""
+    try {{ $path = $_.Path }} catch {{ }}
+    $_.MainWindowHandle -ne 0 -and
+    (($path -and $path -like "*$package*") -or
+    ($_.ProcessName -eq "AmazonMusic") -or
+    ($_.ProcessName -eq "Amazon Music")) -and
+    ($_.ProcessName -ne "Amazon Music Helper")
+}})
+if ($targets.Count -gt 0) {{ "true" }} else {{ "false" }}
+"""
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+            creationflags=0x08000000 if os.name == "nt" else 0,
+        )
+    except Exception:
+        return False
+    return completed.returncode == 0 and _clean(completed.stdout).lower() == "true"
+
+
 def stop_amazon_music():
     script = rf"""
 $package = '{AMAZON_PACKAGE_NAME}'

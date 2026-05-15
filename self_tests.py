@@ -76,6 +76,18 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Metadata cleanup", False, str(e)))
 
     try:
+        from discord_rpc import _discord_asset_text
+        ok = (
+            _discord_asset_text("Z", "Off the Record") == "Album: Z"
+            and _discord_asset_text("", "A") == "Track: A"
+            and _discord_asset_text("Wolf", "IFHY") == "Wolf"
+            and len(_discord_asset_text("Z", "Off the Record")) >= 2
+        )
+        results.append(_result("Discord asset text", ok, "One-letter albums are expanded for Discord validation"))
+    except Exception as e:
+        results.append(_result("Discord asset text", False, str(e)))
+
+    try:
         import inspect
         from album_art import search_tracks
         params = inspect.signature(search_tracks).parameters
@@ -164,10 +176,10 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Amazon DevTools diagnostics state", False, str(e)))
 
     try:
-        from amazon_devtools import amazon_devtools_launcher_state, _shortcut_launcher_command
+        from amazon_devtools import amazon_devtools_launcher_state, _shortcut_launcher_command, amazon_music_is_running
         state = amazon_devtools_launcher_state()
         target, arguments, working_dir, icon_path = _shortcut_launcher_command()
-        ok = state.get("path", "").endswith("Amazon Music Metadata.lnk") and target and "--launch-amazon-devtools" in arguments and working_dir and icon_path
+        ok = state.get("path", "").endswith("Amazon Music Metadata.lnk") and target and "--launch-amazon-devtools" in arguments and working_dir and icon_path and isinstance(amazon_music_is_running(), bool)
         results.append(_result("Amazon DevTools launcher", ok, "Launcher command and cleanup path are available"))
     except Exception as e:
         results.append(_result("Amazon DevTools launcher", False, str(e)))
@@ -223,6 +235,7 @@ def run_self_tests(log_dir, diagnostics_path):
             and "song_link_provider" in script
             and "songLinkProvider" in script
             and "Show listen button" in html
+            and "Auto-restart Amazon Music" in html
             and card_order == sorted(card_order)
             and "metadataWarning" in html
             and "closeMetadataWarning" in script

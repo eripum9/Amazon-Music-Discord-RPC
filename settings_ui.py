@@ -683,11 +683,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <div class="separator"></div>
   <div class="row">
     <div class="row-labels">
-      <span class="row-label">Auto-launch Amazon Music</span>
-      <div class="row-desc">Start or restart Amazon Music for metadata when RPC starts</div>
+      <span class="row-label">Auto-restart Amazon Music</span>
+      <div class="row-desc">Restart Amazon Music for metadata only when it is already open</div>
     </div>
     <label class="toggle">
-      <input type="checkbox" id="amazonDevtoolsAutoLaunch" aria-label="Auto-launch Amazon Music metadata">
+      <input type="checkbox" id="amazonDevtoolsAutoLaunch" aria-label="Auto-restart Amazon Music metadata">
       <div class="toggle-track"></div>
       <div class="toggle-knob"></div>
     </label>
