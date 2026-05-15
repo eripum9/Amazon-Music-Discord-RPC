@@ -16,7 +16,7 @@ import pystray
 from media_reader import get_track_sync
 from notification_reader import get_notification_track_sync, is_new_notification
 from album_art import get_album_art, search_tracks, find_custom_album_art
-from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, launch_amazon_music_devtools, restart_amazon_music_devtools
+from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, launch_amazon_music_devtools, restart_amazon_music_devtools, amazon_music_is_running
 from discord_rpc import DiscordRPC
 from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION
 from updater import check_for_update, prompt_for_update
@@ -490,7 +490,6 @@ def rpc_loop():
     amazon_devtools_enabled = config.get("amazon_devtools_enabled", False)
     amazon_devtools_auto_launch = config.get("amazon_devtools_auto_launch", True)
     privacy_disable_scrobbling = config.get("privacy_disable_scrobbling", True)
-    devtools_auto_launch_attempted = False
     devtools_restart_attempted = False
     devtools_unavailable_since = None
     last_amazon_metadata_key = None
@@ -607,7 +606,6 @@ def rpc_loop():
                     _current_amazon_devtools = {"enabled": True, **devtools}
                     if devtools.get("status") == "found":
                         devtools_unavailable_since = None
-                        devtools_auto_launch_attempted = False
                         devtools_restart_attempted = False
                         devtools_found = True
                         _current_notif_data = None
@@ -627,43 +625,42 @@ def rpc_loop():
                             print(f"[Amazon] Metadata: '{track.get('title', '')}' by '{track.get('artist', '')}'")
                     elif devtools.get("status") == "unavailable" and amazon_devtools_auto_launch:
                         now = time.time()
-                        if devtools_unavailable_since is None:
-                            devtools_unavailable_since = now
-                        if not devtools_auto_launch_attempted:
-                            devtools_auto_launch_attempted = True
-                            launch_result = launch_amazon_music_devtools()
-                            if launch_result.get("ok"):
-                                devtools_unavailable_since = time.time()
+                        if not amazon_music_is_running():
+                            devtools_unavailable_since = None
+                            devtools_restart_attempted = False
+                            _current_amazon_devtools = {
+                                "enabled": True,
+                                "status": "waiting",
+                                "detail": "Amazon Music is closed; waiting for you to open it",
+                                "source": "amazon_devtools",
+                            }
+                        else:
+                            if devtools_unavailable_since is None:
+                                devtools_unavailable_since = now
+                                devtools_restart_attempted = False
+                            if not devtools_restart_attempted and now - devtools_unavailable_since >= DEVTOOLS_REPAIR_GRACE_SECONDS:
+                                devtools_restart_attempted = True
+                                restart_result = restart_amazon_music_devtools()
+                                if restart_result.get("ok"):
+                                    _current_amazon_devtools = {
+                                        "enabled": True,
+                                        "status": "restarting",
+                                        "detail": "Restarted Amazon Music for metadata",
+                                        "source": "amazon_devtools",
+                                    }
+                                    print("[Amazon] Restarted Amazon Music for metadata.")
+                                else:
+                                    _current_amazon_devtools = {
+                                        "enabled": True,
+                                        "status": "error",
+                                        "detail": restart_result.get("error") or "Could not restart Amazon Music for metadata",
+                                        "source": "amazon_devtools",
+                                    }
+                            elif not devtools_restart_attempted:
                                 _current_amazon_devtools = {
                                     "enabled": True,
-                                    "status": "launching",
-                                    "detail": "Amazon Music launched for metadata",
-                                    "source": "amazon_devtools",
-                                }
-                                print("[Amazon] Launched Amazon Music for metadata.")
-                            else:
-                                _current_amazon_devtools = {
-                                    "enabled": True,
-                                    "status": "error",
-                                    "detail": launch_result.get("error") or "Could not launch Amazon Music for metadata",
-                                    "source": "amazon_devtools",
-                                }
-                        elif not devtools_restart_attempted and now - devtools_unavailable_since >= DEVTOOLS_REPAIR_GRACE_SECONDS:
-                            devtools_restart_attempted = True
-                            restart_result = restart_amazon_music_devtools()
-                            if restart_result.get("ok"):
-                                _current_amazon_devtools = {
-                                    "enabled": True,
-                                    "status": "restarting",
-                                    "detail": "Restarted Amazon Music for metadata",
-                                    "source": "amazon_devtools",
-                                }
-                                print("[Amazon] Restarted Amazon Music for metadata.")
-                            else:
-                                _current_amazon_devtools = {
-                                    "enabled": True,
-                                    "status": "error",
-                                    "detail": restart_result.get("error") or "Could not restart Amazon Music for metadata",
+                                    "status": "waiting",
+                                    "detail": "Amazon Music is open without enhanced metadata; restart repair pending",
                                     "source": "amazon_devtools",
                                 }
                 except Exception as e:
