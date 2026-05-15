@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 import base64
 import datetime as dt
 import ipaddress
