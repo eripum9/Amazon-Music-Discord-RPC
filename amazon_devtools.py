@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import random
 import re
 import socket
 import struct
@@ -15,7 +16,10 @@ from urllib.parse import quote, urlparse
 
 
 APP_USER_MODEL_ID = "AmazonMobileLLC.AmazonMusic_kc6t79cpj4tp0!AmazonMobileLLC.AmazonMusic"
-DEVTOOLS_PORT = 9222
+COMMON_DEVTOOLS_PORT = 9222
+DEVTOOLS_PORT_ENV = "AMRPC_DEVTOOLS_PORT"
+DEVTOOLS_PORT_MIN = 49152
+DEVTOOLS_PORT_MAX = 60999
 AMAZON_PACKAGE_NAME = "AmazonMobileLLC.AmazonMusic"
 SHORTCUT_NAME = "Amazon Music Metadata.lnk"
 OLD_SHORTCUT_NAMES = ("Amazon Music Beta Metadata.lnk",)
@@ -25,6 +29,71 @@ _EXPLICIT_RE = re.compile(r"\s*\[Explicit\]\s*$", re.IGNORECASE)
 _TIME_RE = re.compile(r"^-?\d{1,2}:\d{2}(?::\d{2})?$")
 _ASIN_RE = re.compile(r"^[A-Z0-9]{10}$", re.IGNORECASE)
 _MUSIC_HOST_RE = re.compile(r"^music\.amazon\.[a-z.]+$", re.IGNORECASE)
+_DEVTOOLS_PORT = None
+
+
+def _valid_devtools_port(value):
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return None
+    if DEVTOOLS_PORT_MIN <= port <= DEVTOOLS_PORT_MAX:
+        return port
+    return None
+
+
+def _is_local_port_open(port, timeout=0.15):
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _pick_devtools_port():
+    ports = list(range(DEVTOOLS_PORT_MIN, DEVTOOLS_PORT_MAX + 1))
+    random.shuffle(ports)
+    for port in ports:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                pass
+    raise RuntimeError("Could not find a free local metadata port")
+
+
+def set_devtools_port(port):
+    global _DEVTOOLS_PORT
+    selected = _valid_devtools_port(port)
+    if not selected:
+        raise ValueError("Invalid DevTools port")
+    _DEVTOOLS_PORT = selected
+    _clear_cache()
+    return _DEVTOOLS_PORT
+
+
+def reset_devtools_port():
+    global _DEVTOOLS_PORT
+    _DEVTOOLS_PORT = None
+    _clear_cache()
+
+
+def get_devtools_port(create=True):
+    global _DEVTOOLS_PORT
+    if _DEVTOOLS_PORT is None:
+        env_port = _valid_devtools_port(os.environ.get(DEVTOOLS_PORT_ENV))
+        if env_port:
+            _DEVTOOLS_PORT = env_port
+    if _DEVTOOLS_PORT is None and create:
+        _DEVTOOLS_PORT = _pick_devtools_port()
+    return _DEVTOOLS_PORT
+
+
+def devtools_environment(base_env=None):
+    env = dict(base_env or os.environ)
+    env[DEVTOOLS_PORT_ENV] = str(get_devtools_port(True))
+    return env
 
 
 def _clean(value):
@@ -137,23 +206,35 @@ def _normalise_track_payload(payload):
     }
 
 
-def _http_json(path, timeout=1.5):
-    with urllib.request.urlopen(f"http://127.0.0.1:{DEVTOOLS_PORT}{path}", timeout=timeout) as response:
+def _http_json(path, timeout=1.5, port=None):
+    selected_port = port or get_devtools_port(False)
+    if not selected_port:
+        raise ConnectionError("No enhanced metadata port selected")
+    with urllib.request.urlopen(f"http://127.0.0.1:{selected_port}{path}", timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8", errors="replace"))
 
 
-def _page_target():
+def _is_amazon_music_target(target):
+    if not isinstance(target, dict) or target.get("type") != "page":
+        return False
+    title = _clean(target.get("title")).lower()
+    parsed = urlparse(_clean(target.get("url")))
+    host = (parsed.hostname or "").lower()
+    path = parsed.path or ""
+    if parsed.scheme != "https" or not _MUSIC_HOST_RE.match(host):
+        return False
+    return "morpho/webapp" in path or title == "amazon music"
+
+
+def _page_target(port=None):
     try:
-        targets = _http_json("/json/list")
+        targets = _http_json("/json/list", port=port)
     except Exception:
         return None
     if not isinstance(targets, list):
         return None
     for target in targets:
-        if target.get("type") == "page" and "morpho/webapp" in target.get("url", ""):
-            return target
-    for target in targets:
-        if target.get("type") == "page" and "Amazon Music" in target.get("title", ""):
+        if _is_amazon_music_target(target):
             return target
     return None
 
@@ -163,7 +244,9 @@ class _CdpSocket:
         self._id = 0
         parsed = urlparse(websocket_url)
         self._host = parsed.hostname or "127.0.0.1"
-        self._port = parsed.port or DEVTOOLS_PORT
+        self._port = parsed.port or get_devtools_port(False)
+        if not self._port:
+            raise ConnectionError("No enhanced metadata port selected")
         self._path = parsed.path
         if parsed.query:
             self._path += "?" + parsed.query
@@ -361,13 +444,21 @@ _TRANSPORT_EXPRESSION = r"""
 
 
 def get_devtools_track_sync():
-    target = _page_target()
+    port = get_devtools_port(True)
+    unexpected_warning = ""
+    if port != COMMON_DEVTOOLS_PORT and _is_local_port_open(COMMON_DEVTOOLS_PORT):
+        unexpected_warning = f"Common DevTools port {COMMON_DEVTOOLS_PORT} is reachable and ignored"
+    target = _page_target(port=port)
     if not target:
-        return {
+        payload = {
             "status": "unavailable",
             "detail": "Amazon Music is not running with enhanced metadata enabled",
             "source": "amazon_devtools",
+            "port": port,
         }
+        if unexpected_warning:
+            payload["warning"] = unexpected_warning
+        return payload
     cache_key = target.get("id")
     now = time.time()
     if _CACHE["key"] == cache_key and now < _CACHE["expires"]:
@@ -383,8 +474,13 @@ def get_devtools_track_sync():
         })
         result = response.get("result", {}).get("result", {}).get("value")
         track = _normalise_track_payload(result)
+        track["port"] = port
+        if unexpected_warning:
+            track["warning"] = unexpected_warning
     except Exception as e:
-        track = {"status": "error", "detail": str(e), "source": "amazon_devtools"}
+        track = {"status": "error", "detail": str(e), "source": "amazon_devtools", "port": port}
+        if unexpected_warning:
+            track["warning"] = unexpected_warning
     finally:
         if client:
             client.close()
@@ -429,6 +525,19 @@ def apply_devtools_to_track(track, devtools):
 
 
 def launch_amazon_music_devtools():
+    port = get_devtools_port(True)
+    if _is_local_port_open(port):
+        if _page_target(port=port):
+            return {"ok": True, "pid": "", "port": port, "already_running": True}
+        if _valid_devtools_port(os.environ.get(DEVTOOLS_PORT_ENV)) == port:
+            return {"ok": False, "error": f"Shared metadata port {port} is already in use", "port": port}
+        for _ in range(8):
+            reset_devtools_port()
+            port = get_devtools_port(True)
+            if not _is_local_port_open(port):
+                break
+        else:
+            return {"ok": False, "error": "Could not find a free local metadata port"}
     script = rf"""
 $code = @'
 using System;
@@ -464,7 +573,7 @@ public static class AppActivator
 }}
 '@
 Add-Type -TypeDefinition $code
-[AppActivator]::Activate('{APP_USER_MODEL_ID}', '--remote-debugging-port={DEVTOOLS_PORT}')
+[AppActivator]::Activate('{APP_USER_MODEL_ID}', '--remote-debugging-port={port}')
 """
     try:
         completed = subprocess.run(
@@ -476,10 +585,10 @@ Add-Type -TypeDefinition $code
             creationflags=0x08000000 if os.name == "nt" else 0,
         )
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": str(e), "port": port}
     if completed.returncode != 0:
-        return {"ok": False, "error": _clean(completed.stderr) or "Could not launch Amazon Music"}
-    return {"ok": True, "pid": _clean(completed.stdout)}
+        return {"ok": False, "error": _clean(completed.stderr) or "Could not launch Amazon Music", "port": port}
+    return {"ok": True, "pid": _clean(completed.stdout), "port": port}
 
 
 def amazon_music_is_running():

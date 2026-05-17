@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sys
 import tempfile
 import winreg
@@ -35,12 +36,13 @@ DEFAULTS = {
     "listenbrainz_enabled": False,
     "listenbrainz_token": "",
     "notification_enrichment_enabled": False,
-    "amazon_devtools_enabled": True,
-    "amazon_devtools_auto_launch": True,
+    "amazon_devtools_enabled": False,
+    "amazon_devtools_auto_launch": False,
     "privacy_private_session": False,
     "privacy_blocked_keywords": "",
     "privacy_disable_scrobbling": True,
     "intro_seen": False,
+    "enhanced_metadata_prompt_seen": False,
     "diagnostics_tests_warning_dismissed": False,
     "settings_window_width": 460,
     "settings_window_height": 800,
@@ -49,6 +51,52 @@ DEFAULTS = {
 }
 
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+REDACTION_TEXT = "[redacted]"
+SENSITIVE_CONFIG_KEYS = {
+    "lastfm_session_key",
+    "lastfm_api_secret",
+    "listenbrainz_token",
+}
+SENSITIVE_TEXT_PATTERNS = [
+    re.compile(r'("(?:lastfm_session_key|lastfm_api_secret|listenbrainz_token)"\s*:\s*")([^"]+)(")', re.IGNORECASE),
+    re.compile(r"(\bToken\s+)([A-Za-z0-9._~+/=-]{6,})", re.IGNORECASE),
+    re.compile(r"(\bAuthorization\s*:\s*Token\s+)([A-Za-z0-9._~+/=-]{6,})", re.IGNORECASE),
+]
+
+
+def _sensitive_values(config=None):
+    values = set()
+    for source in (DEFAULTS, config or {}):
+        for key in SENSITIVE_CONFIG_KEYS:
+            value = str(source.get(key, "") or "")
+            if len(value) >= 6:
+                values.add(value)
+    return values
+
+
+def redact_text(value, config=None):
+    text = str(value or "")
+    for pattern in SENSITIVE_TEXT_PATTERNS:
+        text = pattern.sub(lambda match: f"{match.group(1)}{REDACTION_TEXT}{match.group(3) if len(match.groups()) > 2 else ''}", text)
+    for secret in sorted(_sensitive_values(config), key=len, reverse=True):
+        text = text.replace(secret, REDACTION_TEXT)
+    return text
+
+
+def redact_data(value, config=None):
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            if str(key).lower() in SENSITIVE_CONFIG_KEYS:
+                redacted[key] = REDACTION_TEXT if item else ""
+            else:
+                redacted[key] = redact_data(item, config)
+        return redacted
+    if isinstance(value, list):
+        return [redact_data(item, config) for item in value]
+    if isinstance(value, str):
+        return redact_text(value, config)
+    return value
 
 
 def load_config():
@@ -60,6 +108,9 @@ def load_config():
             print(f"[Config] Could not read config, using defaults: {e}")
             saved = {}
         config = {**DEFAULTS, **saved}
+        if saved and "enhanced_metadata_prompt_seen" not in saved and "amazon_devtools_enabled" not in saved:
+            config["amazon_devtools_enabled"] = True
+            config["amazon_devtools_auto_launch"] = True
     else:
         config = dict(DEFAULTS)
     return config

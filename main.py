@@ -16,10 +16,10 @@ import pystray
 from media_reader import get_track_sync
 from notification_reader import get_notification_track_sync, is_new_notification
 from album_art import get_album_art, search_tracks, find_custom_album_art
-from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, launch_amazon_music_devtools, restart_amazon_music_devtools, amazon_music_is_running
+from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, launch_amazon_music_devtools, restart_amazon_music_devtools, amazon_music_is_running, devtools_environment
 from amazon_status_overlay import AmazonStatusOverlay
 from discord_rpc import DiscordRPC
-from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION
+from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION, redact_data
 from updater import check_for_update, prompt_for_update
 
 if getattr(sys, 'frozen', False):
@@ -32,6 +32,7 @@ ICON_PATH = os.path.join(BUNDLE_DIR, "icon.png")
 
 MUTEX_NAME = "AmazonMusicRPC_SingleInstance"
 EVENT_NAME = "AmazonMusicRPC_OpenSettings"
+EVENT_NAME_LAUNCH_AMAZON = "AmazonMusicRPC_LaunchAmazonDevtools"
 
 if getattr(sys, 'frozen', False):
     LOG_DIR = os.path.join(os.environ.get("APPDATA", ""), "AmazonMusicRPC")
@@ -95,6 +96,7 @@ def _write_diagnostics_state(**state):
             "app_version": APP_VERSION,
             **state,
         }
+        payload = redact_data(payload, current_config)
         tmp_path = DIAGNOSTICS_PATH + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
@@ -342,6 +344,19 @@ def _devtools_no_track_state(enabled, current_state):
     }
 
 
+def _signal_primary_launch_amazon():
+    try:
+        kernel32 = ctypes.windll.kernel32
+        event = kernel32.OpenEventW(0x2, False, EVENT_NAME_LAUNCH_AMAZON)
+        if event:
+            kernel32.SetEvent(event)
+            kernel32.CloseHandle(event)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _rotated_log_path(index):
     return os.path.join(LOG_DIR, f"console.{index}.log")
 
@@ -555,7 +570,7 @@ def rpc_loop():
     show_paused = config.get("show_paused", True)
     notification_enrichment_enabled = config.get("notification_enrichment_enabled", False)
     amazon_devtools_enabled = config.get("amazon_devtools_enabled", False)
-    amazon_devtools_auto_launch = config.get("amazon_devtools_auto_launch", True)
+    amazon_devtools_auto_launch = config.get("amazon_devtools_auto_launch", False)
     privacy_disable_scrobbling = config.get("privacy_disable_scrobbling", True)
     devtools_restart_attempted = False
     devtools_unavailable_since = None
@@ -1206,12 +1221,14 @@ def open_settings(icon=None, item=None):
     global current_config, settings_proc
     if settings_proc and settings_proc.poll() is None:
         return
+    env = devtools_environment()
     if getattr(sys, 'frozen', False):
-        settings_proc = subprocess.Popen([sys.executable, '--settings'], creationflags=0x08000000)
+        settings_proc = subprocess.Popen([sys.executable, '--settings'], creationflags=0x08000000, env=env)
     else:
         settings_proc = subprocess.Popen(
             [sys.executable, os.path.join(SCRIPT_DIR, 'settings_ui.py')],
-            creationflags=0x08000000
+            creationflags=0x08000000,
+            env=env,
         )
     def _reload_after_delay():
         global current_config
@@ -1290,11 +1307,11 @@ def wrong_song_handler(icon=None, item=None):
     threading.Thread(target=_worker, daemon=True).start()
 
 
-def _prompt_and_install_update(latest_ver, download_url, changelog=""):
+def _prompt_and_install_update(latest_ver, download_url, changelog="", release_url=None, expected_sha256=""):
     MB_TOPMOST = 0x40000
     print(f"[Update] Downloading installer...")
     try:
-        installer_path = prompt_for_update(latest_ver, download_url, changelog)
+        installer_path = prompt_for_update(latest_ver, download_url, changelog, release_url, expected_sha256)
         if not installer_path:
             return
         print(f"[Update] Downloaded to {installer_path}, launching installer...")
@@ -1311,10 +1328,10 @@ def _prompt_and_install_update(latest_ver, download_url, changelog=""):
 
 def _check_for_update_and_prompt():
     try:
-        has_update, latest_ver, download_url, changelog = check_for_update()
+        has_update, latest_ver, download_url, changelog, release_url, expected_sha256 = check_for_update()
         if has_update and download_url:
             print(f"[Update] New version {latest_ver} available!")
-            _prompt_and_install_update(latest_ver, download_url, changelog)
+            _prompt_and_install_update(latest_ver, download_url, changelog, release_url, expected_sha256)
         elif has_update:
             print(f"[Update] New version {latest_ver} found but no installer asset.")
     except Exception as e:
@@ -1379,6 +1396,8 @@ def main():
         return
 
     if '--launch-amazon-devtools' in sys.argv:
+        if _signal_primary_launch_amazon():
+            return
         result = launch_amazon_music_devtools()
         if not result.get("ok"):
             try:
@@ -1415,6 +1434,7 @@ def main():
         sys.exit(0)
 
     settings_event = kernel32.CreateEventW(None, False, False, EVENT_NAME)
+    launch_amazon_event = kernel32.CreateEventW(None, False, False, EVENT_NAME_LAUNCH_AMAZON)
 
     def _watch_for_settings_signal():
         while rpc_running or tray_icon:
@@ -1422,6 +1442,13 @@ def main():
             if result == 0:
                 open_settings()
     threading.Thread(target=_watch_for_settings_signal, daemon=True).start()
+
+    def _watch_for_launch_amazon_signal():
+        while rpc_running or tray_icon:
+            result = kernel32.WaitForSingleObject(launch_amazon_event, 1000)
+            if result == 0:
+                launch_amazon_devtools_from_tray()
+    threading.Thread(target=_watch_for_launch_amazon_signal, daemon=True).start()
 
     _rotate_logs()
     sys.stdout = _LogTee(sys.__stdout__, LOG_PATH)
@@ -1452,7 +1479,9 @@ def main():
     threading.Thread(target=_check_update, daemon=True).start()
 
     should_open_settings = not is_startup_launch and (
-        not current_config.get("start_minimized", True) or not config_exists
+        not current_config.get("start_minimized", True)
+        or not config_exists
+        or not current_config.get("enhanced_metadata_prompt_seen", False)
     )
     if should_open_settings:
         open_settings()

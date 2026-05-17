@@ -6,7 +6,7 @@ import sys
 import time
 import webbrowser
 import webview
-from config import load_config, save_config, CONFIG_DIR, CONFIG_PATH, APP_VERSION
+from config import load_config, save_config, CONFIG_DIR, CONFIG_PATH, APP_VERSION, redact_data, redact_text
 
 if getattr(sys, 'frozen', False):
     _BUNDLE_DIR = sys._MEIPASS
@@ -157,6 +157,7 @@ def _build_cards(state, config, access):
     amazon_devtools = state.get("amazon_devtools") or {}
     if config.get("amazon_devtools_enabled"):
         devtools_status = amazon_devtools.get("status") or "waiting"
+        devtools_warning = amazon_devtools.get("warning") or ""
         if devtools_status == "found":
             value = "Found"
             detail = amazon_devtools.get("title") or amazon_devtools.get("detail") or "Amazon Music metadata available"
@@ -177,6 +178,10 @@ def _build_cards(state, config, access):
             value = "Waiting"
             detail = amazon_devtools.get("detail") or "Waiting for Amazon Music metadata"
             card_state = "warn"
+        if devtools_warning:
+            detail = devtools_warning
+            if card_state == "good":
+                card_state = "warn"
         cards.append({"label": "Amazon Metadata", "value": value, "detail": detail, "state": card_state})
     else:
         cards.append({"label": "Amazon Metadata", "value": "Off", "detail": "Enhanced metadata disabled", "state": "muted"})
@@ -826,7 +831,7 @@ class _Api:
 
     def get_snapshot(self):
         config = load_config()
-        state = _read_state()
+        state = redact_data(_read_state(), config)
         access = _notification_access()
         track = state.get("track") or {}
         return {
@@ -855,9 +860,9 @@ class _Api:
                 f.seek(offset)
                 content = f.read()
                 new_offset = f.tell()
-            return {"content": content, "offset": new_offset, "size": size}
+            return {"content": redact_text(content, load_config()), "offset": new_offset, "size": size}
         except Exception as e:
-            return {"content": f"[Diagnostics] Could not read log: {e}", "offset": 0, "size": 0}
+            return {"content": redact_text(f"[Diagnostics] Could not read log: {e}", load_config()), "offset": 0, "size": 0}
 
     def open_report_issue(self):
         webbrowser.open(ISSUES_URL)

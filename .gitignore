@@ -17,3 +17,5 @@ diagnostics.json.tmp
 *.log
 
 build.bat
+
+PLAN.md

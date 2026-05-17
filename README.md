@@ -39,6 +39,49 @@ Amazon Music metadata is read from the local Amazon Music desktop app when enhan
 
 If enhanced Amazon metadata is unavailable, the app falls back to Windows' System Media Transport Controls (SMTC). Notification fallback can optionally enrich that fallback path with artist and album metadata from Amazon Music's Windows notifications.
 
+## Security & Privacy
+
+Amazon Music RPC is not affiliated with Amazon, Discord, Last.fm, ListenBrainz, Deezer, or Apple.
+
+Enhanced metadata is optional for new installs. When enabled, the app launches or repairs Amazon Music with a local debugging interface so it can read the current Amazon Music page directly. This gives better title, album, artwork, pause state, and timing data than Windows fallback metadata. The debug port is picked randomly from a high local port range for each app session, kept in memory, and the app only attaches to Amazon Music targets on `music.amazon.*`.
+
+Fallback-only mode is available in Settings by turning off **Enhanced Amazon metadata**. In fallback-only mode, the app uses Windows media metadata and optional notification enrichment instead of the Amazon Music debug interface.
+
+Notification enrichment is off by default. If enabled, Windows may ask for notification access. The app reads notifications locally and only uses Amazon Music notifications to improve fallback metadata.
+
+Private session mode clears Discord presence and can stop scrobbling while it is enabled. Keyword privacy rules can also block specific tracks from being shared.
+
+Settings are stored in `%APPDATA%\AmazonMusicRPC\config.json` for installed builds, or the project directory when running from source. Last.fm and ListenBrainz tokens are stored locally in that config today. Diagnostics and log views redact known token values, and Settings includes a clear-token action, but you should still treat config files as private.
+
+### Data Flow
+
+| Data | Used for | Sent where |
+| --- | --- | --- |
+| Song title, artist, album, playback time | Discord Rich Presence | Discord IPC |
+| Album art URL | Discord Rich Presence artwork | Discord IPC |
+| Amazon Music page metadata | Enhanced metadata | Local only |
+| Windows SMTC metadata | Fallback metadata | Local only until shown in Discord |
+| Amazon Music notifications | Optional fallback enrichment | Local only until shown in Discord |
+| Last.fm session key | Optional scrobbling | Last.fm |
+| ListenBrainz token | Optional scrobbling | ListenBrainz |
+| Track and artist search terms | Fallback artwork or track matching | Deezer or iTunes |
+| GitHub release metadata | Update checks | GitHub |
+
+### Fallback-Only Mode
+
+To run without enhanced metadata:
+
+1. Open **Settings** from the tray icon.
+2. Turn off **Enhanced Amazon metadata**.
+3. Leave **Notification enrichment** off if you also want to avoid Windows notification access.
+4. Turn off Last.fm and ListenBrainz if you do not want scrobbling.
+
+### Uninstall
+
+The installer removes the app startup entry, installed files, app config directory, logs, and Amazon Music metadata launcher shortcuts during uninstall. If you ran from source, delete the project folder and `%APPDATA%\AmazonMusicRPC` manually.
+
+For vulnerability reporting and supported version details, see [SECURITY.md](SECURITY.md).
+
 ## Installation
 
 ### Installer (recommended)
@@ -49,6 +92,18 @@ Download `AmazonMusicRPC_Setup.exe` from [Releases](../../releases), run it, and
 - Optionally creates a desktop shortcut
 - Optionally adds a startup entry
 - Shows up in **Settings > Apps** for clean uninstall
+
+### Release Verification
+
+Release notes should include a SHA256 hash for `AmazonMusicRPC_Setup.exe`. The built-in updater opens the GitHub release page before running an installer and verifies the installer hash when a SHA256 value is present in the release notes.
+
+To check a downloaded installer manually in PowerShell:
+
+```powershell
+Get-FileHash .\AmazonMusicRPC_Setup.exe -Algorithm SHA256
+```
+
+Compare the output with the SHA256 value shown on the GitHub release page. If a release does not include a hash, review the release page before installing.
 
 ### From Source
 

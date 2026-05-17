@@ -84,10 +84,11 @@ def _settings_payload():
         "lastfm_enabled",
         "lastfm_username",
         "listenbrainz_enabled",
-        "listenbrainz_token",
         "intro_seen",
+        "enhanced_metadata_prompt_seen",
     ]
     payload = {key: cfg.get(key) for key in keys}
+    payload["listenbrainz_token_present"] = bool(cfg.get("listenbrainz_token"))
     payload["custom_albums"] = _clean_custom_albums(payload.get("custom_albums"))
     try:
         from amazon_devtools import amazon_devtools_launcher_state
@@ -637,6 +638,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
 </div>
 
+<div class="modal-overlay" id="enhancedMetadataPrompt">
+  <div class="modal">
+    <div class="modal-title" id="enhancedMetadataPromptTitle">Enhanced metadata</div>
+    <div class="modal-copy" id="enhancedMetadataPromptCopy"></div>
+    <div class="modal-actions">
+      <button id="enhancedMetadataSecondary" onclick="chooseEnhancedMetadata(false)">Use fallback mode</button>
+      <button class="primary-action" id="enhancedMetadataPrimary" onclick="chooseEnhancedMetadata(true)">Enable enhanced metadata</button>
+    </div>
+  </div>
+</div>
+
 <div class="header">
   <img src="data:image/png;base64,{icon_b64}" alt="icon" id="appIcon">
   <div class="header-text">
@@ -791,7 +803,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <div class="row">
     <div class="row-labels">
       <span class="row-label">Notification fallback</span>
-      <div class="row-desc">Use Windows notifications only when Amazon metadata is unavailable</div>
+      <div class="row-desc">Read Amazon Music notifications locally only when enhanced metadata is unavailable</div>
     </div>
     <label class="toggle">
       <input type="checkbox" id="notifEnrichEnabled" aria-label="Enable notification fallback" onchange="onNotifEnrichToggle()">
@@ -804,6 +816,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <strong style="color:#e4e4e4;">Requirements:</strong><br>
       &bull; Notifications must be enabled in Amazon Music settings<br>
       &bull; Amazon Music must be <strong>minimized</strong> for notifications to appear
+      <br><br><strong style="color:#e4e4e4;">Privacy:</strong><br>
+      &bull; Reads Windows notifications locally<br>
+      &bull; Only Amazon Music notification text is used for fallback metadata
     </div>
     <div style="margin-top:8px;">
       <a href="#" onclick="pywebview.api.open_url('https://eripum9.github.io/Amazon-Music-Discord-RPC/notification-setup'); return false;"
@@ -881,6 +896,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
 </div>
 
+<div class="card">
+  <div class="card-title">Scrobbling Tokens</div>
+  <div class="row-labels">
+    <span class="row-label">Clear saved tokens</span>
+    <div class="row-desc">Disconnect Last.fm and remove the saved ListenBrainz token from this device</div>
+  </div>
+  <button class="update-btn" id="clearTokensBtn" type="button" onclick="clearScrobblingTokens()">Clear Scrobbling Tokens</button>
+</div>
+
 <button class="update-btn" id="updateBtn" onclick="checkForUpdates()">↑ Check for Updates</button>
 <button class="update-btn" id="diagBtn" onclick="pywebview.api.open_diagnostics()">Open Diagnostics</button>
 <button class="update-btn" onclick="pywebview.api.open_url('https://github.com/eripum9/Amazon-Music-Discord-RPC/issues')">Report Issue</button>
@@ -896,6 +920,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   let externalSyncTimer = null;
   let lastSavedSignature = '';
   let lastLbValidationKey = '';
+  let latestConfig = BOOTSTRAP_CONFIG;
+  let enhancedMetadataPromptVisible = false;
 
   function showSettingsStatus(text, kind) {
     const status = document.getElementById('updateStatus');
@@ -982,6 +1008,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       return false;
     }
     if (target.closest('#metadataWarning')) {
+      return false;
+    }
+    if (target.closest('#enhancedMetadataPrompt')) {
       return false;
     }
     if (target.id === 'amazonDevtoolsEnabled' && !target.checked) {
@@ -1151,6 +1180,49 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     queueAutoSave(120);
   }
 
+  function maybeShowEnhancedMetadataPrompt(cfg) {
+    if (!apiReady() || enhancedMetadataPromptVisible || !cfg || cfg.enhanced_metadata_prompt_seen || !cfg.intro_seen) {
+      return;
+    }
+    const enabled = !!cfg.amazon_devtools_enabled;
+    const title = document.getElementById('enhancedMetadataPromptTitle');
+    const copy = document.getElementById('enhancedMetadataPromptCopy');
+    const primary = document.getElementById('enhancedMetadataPrimary');
+    const secondary = document.getElementById('enhancedMetadataSecondary');
+    if (enabled) {
+      title.textContent = 'Enhanced metadata is active';
+      copy.textContent = 'Your current setup already uses enhanced Amazon metadata. It gives Amazon Music RPC richer track names, album art, pause state, and timing, so Discord can show the best available presence. You can keep it on or switch to fallback mode.';
+      primary.textContent = 'Keep enhanced metadata';
+      secondary.textContent = 'Use fallback mode';
+    } else {
+      title.textContent = 'Use enhanced metadata?';
+      copy.textContent = 'Enhanced metadata is recommended. It lets Amazon Music RPC read richer local playback details from Amazon Music, which improves track names, album art, pause state, and timing. Fallback mode still works if you prefer a simpler setup.';
+      primary.textContent = 'Enable enhanced metadata';
+      secondary.textContent = 'Use fallback mode';
+    }
+    enhancedMetadataPromptVisible = true;
+    document.getElementById('enhancedMetadataPrompt').classList.add('visible');
+  }
+
+  async function chooseEnhancedMetadata(enabled) {
+    const currentAutoRestart = document.getElementById('amazonDevtoolsAutoLaunch').checked;
+    document.getElementById('amazonDevtoolsEnabled').checked = !!enabled;
+    if (!enabled) {
+      document.getElementById('amazonDevtoolsAutoLaunch').checked = false;
+    }
+    document.getElementById('enhancedMetadataPrompt').classList.remove('visible');
+    enhancedMetadataPromptVisible = false;
+    try {
+      const result = await pywebview.api.set_enhanced_metadata_prompt(!!enabled, !!enabled && currentAutoRestart);
+      if (result && result.config) {
+        applyConfig(result.config);
+      }
+      showSettingsStatus(enabled ? '\u2713 Enhanced metadata enabled.' : '\u2713 Fallback mode selected.', 'up-to-date');
+    } catch (e) {
+      showSettingsStatus('\u2717 Could not save enhanced metadata choice.', 'update-error');
+    }
+  }
+
   function onLbToggle() {
     const fields = document.getElementById('lbFields');
     if (document.getElementById('lbEnabled').checked) {
@@ -1227,6 +1299,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
   }
 
+  async function clearScrobblingTokens() {
+    const btn = document.getElementById('clearTokensBtn');
+    btn.disabled = true;
+    btn.textContent = 'Clearing...';
+    try {
+      const result = await pywebview.api.clear_scrobbling_tokens();
+      if (result && result.config) {
+        applyConfig(result.config);
+      }
+      showSettingsStatus('\u2713 Scrobbling tokens cleared.', 'up-to-date');
+    } catch (e) {
+      showSettingsStatus('\u2717 Could not clear scrobbling tokens.', 'update-error');
+    }
+    btn.disabled = false;
+    btn.textContent = 'Clear Scrobbling Tokens';
+  }
+
   async function save(options) {
     options = options || {};
     const auto = !!options.auto;
@@ -1256,6 +1345,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   function applyConfig(cfg) {
     applyingConfig = true;
     cfg = cfg || {};
+    latestConfig = cfg;
     if (cfg.use_custom_client_id) {
       document.getElementById('idMode').value = 'custom';
       document.getElementById('customIdGroup').classList.add('visible');
@@ -1275,7 +1365,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     document.getElementById('songLinkProvider').value = cfg.song_link_provider === 'deezer' ? 'deezer' : 'amazon';
     document.getElementById('notifEnrichEnabled').checked = !!cfg.notification_enrichment_enabled;
     document.getElementById('amazonDevtoolsEnabled').checked = !!cfg.amazon_devtools_enabled;
-    document.getElementById('amazonDevtoolsAutoLaunch').checked = cfg.amazon_devtools_auto_launch !== false;
+    document.getElementById('amazonDevtoolsAutoLaunch').checked = !!cfg.amazon_devtools_auto_launch;
     amazonLauncherInstalled = !!cfg.amazon_devtools_launcher_installed;
     renderAmazonLauncherButton();
     if (cfg.notification_enrichment_enabled) {
@@ -1289,31 +1379,41 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     } else {
       document.getElementById('lastfmFields').classList.remove('visible');
     }
+    const lastfmStatus = document.getElementById('lastfmStatus');
     if (cfg.lastfm_username) {
-      const status = document.getElementById('lastfmStatus');
-      status.style.display = 'block';
-      status.className = 'lastfm-status connected';
-      status.textContent = '\u2713 Connected as: ' + cfg.lastfm_username;
+      lastfmStatus.style.display = 'block';
+      lastfmStatus.className = 'lastfm-status connected';
+      lastfmStatus.textContent = '\u2713 Connected as: ' + cfg.lastfm_username;
+    } else {
+      lastfmStatus.style.display = 'none';
+      lastfmStatus.textContent = '';
     }
     document.getElementById('lbEnabled').checked = !!cfg.listenbrainz_enabled;
-    document.getElementById('lbToken').value = cfg.listenbrainz_token || '';
+    const lbToken = document.getElementById('lbToken');
+    const lbSaved = !!cfg.listenbrainz_token_present;
+    lbToken.value = '';
+    lbToken.placeholder = lbSaved ? 'Token saved. Paste a new token to replace it.' : 'Paste your ListenBrainz user token';
     if (cfg.listenbrainz_enabled) {
       document.getElementById('lbFields').classList.add('visible');
     } else {
       document.getElementById('lbFields').classList.remove('visible');
     }
-    const lbValidationKey = cfg.listenbrainz_enabled ? (cfg.listenbrainz_token || '') : '';
-    if (!lbValidationKey) {
-      lastLbValidationKey = '';
-    }
-    if (cfg.listenbrainz_enabled && cfg.listenbrainz_token && window.pywebview && window.pywebview.api && lbValidationKey !== lastLbValidationKey) {
-      lastLbValidationKey = lbValidationKey;
-      lbValidate();
+    const lbStatus = document.getElementById('lbStatus');
+    if (lbSaved && cfg.listenbrainz_enabled) {
+      lbStatus.style.display = 'block';
+      lbStatus.className = 'lastfm-status connected';
+      lbStatus.textContent = '\u2713 Token saved';
+    } else {
+      lbStatus.style.display = 'none';
+      if (!lbSaved) {
+        lastLbValidationKey = '';
+      }
     }
     if (!cfg.intro_seen) {
       document.getElementById('introOverlay').classList.add('visible');
     } else {
       document.getElementById('introOverlay').classList.remove('visible');
+      setTimeout(() => maybeShowEnhancedMetadataPrompt(cfg), 0);
     }
     markSaved();
     setTimeout(() => {
@@ -1350,8 +1450,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
   async function finishIntro() {
     try {
-      await pywebview.api.dismiss_intro();
-      document.getElementById('introOverlay').classList.remove('visible');
+      const result = await pywebview.api.dismiss_intro();
+      if (result && result.config) {
+        applyConfig(result.config);
+      } else {
+        latestConfig.intro_seen = true;
+        document.getElementById('introOverlay').classList.remove('visible');
+        maybeShowEnhancedMetadataPrompt(latestConfig);
+      }
     } catch (e) {
       showSettingsStatus('\u2717 Could not save intro state yet. Try again after Settings finishes loading.', 'update-error');
     }
@@ -1460,7 +1566,17 @@ class _Api:
         config = load_config()
         config["intro_seen"] = True
         save_config(config)
-        return {"ok": True}
+        return {"ok": True, "config": _settings_payload()}
+
+    def set_enhanced_metadata_prompt(self, enabled, auto_restart=False):
+        config = load_config()
+        config["amazon_devtools_enabled"] = bool(enabled)
+        config["amazon_devtools_auto_launch"] = bool(auto_restart) if enabled else False
+        config["enhanced_metadata_prompt_seen"] = True
+        save_config(config)
+        if self._on_save:
+            self._on_save(config)
+        return {"ok": True, "config": _settings_payload()}
 
     def validate_lb_token(self, token):
         try:
@@ -1514,14 +1630,28 @@ class _Api:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    def clear_scrobbling_tokens(self):
+        config = load_config()
+        config["lastfm_session_key"] = ""
+        config["lastfm_username"] = ""
+        config["lastfm_enabled"] = False
+        config["listenbrainz_token"] = ""
+        config["listenbrainz_enabled"] = False
+        save_config(config)
+        _Api._skg = None
+        _Api._auth_url = None
+        if self._on_save:
+            self._on_save(config)
+        return {"ok": True, "config": _settings_payload()}
+
     def check_for_updates(self):
         try:
             from updater import check_for_update, prompt_for_update
-            has_update, version, download_url, changelog = check_for_update()
+            has_update, version, download_url, changelog, release_url, expected_sha256 = check_for_update()
             if has_update:
-                result = {"has_update": True, "version": version, "changelog": changelog}
+                result = {"has_update": True, "version": version, "changelog": changelog, "release_url": release_url, "sha256_available": bool(expected_sha256)}
                 if download_url:
-                    installer_path = prompt_for_update(version, download_url, changelog)
+                    installer_path = prompt_for_update(version, download_url, changelog, release_url, expected_sha256)
                     result["install_started"] = bool(installer_path)
                 else:
                     result["error"] = "No installer asset found for this release."
@@ -1564,6 +1694,10 @@ class _Api:
         client_id = data.get("client_id", "").strip() if use_custom else DEFAULT_CLIENT_ID
 
         existing = load_config()
+        listenbrainz_token = data.get("listenbrainz_token", "").strip()
+        if not listenbrainz_token:
+            listenbrainz_token = existing.get("listenbrainz_token", "")
+
         config = {
             **existing,
             "discord_client_id": client_id,
@@ -1579,10 +1713,10 @@ class _Api:
             "song_link_provider": data.get("song_link_provider") if data.get("song_link_provider") in ("amazon", "deezer") else "amazon",
             "notification_enrichment_enabled": bool(data.get("notification_enrichment_enabled")),
             "amazon_devtools_enabled": bool(data.get("amazon_devtools_enabled")),
-            "amazon_devtools_auto_launch": bool(data.get("amazon_devtools_auto_launch", True)),
+            "amazon_devtools_auto_launch": bool(data.get("amazon_devtools_auto_launch", False)),
             "lastfm_enabled": bool(data.get("lastfm_enabled")),
             "listenbrainz_enabled": bool(data.get("listenbrainz_enabled")),
-            "listenbrainz_token": data.get("listenbrainz_token", "").strip(),
+            "listenbrainz_token": listenbrainz_token,
         }
         save_config(config)
         set_startup(config["start_on_startup"], config["start_minimized"])

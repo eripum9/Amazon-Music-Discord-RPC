@@ -2,7 +2,7 @@
 import json
 import os
 import tempfile
-from config import DEFAULTS, CONFIG_DIR, CONFIG_PATH, load_config
+from config import DEFAULTS, CONFIG_DIR, CONFIG_PATH, load_config, redact_data, redact_text
 
 
 def _result(name, ok, detail):
@@ -22,6 +22,32 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Config defaults", not missing, "All defaults loaded" if not missing else f"Missing: {', '.join(missing)}"))
     except Exception as e:
         results.append(_result("Config defaults", False, str(e)))
+
+    try:
+        ok = (
+            DEFAULTS.get("amazon_devtools_enabled") is False
+            and DEFAULTS.get("amazon_devtools_auto_launch") is False
+            and DEFAULTS.get("enhanced_metadata_prompt_seen") is False
+            and DEFAULTS.get("notification_enrichment_enabled") is False
+        )
+        results.append(_result("Enhanced metadata defaults", ok, "Enhanced metadata starts opt-in for new configs"))
+    except Exception as e:
+        results.append(_result("Enhanced metadata defaults", False, str(e)))
+
+    try:
+        secrets = {
+            "listenbrainz_token": "listenbrainz_secret_value",
+            "lastfm_session_key": "lastfm_secret_value",
+            "lastfm_api_secret": "lastfm_app_secret_value",
+        }
+        text = 'Token listenbrainz_secret_value "lastfm_session_key": "lastfm_secret_value" lastfm_app_secret_value'
+        redacted_text = redact_text(text, secrets)
+        redacted_data = redact_data({"listenbrainz_token": secrets["listenbrainz_token"], "nested": {"value": secrets["lastfm_session_key"]}}, secrets)
+        combined = redacted_text + json.dumps(redacted_data)
+        ok = all(secret not in combined for secret in secrets.values()) and "[redacted]" in combined
+        results.append(_result("Secret redaction", ok, "Tokens are redacted from text and diagnostics data"))
+    except Exception as e:
+        results.append(_result("Secret redaction", False, str(e)))
 
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -67,6 +93,22 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Update changelog", ok, formatted or "No changelog"))
     except Exception as e:
         results.append(_result("Update changelog", False, str(e)))
+
+    try:
+        import hashlib
+        from updater import _extract_sha256, verify_file_sha256
+        fd, path = tempfile.mkstemp(prefix="amrpc_hash_", suffix=".bin", dir=log_dir)
+        with os.fdopen(fd, "wb") as f:
+            f.write(b"amazon music rpc installer test")
+        digest = hashlib.sha256(b"amazon music rpc installer test").hexdigest()
+        body = f"## Release\n\nAmazonMusicRPC_Setup.exe SHA256: {digest}\nother.exe SHA256: {'0' * 64}"
+        extracted = _extract_sha256(body, "AmazonMusicRPC_Setup.exe")
+        verified = verify_file_sha256(path, digest) == digest
+        os.remove(path)
+        ok = extracted == digest and verified
+        results.append(_result("Updater SHA256 trust", ok, "Release hashes can be parsed and verified"))
+    except Exception as e:
+        results.append(_result("Updater SHA256 trust", False, str(e)))
 
     try:
         from album_art import _clean_title
@@ -191,6 +233,111 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Amazon DevTools secondary fallback", False, str(e)))
 
     try:
+        from amazon_devtools import _TRANSPORT_EXPRESSION, _normalise_track_payload
+        from discord_rpc import _discord_asset_text
+        explicit = _normalise_track_payload({
+            "status": "found",
+            "title": "A [Explicit]",
+            "artist": "Artist",
+            "album": "Z [Explicit]",
+            "playback_status": "paused",
+            "position_text": "00:07",
+            "remaining_text": "-00:53",
+        })
+        missing_art = _normalise_track_payload({
+            "status": "found",
+            "title": "Bare Song",
+            "secondary": "Bare Artist",
+            "art_url": "",
+            "playback_status": "stopped",
+        })
+        incomplete = _normalise_track_payload({
+            "status": "found",
+            "title": "No Artist",
+            "album": "Album",
+        })
+        sample_html = """
+<div id="transportContainer" class="hasTrackLoaded">
+  <div class="trackMetadataWrapper">
+    <div class="albumArt"><img class="artImage" src="https://example.com/cover.jpg"></div>
+    <div class="primaryContainer"><a href="https://music.amazon.com/tracks/B012345678">A [Explicit]</a></div>
+    <div class="secondaryText">Artist • Z [Explicit]</div>
+    <span class="secondaryInnerText">Artist</span>
+    <span class="secondaryInnerText">Z [Explicit]</span>
+  </div>
+  <span class="currentPlaybackPosition">00:07</span>
+  <span class="currentRemainingPosition">-00:53</span>
+  <button class="playPause"><svg><use href="#pause"></use></svg></button>
+</div>
+"""
+        selectors = [
+            ".trackMetadataWrapper .primaryContainer",
+            ".trackMetadataWrapper .secondaryText",
+            ".trackMetadataWrapper .secondaryInnerText",
+            ".trackMetadataWrapper .albumArt img.artImage",
+            ".currentPlaybackPosition",
+            ".currentRemainingPosition",
+            "button.playPause",
+        ]
+        ok = (
+            explicit.get("title") == "A"
+            and explicit.get("album") == "Z"
+            and explicit.get("duration") == 60
+            and explicit.get("playback_status") == "paused"
+            and _discord_asset_text(explicit.get("album"), explicit.get("title")) == "Album: Z"
+            and missing_art.get("status") == "found"
+            and missing_art.get("artist") == "Bare Artist"
+            and missing_art.get("art_url") == ""
+            and missing_art.get("playback_status") == "playing"
+            and incomplete.get("status") == "no_match"
+            and all(fragment in sample_html for fragment in ("trackMetadataWrapper", "secondaryInnerText", "artImage", "currentPlaybackPosition", "currentRemainingPosition", "playPause"))
+            and all(selector in _TRANSPORT_EXPRESSION for selector in selectors)
+        )
+        results.append(_result("Amazon DevTools fragile payloads", ok, "Sample DOM shape, selectors, explicit cleanup, pause state, missing art, and one-letter album cases are covered"))
+    except Exception as e:
+        results.append(_result("Amazon DevTools fragile payloads", False, str(e)))
+
+    try:
+        import inspect
+        from amazon_devtools import (
+            COMMON_DEVTOOLS_PORT,
+            DEVTOOLS_PORT_ENV,
+            DEVTOOLS_PORT_MAX,
+            DEVTOOLS_PORT_MIN,
+            _is_amazon_music_target,
+            devtools_environment,
+            get_devtools_port,
+            launch_amazon_music_devtools,
+            reset_devtools_port,
+        )
+        reset_devtools_port()
+        port = get_devtools_port()
+        env = devtools_environment({})
+        source = inspect.getsource(launch_amazon_music_devtools)
+        good_target = {
+            "type": "page",
+            "url": "https://music.amazon.de/morpho/webapp/index.html",
+            "title": "Amazon Music",
+        }
+        bad_target = {
+            "type": "page",
+            "url": "https://example.com/morpho/webapp/index.html",
+            "title": "Amazon Music",
+        }
+        ok = (
+            DEVTOOLS_PORT_MIN <= port <= DEVTOOLS_PORT_MAX
+            and port != COMMON_DEVTOOLS_PORT
+            and int(env[DEVTOOLS_PORT_ENV]) == port
+            and f"--remote-debugging-port={COMMON_DEVTOOLS_PORT}" not in source
+            and _is_amazon_music_target(good_target)
+            and not _is_amazon_music_target(bad_target)
+        )
+        reset_devtools_port()
+        results.append(_result("Amazon DevTools port hardening", ok, "Runtime port is random and target validation rejects non-Amazon pages"))
+    except Exception as e:
+        results.append(_result("Amazon DevTools port hardening", False, str(e)))
+
+    try:
         import main
         unavailable = {"enabled": True, "status": "unavailable", "detail": "DevTools unavailable"}
         error = {"enabled": True, "status": "error", "detail": "Socket failed"}
@@ -304,8 +451,18 @@ def run_self_tests(log_dir, diagnostics_path):
             and "songLinkProvider" in script
             and "Show listen button" in html
             and "Auto-restart Amazon Music" in html
+            and "Reads Windows notifications locally" in html
+            and "Only Amazon Music notification text is used" in html
             and card_order == sorted(card_order)
             and "metadataWarning" in html
+            and "enhancedMetadataPrompt" in html
+            and "Enhanced metadata is recommended" in script
+            and "Your current setup already uses enhanced Amazon metadata" in script
+            and "set_enhanced_metadata_prompt" in script
+            and "listenbrainz_token_present" in script
+            and "Token saved. Paste a new token to replace it." in script
+            and "clearScrobblingTokens" in script
+            and "clear_scrobbling_tokens" in script
             and "closeMetadataWarning" in script
             and "acceptMetadataWarning" in script
             and "window.confirm" not in script
