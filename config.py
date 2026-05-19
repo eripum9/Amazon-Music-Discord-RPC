@@ -16,7 +16,7 @@ if not os.environ.get("APPDATA") or getattr(sys, "frozen", False) is False:
     CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
     CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
-APP_VERSION = "3.1.2"
+APP_VERSION = "3.1.3"
 AMAZON_MUSIC_LINK_REGIONS = (
     "com",
     "de",
@@ -68,6 +68,20 @@ DEFAULTS = {
 def normalize_amazon_music_link_region(value):
     text = str(value or "").strip().lower().lstrip(".")
     return text if text in AMAZON_MUSIC_LINK_REGIONS else "com"
+
+
+def _complete_config(saved):
+    config = {**DEFAULTS, **saved}
+    if saved and "enhanced_metadata_prompt_seen" not in saved and "amazon_devtools_enabled" not in saved:
+        config["amazon_devtools_enabled"] = True
+        config["amazon_devtools_auto_launch"] = True
+    return config
+
+
+def _read_saved_config():
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        saved = json.load(f)
+    return saved if isinstance(saved, dict) else {}
 
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 REDACTION_TEXT = "[redacted]"
@@ -121,18 +135,20 @@ def redact_data(value, config=None):
 def load_config():
     if os.path.exists(CONFIG_PATH):
         try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                saved = json.load(f)
+            saved = _read_saved_config()
         except (OSError, json.JSONDecodeError, TypeError) as e:
             print(f"[Config] Could not read config, using defaults: {e}")
             saved = {}
-        config = {**DEFAULTS, **saved}
-        if saved and "enhanced_metadata_prompt_seen" not in saved and "amazon_devtools_enabled" not in saved:
-            config["amazon_devtools_enabled"] = True
-            config["amazon_devtools_auto_launch"] = True
+        config = _complete_config(saved)
     else:
         config = dict(DEFAULTS)
     return config
+
+
+def load_config_for_update():
+    if os.path.exists(CONFIG_PATH):
+        return _complete_config(_read_saved_config())
+    return dict(DEFAULTS)
 
 
 def save_config(config):

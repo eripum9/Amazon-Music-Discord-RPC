@@ -2,7 +2,7 @@
 import json
 import os
 import tempfile
-from config import DEFAULTS, CONFIG_DIR, CONFIG_PATH, load_config, normalize_amazon_music_link_region, redact_data, redact_text
+from config import DEFAULTS, CONFIG_DIR, CONFIG_PATH, load_config, load_config_for_update, normalize_amazon_music_link_region, redact_data, redact_text
 
 
 def _result(name, ok, detail):
@@ -22,6 +22,42 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Config defaults", not missing, "All defaults loaded" if not missing else f"Missing: {', '.join(missing)}"))
     except Exception as e:
         results.append(_result("Config defaults", False, str(e)))
+
+    try:
+        import config as config_module
+        import settings_ui
+        old_dir = config_module.CONFIG_DIR
+        old_path = config_module.CONFIG_PATH
+        with tempfile.TemporaryDirectory(prefix="amrpc_config_guard_", dir=CONFIG_DIR) as temp_dir:
+            config_module.CONFIG_DIR = temp_dir
+            config_module.CONFIG_PATH = os.path.join(temp_dir, "config.json")
+            with open(config_module.CONFIG_PATH, "w", encoding="utf-8") as f:
+                f.write("")
+            strict_failed = False
+            try:
+                load_config_for_update()
+            except json.JSONDecodeError:
+                strict_failed = True
+            settings_ui._save_window_size(420, 560)
+            with open(config_module.CONFIG_PATH, "r", encoding="utf-8") as f:
+                preserved = f.read() == ""
+            fallback = load_config()
+            payload_rejected = False
+            try:
+                settings_ui._Api(None, lambda: None).save_settings({})
+            except ValueError:
+                payload_rejected = True
+        config_module.CONFIG_DIR = old_dir
+        config_module.CONFIG_PATH = old_path
+        ok = strict_failed and preserved and payload_rejected and all(key in fallback for key in DEFAULTS)
+        results.append(_result("Config update guard", ok, "Unsafe config reads and incomplete settings payloads do not get saved over"))
+    except Exception as e:
+        try:
+            config_module.CONFIG_DIR = old_dir
+            config_module.CONFIG_PATH = old_path
+        except Exception:
+            pass
+        results.append(_result("Config update guard", False, str(e)))
 
     try:
         ok = (

@@ -19,7 +19,7 @@ from album_art import get_album_art, search_tracks, find_custom_album_art
 from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, launch_amazon_music_devtools, restart_amazon_music_devtools, amazon_music_is_running, devtools_environment
 from amazon_status_overlay import AmazonStatusOverlay
 from discord_rpc import DiscordRPC
-from config import load_config, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION, redact_data
+from config import load_config, load_config_for_update, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION, redact_data
 from updater import check_for_update, prompt_for_update
 
 if getattr(sys, 'frozen', False):
@@ -117,7 +117,7 @@ def _read_diagnostics_state():
 def _set_private_session_enabled(enabled):
     global current_config
     enabled = bool(enabled)
-    config = load_config()
+    config = load_config_for_update()
     if bool(config.get("privacy_private_session")) == enabled:
         current_config = config
         update_tray_menu()
@@ -1209,7 +1209,7 @@ def clear_current_presence(reason=""):
 
 def toggle_private_session(icon=None, item=None):
     global current_config
-    config = load_config()
+    config = load_config_for_update()
     config["privacy_private_session"] = not bool(config.get("privacy_private_session"))
     save_config(config)
     current_config = config

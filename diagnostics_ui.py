@@ -6,7 +6,7 @@ import sys
 import time
 import webbrowser
 import webview
-from config import load_config, save_config, CONFIG_DIR, CONFIG_PATH, APP_VERSION, redact_data, redact_text
+from config import load_config, load_config_for_update, save_config, CONFIG_DIR, CONFIG_PATH, APP_VERSION, redact_data, redact_text
 
 if getattr(sys, 'frozen', False):
     _BUNDLE_DIR = sys._MEIPASS
@@ -34,7 +34,11 @@ def _bounded_int(value, default, minimum):
 
 
 def _save_window_size(width, height):
-    config = load_config()
+    try:
+        config = load_config_for_update()
+    except Exception as e:
+        print(f"[Diagnostics] Could not save window size: {e}")
+        return
     config["diagnostics_window_width"] = _bounded_int(width, 940, 700)
     config["diagnostics_window_height"] = _bounded_int(height, 700, 520)
     save_config(config)
@@ -871,7 +875,7 @@ class _Api:
         return {"dismissed": bool(load_config().get("diagnostics_tests_warning_dismissed"))}
 
     def dismiss_test_warning(self):
-        config = load_config()
+        config = load_config_for_update()
         config["diagnostics_tests_warning_dismissed"] = True
         save_config(config)
         return {"ok": True}
@@ -884,7 +888,7 @@ class _Api:
         }
         if key not in allowed:
             return {"ok": False, "error": "Unsupported flag"}
-        config = load_config()
+        config = load_config_for_update()
         config[key] = bool(value)
         save_config(config)
         return {"ok": True}

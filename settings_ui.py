@@ -6,7 +6,7 @@ import base64
 import json
 import subprocess
 import webview
-from config import load_config, save_config, is_startup_enabled, set_startup, DEFAULT_CLIENT_ID, APP_VERSION, normalize_amazon_music_link_region
+from config import load_config, load_config_for_update, save_config, is_startup_enabled, set_startup, DEFAULT_CLIENT_ID, APP_VERSION, normalize_amazon_music_link_region
 
 if getattr(sys, 'frozen', False):
     _BUNDLE_DIR = sys._MEIPASS
@@ -14,6 +14,26 @@ else:
     _BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 ICON_PATH = os.path.join(_BUNDLE_DIR, "icon.png")
+_REQUIRED_SETTINGS_KEYS = {
+    "use_custom",
+    "client_id",
+    "start_on_startup",
+    "start_minimized",
+    "show_paused",
+    "privacy_private_session",
+    "privacy_disable_scrobbling",
+    "privacy_blocked_keywords",
+    "custom_albums",
+    "song_link_enabled",
+    "song_link_provider",
+    "amazon_music_link_region",
+    "notification_enrichment_enabled",
+    "amazon_devtools_enabled",
+    "amazon_devtools_auto_launch",
+    "lastfm_enabled",
+    "listenbrainz_enabled",
+    "listenbrainz_token",
+}
 
 
 def _icon_b64():
@@ -31,7 +51,11 @@ def _bounded_int(value, default, minimum):
 
 
 def _save_window_size(width, height):
-    config = load_config()
+    try:
+        config = load_config_for_update()
+    except Exception as e:
+        print(f"[Settings] Could not save window size: {e}")
+        return
     config["settings_window_width"] = _bounded_int(width, 460, 420)
     config["settings_window_height"] = _bounded_int(height, 800, 560)
     save_config(config)
@@ -1599,13 +1623,13 @@ class _Api:
         webbrowser.open(url)
 
     def dismiss_intro(self):
-        config = load_config()
+        config = load_config_for_update()
         config["intro_seen"] = True
         save_config(config)
         return {"ok": True, "config": _settings_payload()}
 
     def set_enhanced_metadata_prompt(self, enabled, auto_restart=False):
-        config = load_config()
+        config = load_config_for_update()
         config["amazon_devtools_enabled"] = bool(enabled)
         config["amazon_devtools_auto_launch"] = bool(auto_restart) if enabled else False
         config["enhanced_metadata_prompt_seen"] = True
@@ -1656,7 +1680,7 @@ class _Api:
             _Api._skg = None
             _Api._auth_url = None
 
-            config = load_config()
+            config = load_config_for_update()
             config["lastfm_session_key"] = session_key
             config["lastfm_username"] = username
             config["lastfm_enabled"] = True
@@ -1667,7 +1691,7 @@ class _Api:
             return {"ok": False, "error": str(e)}
 
     def clear_scrobbling_tokens(self):
-        config = load_config()
+        config = load_config_for_update()
         config["lastfm_session_key"] = ""
         config["lastfm_username"] = ""
         config["lastfm_enabled"] = False
@@ -1726,10 +1750,16 @@ class _Api:
             return {"ok": False, "error": str(e), "installed": False}
 
     def save_settings(self, data):
+        if not isinstance(data, dict):
+            raise ValueError("Settings payload is invalid.")
+        missing = sorted(key for key in _REQUIRED_SETTINGS_KEYS if key not in data)
+        if missing:
+            raise ValueError(f"Settings payload is incomplete: {', '.join(missing)}")
+
         use_custom = data.get("use_custom", False)
         client_id = data.get("client_id", "").strip() if use_custom else DEFAULT_CLIENT_ID
 
-        existing = load_config()
+        existing = load_config_for_update()
         listenbrainz_token = data.get("listenbrainz_token", "").strip()
         if not listenbrainz_token:
             listenbrainz_token = existing.get("listenbrainz_token", "")
