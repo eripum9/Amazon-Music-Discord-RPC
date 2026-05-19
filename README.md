@@ -7,7 +7,7 @@ Show your Amazon Music songs, album art, pause state, and live timer on Discord.
 ![Windows](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-yellow)
 
-[Download for Windows](https://github.com/eripum9/Amazon-Music-Discord-RPC/releases/latest) · [View Demo](https://eripum9.github.io/Amazon-Music-Discord-RPC/#demo) · [Troubleshooting](docs/troubleshooting.md) · [Privacy & Security](SECURITY.md)
+[Download for Windows](https://github.com/eripum9/Amazon-Music-Discord-RPC/releases/latest) · [View Demo](https://eripum9.github.io/Amazon-Music-Discord-RPC/#demo) · [Troubleshooting](https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/troubleshooting/) · [Privacy & Security](https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/privacy/)
 
 - ✅ Shows current song, artist, album art, and timer on Discord
 - ✅ Works with the Amazon Music desktop app

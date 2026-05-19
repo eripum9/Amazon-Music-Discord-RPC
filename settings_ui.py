@@ -6,7 +6,7 @@ import base64
 import json
 import subprocess
 import webview
-from config import load_config, save_config, is_startup_enabled, set_startup, DEFAULT_CLIENT_ID, APP_VERSION
+from config import load_config, save_config, is_startup_enabled, set_startup, DEFAULT_CLIENT_ID, APP_VERSION, normalize_amazon_music_link_region
 
 if getattr(sys, 'frozen', False):
     _BUNDLE_DIR = sys._MEIPASS
@@ -78,6 +78,7 @@ def _settings_payload():
         "privacy_blocked_keywords",
         "song_link_enabled",
         "song_link_provider",
+        "amazon_music_link_region",
         "notification_enrichment_enabled",
         "amazon_devtools_enabled",
         "amazon_devtools_auto_launch",
@@ -706,10 +707,31 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <span class="row-label">Button source</span>
       <div class="row-desc">Amazon Music is used by default when available</div>
     </div>
-    <select id="songLinkProvider" aria-label="Listen button source">
+    <select id="songLinkProvider" aria-label="Listen button source" onchange="onSongLinkProviderChange()">
       <option value="amazon">Amazon Music</option>
       <option value="deezer">Deezer</option>
     </select>
+  </div>
+  <div class="lastfm-fields" id="amazonRegionFields">
+    <div class="row">
+      <div class="row-labels">
+        <span class="row-label">Amazon Music region</span>
+        <div class="row-desc">Controls the region used for Amazon listen buttons</div>
+      </div>
+      <select id="amazonMusicLinkRegion" aria-label="Amazon Music link region">
+        <option value="com">.com</option>
+        <option value="de">.de</option>
+        <option value="co.uk">.co.uk</option>
+        <option value="fr">.fr</option>
+        <option value="it">.it</option>
+        <option value="es">.es</option>
+        <option value="co.jp">.co.jp</option>
+        <option value="ca">.ca</option>
+        <option value="com.au">.com.au</option>
+        <option value="com.br">.com.br</option>
+        <option value="com.mx">.com.mx</option>
+      </select>
+    </div>
   </div>
 </div>
 
@@ -821,7 +843,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       &bull; Only Amazon Music notification text is used for fallback metadata
     </div>
     <div style="margin-top:8px;">
-      <a href="#" onclick="pywebview.api.open_url('https://eripum9.github.io/Amazon-Music-Discord-RPC/notification-setup'); return false;"
+      <a href="#" onclick="pywebview.api.open_url('https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/notification-setup/'); return false;"
          style="color:#5865f2; font-size:12px; text-decoration:none; font-weight:600;">
         Learn how to enable it &rarr;
       </a>
@@ -953,6 +975,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       custom_albums: collectCustomAlbums(false),
       song_link_enabled: document.getElementById('songLinkEnabled').checked,
       song_link_provider: document.getElementById('songLinkProvider').value,
+      amazon_music_link_region: document.getElementById('amazonMusicLinkRegion').value,
       notification_enrichment_enabled: document.getElementById('notifEnrichEnabled').checked,
       amazon_devtools_enabled: document.getElementById('amazonDevtoolsEnabled').checked,
       amazon_devtools_auto_launch: document.getElementById('amazonDevtoolsAutoLaunch').checked,
@@ -1133,6 +1156,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     customAlbums.push({ album: '', aliases: [], art_url: '' });
     renderCustomAlbums(customAlbums);
     queueAutoSave(700);
+  }
+
+  function onSongLinkProviderChange() {
+    const fields = document.getElementById('amazonRegionFields');
+    const provider = document.getElementById('songLinkProvider').value;
+    if (provider === 'amazon') {
+      fields.classList.add('visible');
+    } else {
+      fields.classList.remove('visible');
+    }
   }
 
   function removeCustomAlbum(index) {
@@ -1363,6 +1396,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     renderCustomAlbums(cfg.custom_albums || []);
     document.getElementById('songLinkEnabled').checked = !!cfg.song_link_enabled;
     document.getElementById('songLinkProvider').value = cfg.song_link_provider === 'deezer' ? 'deezer' : 'amazon';
+    const amazonRegions = ['com', 'de', 'co.uk', 'fr', 'it', 'es', 'co.jp', 'ca', 'com.au', 'com.br', 'com.mx'];
+    document.getElementById('amazonMusicLinkRegion').value = amazonRegions.includes(cfg.amazon_music_link_region) ? cfg.amazon_music_link_region : 'com';
+    onSongLinkProviderChange();
     document.getElementById('notifEnrichEnabled').checked = !!cfg.notification_enrichment_enabled;
     document.getElementById('amazonDevtoolsEnabled').checked = !!cfg.amazon_devtools_enabled;
     document.getElementById('amazonDevtoolsAutoLaunch').checked = !!cfg.amazon_devtools_auto_launch;
@@ -1711,6 +1747,7 @@ class _Api:
             "custom_albums": _clean_custom_albums(data.get("custom_albums", [])),
             "song_link_enabled": bool(data.get("song_link_enabled")),
             "song_link_provider": data.get("song_link_provider") if data.get("song_link_provider") in ("amazon", "deezer") else "amazon",
+            "amazon_music_link_region": normalize_amazon_music_link_region(data.get("amazon_music_link_region")),
             "notification_enrichment_enabled": bool(data.get("notification_enrichment_enabled")),
             "amazon_devtools_enabled": bool(data.get("amazon_devtools_enabled")),
             "amazon_devtools_auto_launch": bool(data.get("amazon_devtools_auto_launch", False)),

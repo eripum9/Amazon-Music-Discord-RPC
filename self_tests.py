@@ -2,7 +2,7 @@
 import json
 import os
 import tempfile
-from config import DEFAULTS, CONFIG_DIR, CONFIG_PATH, load_config, redact_data, redact_text
+from config import DEFAULTS, CONFIG_DIR, CONFIG_PATH, load_config, normalize_amazon_music_link_region, redact_data, redact_text
 
 
 def _result(name, ok, detail):
@@ -29,8 +29,12 @@ def run_self_tests(log_dir, diagnostics_path):
             and DEFAULTS.get("amazon_devtools_auto_launch") is False
             and DEFAULTS.get("enhanced_metadata_prompt_seen") is False
             and DEFAULTS.get("notification_enrichment_enabled") is False
+            and DEFAULTS.get("amazon_music_link_region") == "com"
+            and normalize_amazon_music_link_region("de") == "de"
+            and normalize_amazon_music_link_region(".com") == "com"
+            and normalize_amazon_music_link_region("bad") == "com"
         )
-        results.append(_result("Enhanced metadata defaults", ok, "Enhanced metadata starts opt-in for new configs"))
+        results.append(_result("Enhanced metadata defaults", ok, "Enhanced metadata starts opt-in and Amazon links default to .com"))
     except Exception as e:
         results.append(_result("Enhanced metadata defaults", False, str(e)))
 
@@ -214,9 +218,17 @@ def run_self_tests(log_dir, diagnostics_path):
             "album_asin": "B00C3O5AD8",
             "music_host": "music.amazon.de",
         })
+        devtools_de = _normalise_track_payload({
+            "status": "found",
+            "title": "Treehome95",
+            "artist": "Tyler, The Creator",
+            "track_asin": "B00C3O5D3A",
+            "album_asin": "B00C3O5AD8",
+            "music_host": "music.amazon.de",
+        }, "de")
         merged, changed = apply_devtools_to_track({"title": "Treehome95", "artist": "", "album": "", "status": "playing"}, devtools)
-        ok = changed and merged["artist"].startswith("Tyler") and merged["album"] == "Wolf" and merged["duration"] == 179 and merged["position"] == 138 and merged["status"] == "paused" and merged["_amazon_track_link"] == "https://music.amazon.de/albums/B00C3O5AD8?trackAsin=B00C3O5D3A"
-        results.append(_result("Amazon DevTools metadata", ok, "DevTools metadata can repair artist, album, art, position, duration, status, and link"))
+        ok = changed and merged["artist"].startswith("Tyler") and merged["album"] == "Wolf" and merged["duration"] == 179 and merged["position"] == 138 and merged["status"] == "paused" and merged["_amazon_track_link"] == "https://music.amazon.com/albums/B00C3O5AD8?trackAsin=B00C3O5D3A" and devtools_de.get("track_link") == "https://music.amazon.de/albums/B00C3O5AD8?trackAsin=B00C3O5D3A"
+        results.append(_result("Amazon DevTools metadata", ok, "DevTools metadata can repair artist, album, art, position, duration, status, and configurable region link"))
     except Exception as e:
         results.append(_result("Amazon DevTools metadata", False, str(e)))
 
@@ -319,10 +331,20 @@ def run_self_tests(log_dir, diagnostics_path):
             "url": "https://music.amazon.de/morpho/webapp/index.html",
             "title": "Amazon Music",
         }
+        regional_target = {
+            "type": "page",
+            "url": "https://www.amazon.de/morpho/webapp/index.html#/home",
+            "title": "Amazon Music Desktop",
+        }
         bad_target = {
             "type": "page",
             "url": "https://example.com/morpho/webapp/index.html",
             "title": "Amazon Music",
+        }
+        bad_amazon_target = {
+            "type": "page",
+            "url": "https://www.amazon.de/",
+            "title": "Amazon Music Desktop",
         }
         ok = (
             DEVTOOLS_PORT_MIN <= port <= DEVTOOLS_PORT_MAX
@@ -330,7 +352,9 @@ def run_self_tests(log_dir, diagnostics_path):
             and int(env[DEVTOOLS_PORT_ENV]) == port
             and f"--remote-debugging-port={COMMON_DEVTOOLS_PORT}" not in source
             and _is_amazon_music_target(good_target)
+            and _is_amazon_music_target(regional_target)
             and not _is_amazon_music_target(bad_target)
+            and not _is_amazon_music_target(bad_amazon_target)
         )
         reset_devtools_port()
         results.append(_result("Amazon DevTools port hardening", ok, "Runtime port is random and target validation rejects non-Amazon pages"))
@@ -449,6 +473,10 @@ def run_self_tests(log_dir, diagnostics_path):
             and "custom_albums" in script
             and "song_link_provider" in script
             and "songLinkProvider" in script
+            and "amazon_music_link_region" in script
+            and "amazonMusicLinkRegion" in script
+            and "Amazon Music region" in html
+            and "onSongLinkProviderChange" in script
             and "Show listen button" in html
             and "Auto-restart Amazon Music" in html
             and "Reads Windows notifications locally" in html

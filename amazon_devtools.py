@@ -12,7 +12,8 @@ import subprocess
 import sys
 import time
 import urllib.request
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse, urlunparse
+from config import normalize_amazon_music_link_region
 
 
 APP_USER_MODEL_ID = "AmazonMobileLLC.AmazonMusic_kc6t79cpj4tp0!AmazonMobileLLC.AmazonMusic"
@@ -29,6 +30,7 @@ _EXPLICIT_RE = re.compile(r"\s*\[Explicit\]\s*$", re.IGNORECASE)
 _TIME_RE = re.compile(r"^-?\d{1,2}:\d{2}(?::\d{2})?$")
 _ASIN_RE = re.compile(r"^[A-Z0-9]{10}$", re.IGNORECASE)
 _MUSIC_HOST_RE = re.compile(r"^music\.amazon\.[a-z.]+$", re.IGNORECASE)
+_AMAZON_WEBAPP_HOST_RE = re.compile(r"^(?:music|www)\.amazon\.[a-z.]+$", re.IGNORECASE)
 _DEVTOOLS_PORT = None
 
 
@@ -114,14 +116,26 @@ def _music_host(value):
     return host if _MUSIC_HOST_RE.match(host) else "music.amazon.com"
 
 
-def _amazon_track_link(payload, title, artist):
+def _amazon_music_link_host(region=None):
+    return f"music.amazon.{normalize_amazon_music_link_region(region)}"
+
+
+def _normalise_amazon_link(url, host):
+    parsed = urlparse(url)
+    source_host = (parsed.hostname or "").lower()
+    if parsed.scheme == "https" and _AMAZON_WEBAPP_HOST_RE.match(source_host):
+        return urlunparse(parsed._replace(netloc=host))
+    return ""
+
+
+def _amazon_track_link(payload, title, artist, link_region=None):
+    host = _amazon_music_link_host(link_region)
     direct_link = _clean(payload.get("track_link"))
     if direct_link:
-        parsed = urlparse(direct_link)
-        if parsed.scheme == "https" and parsed.hostname and "amazon." in parsed.hostname:
-            return direct_link
+        normalised = _normalise_amazon_link(direct_link, host)
+        if normalised:
+            return normalised
 
-    host = _music_host(payload.get("music_host"))
     track_asin = _clean_asin(payload.get("track_asin"))
     album_asin = _clean_asin(payload.get("album_asin"))
     if track_asin and album_asin:
@@ -151,7 +165,7 @@ def _parse_time(value):
     return -seconds if negative else seconds
 
 
-def _normalise_track_payload(payload):
+def _normalise_track_payload(payload, link_region=None):
     if not isinstance(payload, dict):
         return {"status": "no_match", "detail": "No Amazon Music metadata payload"}
     if payload.get("status") != "found":
@@ -198,7 +212,7 @@ def _normalise_track_payload(payload):
         "artist": artist,
         "album": album,
         "art_url": _clean(payload.get("art_url")),
-        "track_link": _amazon_track_link(payload, title, artist),
+        "track_link": _amazon_track_link(payload, title, artist, link_region),
         "position": position,
         "duration": duration,
         "playback_status": playback_status,
@@ -221,9 +235,11 @@ def _is_amazon_music_target(target):
     parsed = urlparse(_clean(target.get("url")))
     host = (parsed.hostname or "").lower()
     path = parsed.path or ""
-    if parsed.scheme != "https" or not _MUSIC_HOST_RE.match(host):
+    if parsed.scheme != "https" or not _AMAZON_WEBAPP_HOST_RE.match(host):
         return False
-    return "morpho/webapp" in path or title == "amazon music"
+    if "morpho/webapp" in path and title.startswith("amazon music"):
+        return True
+    return host.startswith("music.amazon.") and title == "amazon music"
 
 
 def _page_target(port=None):
@@ -443,7 +459,7 @@ _TRANSPORT_EXPRESSION = r"""
 """
 
 
-def get_devtools_track_sync():
+def get_devtools_track_sync(link_region=None):
     port = get_devtools_port(True)
     unexpected_warning = ""
     if port != COMMON_DEVTOOLS_PORT and _is_local_port_open(COMMON_DEVTOOLS_PORT):
@@ -459,7 +475,7 @@ def get_devtools_track_sync():
         if unexpected_warning:
             payload["warning"] = unexpected_warning
         return payload
-    cache_key = target.get("id")
+    cache_key = f"{target.get('id')}|{normalize_amazon_music_link_region(link_region)}"
     now = time.time()
     if _CACHE["key"] == cache_key and now < _CACHE["expires"]:
         return _CACHE["value"]
@@ -473,7 +489,7 @@ def get_devtools_track_sync():
             "timeout": 3000,
         })
         result = response.get("result", {}).get("result", {}).get("value")
-        track = _normalise_track_payload(result)
+        track = _normalise_track_payload(result, link_region)
         track["port"] = port
         if unexpected_warning:
             track["warning"] = unexpected_warning

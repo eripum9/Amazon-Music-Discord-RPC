@@ -16,7 +16,20 @@ if not os.environ.get("APPDATA") or getattr(sys, "frozen", False) is False:
     CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
     CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
-APP_VERSION = "3.1.1"
+APP_VERSION = "3.1.2"
+AMAZON_MUSIC_LINK_REGIONS = (
+    "com",
+    "de",
+    "co.uk",
+    "fr",
+    "it",
+    "es",
+    "co.jp",
+    "ca",
+    "com.au",
+    "com.br",
+    "com.mx",
+)
 
 DEFAULTS = {
     "discord_client_id": DEFAULT_CLIENT_ID,
@@ -27,6 +40,7 @@ DEFAULTS = {
     "custom_albums": [],
     "song_link_enabled": True,
     "song_link_provider": "amazon",
+    "amazon_music_link_region": "com",
     "show_paused": True,
     "lastfm_enabled": False,
     "lastfm_api_key": "2c2d97048ae5546831b1b1a025a8f9ec",
@@ -49,6 +63,11 @@ DEFAULTS = {
     "diagnostics_window_width": 940,
     "diagnostics_window_height": 700,
 }
+
+
+def normalize_amazon_music_link_region(value):
+    text = str(value or "").strip().lower().lstrip(".")
+    return text if text in AMAZON_MUSIC_LINK_REGIONS else "com"
 
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 REDACTION_TEXT = "[redacted]"

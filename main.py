@@ -68,6 +68,7 @@ RPC_CONFIG_KEYS = {
     "custom_albums",
     "song_link_enabled",
     "song_link_provider",
+    "amazon_music_link_region",
     "show_paused",
     "lastfm_enabled",
     "lastfm_api_key",
@@ -567,6 +568,7 @@ def rpc_loop():
     song_link_provider = config.get("song_link_provider", "amazon")
     if song_link_provider not in {"amazon", "deezer"}:
         song_link_provider = "amazon"
+    amazon_music_link_region = config.get("amazon_music_link_region", "com")
     show_paused = config.get("show_paused", True)
     notification_enrichment_enabled = config.get("notification_enrichment_enabled", False)
     amazon_devtools_enabled = config.get("amazon_devtools_enabled", False)
@@ -684,7 +686,7 @@ def rpc_loop():
             devtools_found = False
             if amazon_devtools_enabled:
                 try:
-                    devtools = get_devtools_track_sync()
+                    devtools = get_devtools_track_sync(amazon_music_link_region)
                     _current_amazon_devtools = {"enabled": True, **devtools}
                     if devtools.get("status") == "found":
                         devtools_unavailable_since = None
