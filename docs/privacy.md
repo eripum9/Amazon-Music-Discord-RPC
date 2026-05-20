@@ -37,4 +37,4 @@ Private session clears Discord presence and can stop scrobbling while it is enab
 
 ## Uninstall
 
-The installer removes installed files, startup entries, logs, config data, and Amazon Music metadata launcher shortcuts during uninstall. If you ran from source, delete the project folder and `%APPDATA%\AmazonMusicRPC` manually.
+The installer removes installed files, startup entries, logs, config data, and Amazon Music metadata launcher shortcuts during uninstall. If you ran from source, delete the project folder, the `Windows/config.json` source config if present, and `%APPDATA%\AmazonMusicRPC` manually.

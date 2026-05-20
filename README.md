@@ -61,7 +61,7 @@ Notification enrichment is off by default. If enabled, Windows may ask for notif
 
 Private session mode clears Discord presence and can stop scrobbling while it is enabled. Keyword privacy rules can also block specific tracks from being shared.
 
-Settings are stored in `%APPDATA%\AmazonMusicRPC\config.json` for installed builds, or the project directory when running from source. Last.fm and ListenBrainz tokens are stored locally in that config today. Diagnostics and log views redact known token values, and Settings includes a clear-token action, but you should still treat config files as private.
+Settings are stored in `%APPDATA%\AmazonMusicRPC\config.json` for installed builds, or the `Windows/` directory when running from source. Last.fm and ListenBrainz tokens are stored locally in that config today. Diagnostics and log views redact known token values, and Settings includes a clear-token action, but you should still treat config files as private.
 
 ### Data Flow
 
@@ -88,7 +88,7 @@ To run without enhanced metadata:
 
 ### Uninstall
 
-The installer removes the app startup entry, installed files, app config directory, logs, and Amazon Music metadata launcher shortcuts during uninstall. If you ran from source, delete the project folder and `%APPDATA%\AmazonMusicRPC` manually.
+The installer removes the app startup entry, installed files, app config directory, logs, and Amazon Music metadata launcher shortcuts during uninstall. If you ran from source, delete the project folder, the `Windows/config.json` source config if present, and `%APPDATA%\AmazonMusicRPC` manually.
 
 For vulnerability reporting and supported version details, see [SECURITY.md](SECURITY.md).
 
@@ -120,8 +120,8 @@ Compare the output with the SHA256 value shown on the GitHub release page. If a 
 ```bash
 git clone https://github.com/eripum9/Amazon-Music-Discord-RPC.git
 cd Amazon-Music-Discord-RPC
-pip install -r requirements.txt
-python main.py
+pip install -r Windows/requirements.txt
+python Windows/main.py
 ```
 
 ## Requirements
@@ -134,34 +134,42 @@ No Python installation needed if using the Installer.
 
 ## Building
 
+Windows app source, dependencies, icons, and packaging files live in `Windows/` so the root can stay shared for docs and future platform work.
+
 ### Build the executable
 
 ```bash
 pip install pyinstaller
-pyinstaller AmazonMusicRPC.spec --noconfirm
+pyinstaller Windows/AmazonMusicRPC.spec --noconfirm --workpath Windows/build --distpath Windows/dist
 ```
 
-The output goes to `dist/AmazonMusicRPC.exe`.
+The output goes to `Windows/dist/AmazonMusicRPC.exe`.
 
 ### Build the installer
 
 Requires [Inno Setup 6](https://jrsoftware.org/isdl.php).
 
 ```bash
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" Windows\installer.iss
 ```
 
 Or if installed via winget:
 
 ```bash
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer.iss
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" Windows\installer.iss
 ```
 
-Output: `installer_output/AmazonMusicRPC_Setup.exe`
+Output: `Windows/installer_output/AmazonMusicRPC_Setup.exe`
+
+You can also run the Windows build script:
+
+```bat
+Windows\build.bat
+```
 
 ## Configuration
 
-Settings are stored in `%APPDATA%\AmazonMusicRPC\config.json` (or the project directory when running from source).
+Settings are stored in `%APPDATA%\AmazonMusicRPC\config.json` (or the `Windows/` directory when running from source).
 
 Right-click the tray icon and select **Settings** to open the configuration window.
 

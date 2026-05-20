@@ -1,6 +1,9 @@
 build/
 dist/
 installer_output/
+Windows/build/
+Windows/dist/
+Windows/installer_output/
 
 __pycache__/
 *.pyc
@@ -15,7 +18,5 @@ diagnostics.json.tmp
 
 *.manifest
 *.log
-
-build.bat
 
 PLAN.md
