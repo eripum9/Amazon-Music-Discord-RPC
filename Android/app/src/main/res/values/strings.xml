@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Amazon Music RPC</string>
+    <string name="rpc_channel_name">Amazon Music RPC</string>
+    <string name="rpc_notification_title">Amazon Music RPC is running</string>
+</resources>

@@ -1,0 +1,178 @@
+package com.pumpgunstudios.amazonmusicrpc.fakeamazon
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Intent
+import android.media.MediaMetadata
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
+import android.os.Build
+import android.os.IBinder
+import androidx.core.app.NotificationCompat
+import kotlin.math.min
+
+class FakeAmazonMusicService : Service() {
+    private lateinit var mediaSession: MediaSession
+    private var index = 0
+    private var positionMs = 0L
+    private var playing = false
+    private var updatedAtMs = 0L
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+        mediaSession = MediaSession(this, "Fake Amazon Music").apply {
+            setCallback(object : MediaSession.Callback() {
+                override fun onPlay() = play()
+                override fun onPause() = pause()
+                override fun onSkipToNext() = next()
+                override fun onSkipToPrevious() = previous()
+                override fun onStop() = stopFake()
+            })
+            isActive = true
+        }
+        updatedAtMs = System.currentTimeMillis()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_PLAY -> play()
+            ACTION_PAUSE -> pause()
+            ACTION_NEXT -> next()
+            ACTION_PREVIOUS -> previous()
+            ACTION_STOP -> stopFake()
+            else -> stopSelf(startId)
+        }
+        return START_NOT_STICKY
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        mediaSession.release()
+        super.onDestroy()
+    }
+
+    private fun play() {
+        syncPosition()
+        playing = true
+        updatedAtMs = System.currentTimeMillis()
+        publish()
+    }
+
+    private fun pause() {
+        syncPosition()
+        playing = false
+        updatedAtMs = System.currentTimeMillis()
+        publish()
+    }
+
+    private fun next() {
+        index = (index + 1) % fakeTracks.size
+        positionMs = 0L
+        updatedAtMs = System.currentTimeMillis()
+        playing = true
+        publish()
+    }
+
+    private fun previous() {
+        index = if (index == 0) fakeTracks.lastIndex else index - 1
+        positionMs = 0L
+        updatedAtMs = System.currentTimeMillis()
+        playing = true
+        publish()
+    }
+
+    private fun stopFake() {
+        syncPosition()
+        playing = false
+        mediaSession.setPlaybackState(
+            PlaybackState.Builder()
+                .setState(PlaybackState.STATE_STOPPED, positionMs, 0f, System.currentTimeMillis())
+                .setActions(actions())
+                .build()
+        )
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    private fun syncPosition() {
+        if (playing) {
+            val elapsed = System.currentTimeMillis() - updatedAtMs
+            positionMs = min(fakeTracks[index].durationMs, positionMs + elapsed)
+        }
+    }
+
+    private fun publish() {
+        syncPosition()
+        val track = fakeTracks[index]
+        mediaSession.setMetadata(
+            MediaMetadata.Builder()
+                .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
+                .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
+                .putString(MediaMetadata.METADATA_KEY_ALBUM, track.album)
+                .putLong(MediaMetadata.METADATA_KEY_DURATION, track.durationMs)
+                .build()
+        )
+        mediaSession.setPlaybackState(
+            PlaybackState.Builder()
+                .setState(if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED, positionMs, if (playing) 1f else 0f, System.currentTimeMillis())
+                .setActions(actions())
+                .build()
+        )
+        startForeground(NOTIFICATION_ID, notification(track))
+    }
+
+    private fun actions(): Long {
+        return PlaybackState.ACTION_PLAY or
+            PlaybackState.ACTION_PAUSE or
+            PlaybackState.ACTION_PLAY_PAUSE or
+            PlaybackState.ACTION_SKIP_TO_NEXT or
+            PlaybackState.ACTION_SKIP_TO_PREVIOUS or
+            PlaybackState.ACTION_STOP
+    }
+
+    private fun notification(track: FakeTrack): Notification {
+        val playPauseAction = if (playing) {
+            NotificationCompat.Action(R.drawable.ic_fake_amazon, "Pause", pending(ACTION_PAUSE))
+        } else {
+            NotificationCompat.Action(R.drawable.ic_fake_amazon, "Play", pending(ACTION_PLAY))
+        }
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_fake_amazon)
+            .setContentTitle(track.title)
+            .setContentText("${track.artist} • ${track.album}")
+            .setOngoing(playing)
+            .setOnlyAlertOnce(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .addAction(NotificationCompat.Action(R.drawable.ic_fake_amazon, "Previous", pending(ACTION_PREVIOUS)))
+            .addAction(playPauseAction)
+            .addAction(NotificationCompat.Action(R.drawable.ic_fake_amazon, "Next", pending(ACTION_NEXT)))
+            .build()
+    }
+
+    private fun pending(action: String): PendingIntent {
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        return PendingIntent.getService(this, action.hashCode(), Intent(this, FakeAmazonMusicService::class.java).setAction(action), flags)
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(CHANNEL_ID, getString(R.string.fake_channel_name), NotificationManager.IMPORTANCE_LOW)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+    }
+
+    companion object {
+        private const val CHANNEL_ID = "fake_amazon_music"
+        private const val NOTIFICATION_ID = 9301
+        const val ACTION_PLAY = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.PLAY"
+        const val ACTION_PAUSE = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.PAUSE"
+        const val ACTION_NEXT = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.NEXT"
+        const val ACTION_PREVIOUS = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.PREVIOUS"
+        const val ACTION_STOP = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.STOP"
+    }
+}

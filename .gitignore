@@ -4,6 +4,11 @@ installer_output/
 Windows/build/
 Windows/dist/
 Windows/installer_output/
+Android/.gradle/
+Android/build/
+Android/app/build/
+Android/fakeamazon/build/
+Android/local.properties
 
 __pycache__/
 *.pyc
