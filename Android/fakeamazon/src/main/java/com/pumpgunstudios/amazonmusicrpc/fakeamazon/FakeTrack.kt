@@ -8,8 +8,7 @@ data class FakeTrack(
 )
 
 val fakeTracks = listOf(
-    FakeTrack("Test Signal", "Amazon Music RPC", "Android Beta Tests", 185000L),
-    FakeTrack("Pause State Check", "Local Companion", "Media Session Lab", 212000L),
-    FakeTrack("One Letter Album", "Regression Tester", "A", 176000L),
-    FakeTrack("Long Timer Drift", "Playback Probe", "Accuracy Suite", 247000L),
+    FakeTrack("WOLF", "Tyler, The Creator", "Wolf", 110000L),
+    FakeTrack("Rusty", "Tyler, The Creator", "Wolf", 309000L),
+    FakeTrack("Noid", "Tyler, The Creator", "Chromakopia+", 284000L),
 )

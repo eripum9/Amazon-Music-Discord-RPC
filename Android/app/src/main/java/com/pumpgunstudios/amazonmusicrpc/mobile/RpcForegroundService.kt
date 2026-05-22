@@ -23,11 +23,13 @@ class RpcForegroundService : Service() {
     private var gateway: DiscordGatewayClient? = null
     private lateinit var settingsStore: SettingsStore
     private lateinit var mediaSessionReader: MediaSessionReader
+    private lateinit var metadataLookup: MetadataLookup
 
     override fun onCreate() {
         super.onCreate()
         settingsStore = SettingsStore(this)
         mediaSessionReader = MediaSessionReader(this)
+        metadataLookup = MetadataLookup()
         createNotificationChannel()
     }
 
@@ -49,6 +51,7 @@ class RpcForegroundService : Service() {
 
     private fun startRpc() {
         startForeground(NOTIFICATION_ID, notification("Waiting for Amazon Music"))
+        settingsStore.setServiceRunning(true)
         loopJob?.cancel()
         val settings = settingsStore.load()
         gateway?.close()
@@ -76,7 +79,8 @@ class RpcForegroundService : Service() {
                 } catch (e: Exception) {
                     settingsStore.setStatus("Media read error: ${e.message ?: "unknown"}")
                     null
-                }
+                }?.let { metadataLookup.enrich(it) }
+                settingsStore.setTrackDiagnostics(track)
                 val key = track?.stableKey ?: "none"
                 val now = System.currentTimeMillis()
                 if (key != lastKey || now - lastSentAt > 15000) {
@@ -85,7 +89,7 @@ class RpcForegroundService : Service() {
                         lastKey = key
                         lastSentAt = now
                         val prefix = if (currentSettings.token.isBlank()) "Metadata: " else ""
-                        val status = if (track == null) "${prefix}No active media" else "$prefix${track.title} • ${track.artist ?: "Unknown artist"}"
+                        val status = if (track == null) "${prefix}No active media" else "$prefix${track.title} • ${track.artist ?: "Unknown artist"} • ${track.album ?: "Unknown album"}"
                         settingsStore.setStatus(status)
                         updateNotification(status)
                     } catch (e: Exception) {
@@ -100,8 +104,11 @@ class RpcForegroundService : Service() {
     private fun stopRpc() {
         loopJob?.cancel()
         loopJob = null
+        gateway?.clearPresenceBlocking()
         gateway?.close()
         gateway = null
+        settingsStore.setServiceRunning(false)
+        settingsStore.setTrackDiagnostics(null)
         settingsStore.setStatus("Stopped")
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()

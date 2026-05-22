@@ -6,6 +6,10 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
@@ -109,12 +113,14 @@ class FakeAmazonMusicService : Service() {
     private fun publish() {
         syncPosition()
         val track = fakeTracks[index]
+        val artwork = artworkBitmap(track)
         mediaSession.setMetadata(
             MediaMetadata.Builder()
                 .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
                 .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
                 .putString(MediaMetadata.METADATA_KEY_ALBUM, track.album)
-                .putLong(MediaMetadata.METADATA_KEY_DURATION, track.durationMs)
+                .putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork)
+                .putBitmap(MediaMetadata.METADATA_KEY_ART, artwork)
                 .build()
         )
         mediaSession.setPlaybackState(
@@ -123,7 +129,7 @@ class FakeAmazonMusicService : Service() {
                 .setActions(actions())
                 .build()
         )
-        startForeground(NOTIFICATION_ID, notification(track))
+        startForeground(NOTIFICATION_ID, notification(track, artwork))
     }
 
     private fun actions(): Long {
@@ -135,7 +141,7 @@ class FakeAmazonMusicService : Service() {
             PlaybackState.ACTION_STOP
     }
 
-    private fun notification(track: FakeTrack): Notification {
+    private fun notification(track: FakeTrack, artwork: Bitmap): Notification {
         val playPauseAction = if (playing) {
             NotificationCompat.Action(R.drawable.ic_fake_amazon, "Pause", pending(ACTION_PAUSE))
         } else {
@@ -145,6 +151,8 @@ class FakeAmazonMusicService : Service() {
             .setSmallIcon(R.drawable.ic_fake_amazon)
             .setContentTitle(track.title)
             .setContentText("${track.artist} • ${track.album}")
+            .setLargeIcon(artwork)
+            .setProgress(track.durationMs.toInt(), positionMs.toInt(), false)
             .setOngoing(playing)
             .setOnlyAlertOnce(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -152,6 +160,30 @@ class FakeAmazonMusicService : Service() {
             .addAction(playPauseAction)
             .addAction(NotificationCompat.Action(R.drawable.ic_fake_amazon, "Next", pending(ACTION_NEXT)))
             .build()
+    }
+
+    private fun artworkBitmap(track: FakeTrack): Bitmap {
+        val bitmap = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val background = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = when (index % 4) {
+                0 -> Color.rgb(40, 214, 210)
+                1 -> Color.rgb(88, 101, 242)
+                2 -> Color.rgb(255, 209, 102)
+                else -> Color.rgb(67, 181, 129)
+            }
+        }
+        canvas.drawRect(0f, 0f, 512f, 512f, background)
+        val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(16, 20, 24)
+            textAlign = Paint.Align.CENTER
+            textSize = 72f
+            isFakeBoldText = true
+        }
+        canvas.drawText(track.album.take(12), 256f, 245f, text)
+        text.textSize = 42f
+        canvas.drawText("RPC TEST", 256f, 315f, text)
+        return bitmap
     }
 
     private fun pending(action: String): PendingIntent {

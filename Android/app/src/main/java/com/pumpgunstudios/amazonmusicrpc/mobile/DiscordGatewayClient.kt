@@ -6,6 +6,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -42,6 +44,14 @@ class DiscordGatewayClient(
         socket?.send(presencePayload(track, settings).toString())
     }
 
+    fun clearPresenceBlocking() {
+        runBlocking(Dispatchers.IO) {
+            withTimeoutOrNull(2500) {
+                clearPresence()
+            }
+        }
+    }
+
     fun close() {
         heartbeatJob?.cancel()
         heartbeatJob = null
@@ -49,6 +59,17 @@ class DiscordGatewayClient(
         socket = null
         if (!ready.isCompleted) ready.cancel()
         onStatus("Stopped")
+    }
+
+    private suspend fun clearPresence() {
+        val currentSocket = socket ?: return
+        if (!ready.isCompleted) {
+            withTimeoutOrNull(1500) {
+                ready.await()
+            } ?: return
+        }
+        currentSocket.send(presencePayload(null, AppSettings()).toString())
+        delay(250)
     }
 
     private fun listener(): WebSocketListener {
@@ -129,41 +150,60 @@ class DiscordGatewayClient(
             .put("afk", false)
             .put("since", JSONObject.NULL)
             .put("status", "online")
-        if (track == null) {
+        val activity = if (track == null) null else activity(track, settings)
+        if (activity == null) {
             data.put("activities", JSONArray())
         } else {
-            data.put("activities", JSONArray().put(activity(track, settings)))
+            data.put("activities", JSONArray().put(activity))
         }
         return JSONObject().put("op", 3).put("d", data)
     }
 
-    private fun activity(track: TrackInfo, settings: AppSettings): JSONObject {
+    private fun activity(track: TrackInfo, settings: AppSettings): JSONObject? {
         val artist = track.artist?.takeIf { it.isNotBlank() }
         val album = track.album?.takeIf { it.isNotBlank() }
         val playing = track.playbackState == android.media.session.PlaybackState.STATE_PLAYING
-        val state = when {
-            !playing && settings.showPaused && artist != null -> "Paused • by $artist"
-            !playing && settings.showPaused -> "Paused"
-            artist != null -> "by $artist"
-            album != null -> album
-            else -> null
-        }
+        val paused = track.playbackState == android.media.session.PlaybackState.STATE_PAUSED
+        if (!playing && paused && !settings.showPaused) return null
+        val state = if (artist != null) "by $artist" else "Unknown Artist"
         val activity = JSONObject()
             .put("name", "Amazon Music")
             .put("type", 2)
-            .put("details", track.title.take(128))
+            .put("details", track.title.take(128).ifBlank { "Unknown Title" })
+            .put("state", state.take(128))
             .put("application_id", settings.applicationId)
-        if (state != null) {
-            activity.put("state", state.take(128))
+            .put("assets", JSONObject().put("large_text", discordAssetText(album, track.title)))
+            .put("instance", true)
+        val artworkUri = track.artworkUri?.takeIf { track.hasDiscordArtwork }
+        if (artworkUri != null) {
+            activity.getJSONObject("assets").put("large_image", artworkUri)
         }
-        if (playing && track.durationMs != null && track.positionMs != null) {
-            val start = track.updatedAtMs - track.positionMs
-            val end = start + track.durationMs
+        if (paused && settings.showPaused) {
+            activity.getJSONObject("assets")
+                .put("small_image", PAUSE_ICON_URL)
+                .put("small_text", "Paused")
+        }
+        if ((playing || (paused && settings.showPaused)) && track.hasTimeBar) {
+            val position = track.positionMs ?: 0L
+            val duration = track.durationMs ?: 0L
+            val start = track.updatedAtMs - position
+            val end = start + duration
             activity.put("timestamps", JSONObject().put("start", start).put("end", end))
         }
-        if (album != null) {
-            activity.put("assets", JSONObject().put("large_text", album.take(128)))
-        }
         return activity
+    }
+
+    private fun discordAssetText(albumName: String?, title: String?): String {
+        val album = albumName.orEmpty().trim()
+        if (album.length >= 2) return album.take(128)
+        if (album.isNotEmpty()) return "Album: $album".take(128)
+        val track = title.orEmpty().trim()
+        if (track.length >= 2) return track.take(128)
+        if (track.isNotEmpty()) return "Track: $track".take(128)
+        return "Unknown Album"
+    }
+
+    companion object {
+        private const val PAUSE_ICON_URL = "https://raw.githubusercontent.com/eripum9/Amazon-Music-Discord-RPC/master/Images/pause_icon.png"
     }
 }
