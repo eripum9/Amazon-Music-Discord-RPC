@@ -4,6 +4,7 @@ installer_output/
 Windows/build/
 Windows/dist/
 Windows/installer_output/
+TestBuild/
 
 __pycache__/
 *.pyc
