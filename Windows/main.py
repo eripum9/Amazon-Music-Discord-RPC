@@ -731,8 +731,10 @@ def rpc_loop():
                                         "status": "restarting",
                                         "detail": "Restarted Amazon Music for metadata",
                                         "source": "amazon_devtools",
+                                        "method": restart_result.get("method", ""),
                                     }
-                                    print("[Amazon] Restarted Amazon Music for metadata.")
+                                    method = f" ({restart_result.get('method')})" if restart_result.get("method") else ""
+                                    print(f"[Amazon] Restarted Amazon Music for metadata{method}.")
                                 else:
                                     _current_amazon_devtools = {
                                         "enabled": True,
@@ -1283,7 +1285,8 @@ def launch_amazon_devtools_from_tray(icon=None, item=None):
     def _worker():
         result = launch_amazon_music_devtools()
         if result.get("ok"):
-            print("[Amazon] Launched Amazon Music for metadata.")
+            method = f" ({result.get('method')})" if result.get("method") else ""
+            print(f"[Amazon] Launched Amazon Music for metadata{method}.")
         else:
             print(f"[Amazon] Could not launch metadata mode: {result.get('error')}")
 

@@ -13,7 +13,7 @@ import sys
 import time
 import urllib.request
 from urllib.parse import quote, urlparse, urlunparse
-from config import normalize_amazon_music_link_region
+from config import load_config, normalize_amazon_music_link_region
 
 
 APP_USER_MODEL_ID = "AmazonMobileLLC.AmazonMusic_kc6t79cpj4tp0!AmazonMobileLLC.AmazonMusic"
@@ -22,6 +22,7 @@ DEVTOOLS_PORT_ENV = "AMRPC_DEVTOOLS_PORT"
 DEVTOOLS_PORT_MIN = 49152
 DEVTOOLS_PORT_MAX = 60999
 AMAZON_PACKAGE_NAME = "AmazonMobileLLC.AmazonMusic"
+LAUNCH_FAILURE_HELP = "Could not launch Amazon Music with enhanced metadata. Open Diagnostics and check the Amazon Music launcher entry, or paste the launcher ID from Get-StartApps."
 SHORTCUT_NAME = "Amazon Music Metadata.lnk"
 OLD_SHORTCUT_NAMES = ("Amazon Music Beta Metadata.lnk",)
 SHORTCUT_DIR_NAME = "Amazon Music RPC"
@@ -32,6 +33,7 @@ _ASIN_RE = re.compile(r"^[A-Z0-9]{10}$", re.IGNORECASE)
 _MUSIC_HOST_RE = re.compile(r"^music\.amazon\.[a-z.]+$", re.IGNORECASE)
 _AMAZON_WEBAPP_HOST_RE = re.compile(r"^(?:music|www)\.amazon\.[a-z.]+$", re.IGNORECASE)
 _DEVTOOLS_PORT = None
+_LAST_LAUNCH = {}
 
 
 def _valid_devtools_port(value):
@@ -100,6 +102,277 @@ def devtools_environment(base_env=None):
 
 def _clean(value):
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _ps_literal(value):
+    return "'" + str(value or "").replace("'", "''") + "'"
+
+
+def _json_items(value):
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
+def _powershell_json(script, timeout=8):
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+            creationflags=0x08000000 if os.name == "nt" else 0,
+        )
+    except Exception:
+        return []
+    if completed.returncode != 0:
+        return []
+    text = completed.stdout.strip()
+    if not text:
+        return []
+    try:
+        return _json_items(json.loads(text))
+    except json.JSONDecodeError:
+        return []
+
+
+def _looks_like_path(value):
+    text = _clean(value)
+    return bool(
+        text
+        and (
+            os.path.isabs(text)
+            or text.lower().endswith(".exe")
+            or "\\" in text
+            or "/" in text
+        )
+    )
+
+
+def _launcher_candidate(kind, value, method, source):
+    text = _clean(value)
+    if not text:
+        return None
+    return {"kind": kind, "value": text, "method": method, "source": source}
+
+
+def _launcher_candidate_from_value(value, aumid_method, exe_method, source, exists_fn=os.path.exists):
+    text = _clean(value)
+    if not text:
+        return None
+    if _looks_like_path(text):
+        return _launcher_candidate("exe", text, exe_method, source) if exists_fn(text) else None
+    return _launcher_candidate("aumid", text, aumid_method, source)
+
+
+def _build_aumid(package_family, app_id):
+    family = _clean(package_family)
+    app = _clean(app_id)
+    return f"{family}!{app}" if family and app else ""
+
+
+def _start_app_candidates(entries, exists_fn=os.path.exists):
+    candidates = []
+    for entry in _json_items(entries):
+        name = _clean(entry.get("Name"))
+        app_id = _clean(entry.get("AppID") or entry.get("AppId"))
+        lower_name = name.lower()
+        if not app_id or "amazon music" not in lower_name or "rpc" in lower_name:
+            continue
+        candidate = _launcher_candidate_from_value(app_id, "auto-aumid", "auto-exe", "start-apps", exists_fn)
+        if candidate:
+            candidates.append(candidate)
+    return candidates
+
+
+def _appx_aumid_candidates(entries):
+    candidates = []
+    for entry in _json_items(entries):
+        aumid = _build_aumid(
+            entry.get("PackageFamilyName") or entry.get("packageFamilyName"),
+            entry.get("AppId") or entry.get("Id") or entry.get("appId"),
+        )
+        if aumid:
+            candidates.append(_launcher_candidate("aumid", aumid, "auto-aumid", "appx-manifest"))
+    return [candidate for candidate in candidates if candidate]
+
+
+def _dedupe_launcher_candidates(candidates):
+    seen = set()
+    unique = []
+    for candidate in candidates:
+        if not candidate:
+            continue
+        key = (candidate.get("kind"), candidate.get("value", "").lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
+
+
+def _configured_launcher_override():
+    try:
+        return _clean(load_config().get("amazon_music_launcher_override", ""))
+    except Exception:
+        return ""
+
+
+def _get_start_app_entries():
+    script = """
+$items = @(Get-StartApps | Where-Object {
+    $_.Name -eq 'Amazon Music' -or ($_.Name -like '*Amazon Music*' -and $_.Name -notlike '*RPC*')
+} | Select-Object Name, AppID)
+$items | ConvertTo-Json -Compress
+"""
+    return _powershell_json(script)
+
+
+def _get_appx_application_entries():
+    script = """
+$items = @()
+Get-AppxPackage *AmazonMusic* | ForEach-Object {
+    $pkg = $_
+    try {
+        $manifest = Get-AppxPackageManifest -Package $pkg.PackageFullName
+        foreach ($app in @($manifest.Package.Applications.Application)) {
+            $items += [PSCustomObject]@{
+                PackageFamilyName = $pkg.PackageFamilyName
+                AppId = $app.Id
+            }
+        }
+    } catch {}
+}
+$items | ConvertTo-Json -Compress
+"""
+    return _powershell_json(script, timeout=10)
+
+
+def _launcher_candidates(launcher_override=None, start_apps=None, appx_apps=None, exists_fn=os.path.exists):
+    override = _configured_launcher_override() if launcher_override is None else _clean(launcher_override)
+    candidates = []
+    if override:
+        candidates.append(_launcher_candidate_from_value(override, "override-aumid", "override-exe", "override", exists_fn))
+    start_entries = _get_start_app_entries() if start_apps is None else start_apps
+    appx_entries = _get_appx_application_entries() if appx_apps is None else appx_apps
+    candidates.extend(_start_app_candidates(start_entries, exists_fn))
+    candidates.extend(_appx_aumid_candidates(appx_entries))
+    candidates.append(_launcher_candidate("aumid", APP_USER_MODEL_ID, "hardcoded-store", "hardcoded"))
+    return _dedupe_launcher_candidates(candidates)
+
+
+def _wait_for_page_target(port, timeout=9):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _page_target(port=port):
+            return True
+        time.sleep(0.35)
+    return False
+
+
+def _launch_aumid(app_id, port):
+    args = f"--remote-debugging-port={port}"
+    script = f"""
+$code = @'
+using System;
+using System.Runtime.InteropServices;
+
+[ComImport]
+[Guid("2e941141-7f97-4756-ba1d-9decde894a3d")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IApplicationActivationManager
+{{
+    int ActivateApplication([MarshalAs(UnmanagedType.LPWStr)] string appUserModelId, [MarshalAs(UnmanagedType.LPWStr)] string arguments, int options, out uint processId);
+}}
+
+[ComImport]
+[Guid("45BA127D-10A8-46EA-8AB7-56EA9078943C")]
+class ApplicationActivationManager
+{{
+}}
+
+public static class AppActivator
+{{
+    public static uint Activate(string appId, string args)
+    {{
+        IApplicationActivationManager manager = (IApplicationActivationManager)new ApplicationActivationManager();
+        uint processId;
+        int hr = manager.ActivateApplication(appId, args, 0, out processId);
+        if (hr < 0)
+        {{
+            Marshal.ThrowExceptionForHR(hr);
+        }}
+        return processId;
+    }}
+}}
+'@
+Add-Type -TypeDefinition $code
+[AppActivator]::Activate({_ps_literal(app_id)}, {_ps_literal(args)})
+"""
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15,
+            creationflags=0x08000000 if os.name == "nt" else 0,
+        )
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    if completed.returncode != 0:
+        return {"ok": False, "error": _clean(completed.stderr) or "Could not launch Amazon Music"}
+    return {"ok": True, "pid": _clean(completed.stdout)}
+
+
+def _launch_exe(path, port):
+    if not os.path.exists(path):
+        return {"ok": False, "error": "Launcher path does not exist"}
+    try:
+        proc = subprocess.Popen(
+            [path, f"--remote-debugging-port={port}"],
+            cwd=os.path.dirname(path) or None,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=0x08000000 if os.name == "nt" else 0,
+        )
+        return {"ok": True, "pid": str(proc.pid)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _launch_candidate(candidate, port):
+    if candidate.get("kind") == "exe":
+        return _launch_exe(candidate.get("value", ""), port)
+    return _launch_aumid(candidate.get("value", ""), port)
+
+
+def _candidate_label(candidate):
+    return f"{candidate.get('method', 'unknown')} {candidate.get('value', '')}".strip()
+
+
+def _attempt_failure(candidate, error):
+    text = _clean(error)
+    label = _candidate_label(candidate)
+    if "0x80073cf1" in text.lower() or "package was not found" in text.lower():
+        return f"{label}: package was not found"
+    if not text:
+        text = "launch failed"
+    return f"{label}: {text}"
+
+
+def _format_launcher_failure(attempts):
+    if not attempts:
+        return LAUNCH_FAILURE_HELP
+    return f"{LAUNCH_FAILURE_HELP} Last attempts: {'; '.join(attempts[-3:])}"
+
+
+def _remember_launch(method, launcher, port):
+    _LAST_LAUNCH.clear()
+    _LAST_LAUNCH.update({"method": method, "launcher": launcher, "port": port})
 
 
 def _clean_label(value):
@@ -491,6 +764,9 @@ def get_devtools_track_sync(link_region=None):
         result = response.get("result", {}).get("result", {}).get("value")
         track = _normalise_track_payload(result, link_region)
         track["port"] = port
+        if _LAST_LAUNCH.get("port") == port:
+            track["method"] = _LAST_LAUNCH.get("method", "")
+            track["launcher"] = _LAST_LAUNCH.get("launcher", "")
         if unexpected_warning:
             track["warning"] = unexpected_warning
     except Exception as e:
@@ -540,11 +816,12 @@ def apply_devtools_to_track(track, devtools):
     return merged, changed
 
 
-def launch_amazon_music_devtools():
+def launch_amazon_music_devtools(launcher_override=None):
     port = get_devtools_port(True)
     if _is_local_port_open(port):
         if _page_target(port=port):
-            return {"ok": True, "pid": "", "port": port, "already_running": True}
+            _remember_launch("existing", "", port)
+            return {"ok": True, "pid": "", "port": port, "already_running": True, "method": "existing"}
         if _valid_devtools_port(os.environ.get(DEVTOOLS_PORT_ENV)) == port:
             return {"ok": False, "error": f"Shared metadata port {port} is already in use", "port": port}
         for _ in range(8):
@@ -554,57 +831,23 @@ def launch_amazon_music_devtools():
                 break
         else:
             return {"ok": False, "error": "Could not find a free local metadata port"}
-    script = rf"""
-$code = @'
-using System;
-using System.Runtime.InteropServices;
-
-[ComImport]
-[Guid("2e941141-7f97-4756-ba1d-9decde894a3d")]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-interface IApplicationActivationManager
-{{
-    int ActivateApplication([MarshalAs(UnmanagedType.LPWStr)] string appUserModelId, [MarshalAs(UnmanagedType.LPWStr)] string arguments, int options, out uint processId);
-}}
-
-[ComImport]
-[Guid("45BA127D-10A8-46EA-8AB7-56EA9078943C")]
-class ApplicationActivationManager
-{{
-}}
-
-public static class AppActivator
-{{
-    public static uint Activate(string appId, string args)
-    {{
-        IApplicationActivationManager manager = (IApplicationActivationManager)new ApplicationActivationManager();
-        uint processId;
-        int hr = manager.ActivateApplication(appId, args, 0, out processId);
-        if (hr < 0)
-        {{
-            Marshal.ThrowExceptionForHR(hr);
-        }}
-        return processId;
-    }}
-}}
-'@
-Add-Type -TypeDefinition $code
-[AppActivator]::Activate('{APP_USER_MODEL_ID}', '--remote-debugging-port={port}')
-"""
-    try:
-        completed = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=15,
-            creationflags=0x08000000 if os.name == "nt" else 0,
-        )
-    except Exception as e:
-        return {"ok": False, "error": str(e), "port": port}
-    if completed.returncode != 0:
-        return {"ok": False, "error": _clean(completed.stderr) or "Could not launch Amazon Music", "port": port}
-    return {"ok": True, "pid": _clean(completed.stdout), "port": port}
+    attempts = []
+    for candidate in _launcher_candidates(launcher_override):
+        result = _launch_candidate(candidate, port)
+        if result.get("ok"):
+            if _wait_for_page_target(port):
+                _remember_launch(candidate.get("method", ""), candidate.get("value", ""), port)
+                return {
+                    "ok": True,
+                    "pid": result.get("pid", ""),
+                    "port": port,
+                    "method": candidate.get("method", ""),
+                    "launcher": candidate.get("value", ""),
+                }
+            attempts.append(f"{_candidate_label(candidate)}: metadata target did not appear")
+        else:
+            attempts.append(_attempt_failure(candidate, result.get("error", "")))
+    return {"ok": False, "error": _format_launcher_failure(attempts), "port": port, "attempts": attempts}
 
 
 def amazon_music_is_running():
@@ -717,10 +960,6 @@ def _shortcut_launcher_command():
         working_dir = os.path.dirname(script)
         icon_path = os.path.join(working_dir, "icon.ico")
     return target, arguments, working_dir, icon_path
-
-
-def _ps_literal(value):
-    return "'" + str(value or "").replace("'", "''") + "'"
 
 
 def amazon_devtools_launcher_state():

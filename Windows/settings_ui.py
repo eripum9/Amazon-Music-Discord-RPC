@@ -30,6 +30,7 @@ _REQUIRED_SETTINGS_KEYS = {
     "notification_enrichment_enabled",
     "amazon_devtools_enabled",
     "amazon_devtools_auto_launch",
+    "amazon_music_launcher_override",
     "lastfm_enabled",
     "listenbrainz_enabled",
     "listenbrainz_token",
@@ -106,6 +107,7 @@ def _settings_payload():
         "notification_enrichment_enabled",
         "amazon_devtools_enabled",
         "amazon_devtools_auto_launch",
+        "amazon_music_launcher_override",
         "lastfm_enabled",
         "lastfm_username",
         "listenbrainz_enabled",
@@ -710,6 +712,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
   <button class="update-btn" type="button" onclick="launchAmazonDevtools()">Launch Amazon Music Now</button>
   <button class="update-btn" id="amazonLauncherBtn" type="button" onclick="toggleAmazonLauncher()">Add Start Menu Launcher</button>
+  <div style="padding-top:12px;">
+    <div class="row-label">Advanced Amazon Music launcher</div>
+    <div class="row-desc" style="margin-bottom:8px;">Optional AppID from Get-StartApps or Amazon Music executable path</div>
+    <input type="text" id="amazonLauncherOverride" placeholder="Leave empty for automatic detection">
+  </div>
 </div>
 
 <div class="card">
@@ -1003,6 +1010,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       notification_enrichment_enabled: document.getElementById('notifEnrichEnabled').checked,
       amazon_devtools_enabled: document.getElementById('amazonDevtoolsEnabled').checked,
       amazon_devtools_auto_launch: document.getElementById('amazonDevtoolsAutoLaunch').checked,
+      amazon_music_launcher_override: document.getElementById('amazonLauncherOverride').value.trim(),
       lastfm_enabled: document.getElementById('lastfmEnabled').checked,
       listenbrainz_enabled: document.getElementById('lbEnabled').checked,
       listenbrainz_token: document.getElementById('lbToken').value.trim()
@@ -1426,6 +1434,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     document.getElementById('notifEnrichEnabled').checked = !!cfg.notification_enrichment_enabled;
     document.getElementById('amazonDevtoolsEnabled').checked = !!cfg.amazon_devtools_enabled;
     document.getElementById('amazonDevtoolsAutoLaunch').checked = !!cfg.amazon_devtools_auto_launch;
+    document.getElementById('amazonLauncherOverride').value = cfg.amazon_music_launcher_override || '';
     amazonLauncherInstalled = !!cfg.amazon_devtools_launcher_installed;
     renderAmazonLauncherButton();
     if (cfg.notification_enrichment_enabled) {
@@ -1568,9 +1577,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
   async function launchAmazonDevtools() {
     try {
+      await save({ auto: true });
       const result = await pywebview.api.launch_amazon_devtools();
       if (result && result.ok) {
-        showSettingsStatus('\u2713 Amazon Music launched for metadata.', 'up-to-date');
+        const method = result.method ? ' (' + result.method + ')' : '';
+        showSettingsStatus('\u2713 Amazon Music launched for metadata.' + method, 'up-to-date');
       } else {
         showSettingsStatus('\u2717 ' + ((result && result.error) || 'Could not launch Amazon Music for metadata.'), 'update-error');
       }
@@ -1736,7 +1747,8 @@ class _Api:
     def launch_amazon_devtools(self):
         try:
             from amazon_devtools import launch_amazon_music_devtools
-            return launch_amazon_music_devtools()
+            config = load_config_for_update()
+            return launch_amazon_music_devtools(config.get("amazon_music_launcher_override", ""))
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -1781,6 +1793,7 @@ class _Api:
             "notification_enrichment_enabled": bool(data.get("notification_enrichment_enabled")),
             "amazon_devtools_enabled": bool(data.get("amazon_devtools_enabled")),
             "amazon_devtools_auto_launch": bool(data.get("amazon_devtools_auto_launch", False)),
+            "amazon_music_launcher_override": data.get("amazon_music_launcher_override", "").strip(),
             "lastfm_enabled": bool(data.get("lastfm_enabled")),
             "listenbrainz_enabled": bool(data.get("listenbrainz_enabled")),
             "listenbrainz_token": listenbrainz_token,

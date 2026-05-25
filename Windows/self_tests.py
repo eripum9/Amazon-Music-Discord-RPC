@@ -398,6 +398,51 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Amazon DevTools port hardening", False, str(e)))
 
     try:
+        import inspect
+        from amazon_devtools import (
+            APP_USER_MODEL_ID,
+            LAUNCH_FAILURE_HELP,
+            _appx_aumid_candidates,
+            _attempt_failure,
+            _build_aumid,
+            _launcher_candidates,
+            _launch_aumid,
+            _launch_exe,
+            _start_app_candidates,
+        )
+        existing_path = r"C:\Amazon Music\Amazon Music.exe"
+        exists = lambda path: path == existing_path
+        start_apps = [
+            {"Name": "Amazon Music", "AppID": "Website.Package!AmazonMusic"},
+            {"Name": "Amazon Music", "AppID": existing_path},
+            {"Name": "Amazon Music", "AppID": r"C:\Missing\Amazon Music.exe"},
+            {"Name": "Amazon Music RPC", "AppID": r"C:\Amazon Music RPC\AmazonMusicRPC.exe"},
+        ]
+        appx_apps = [
+            {"PackageFamilyName": "AmazonMobileLLC.AmazonMusic_alt", "AppId": "AmazonMusic"},
+        ]
+        candidates = _launcher_candidates("Override.Package!App", start_apps, appx_apps, exists)
+        methods = [candidate.get("method") for candidate in candidates]
+        values = [candidate.get("value") for candidate in candidates]
+        missing_path_candidates = _start_app_candidates([{"Name": "Amazon Music", "AppID": r"C:\Missing\Amazon Music.exe"}], lambda path: False)
+        package_failure = _attempt_failure({"method": "auto-aumid", "value": "Missing.Package!App"}, 'Package was not found. 0x80073CF1')
+        ok = (
+            _build_aumid("PackageFamily", "App") == "PackageFamily!App"
+            and values[:4] == ["Override.Package!App", "Website.Package!AmazonMusic", existing_path, "AmazonMobileLLC.AmazonMusic_alt!AmazonMusic"]
+            and methods[:4] == ["override-aumid", "auto-aumid", "auto-exe", "auto-aumid"]
+            and candidates[-1].get("method") == "hardcoded-store"
+            and candidates[-1].get("value") == APP_USER_MODEL_ID
+            and not missing_path_candidates
+            and "package was not found" in package_failure.lower()
+            and LAUNCH_FAILURE_HELP.startswith("Could not launch Amazon Music")
+            and "--remote-debugging-port={port}" in inspect.getsource(_launch_aumid)
+            and "--remote-debugging-port={port}" in inspect.getsource(_launch_exe)
+        )
+        results.append(_result("Amazon DevTools launcher discovery", ok, "Launcher candidates cover override, Start Apps, Appx, executable paths, and Store fallback"))
+    except Exception as e:
+        results.append(_result("Amazon DevTools launcher discovery", False, str(e)))
+
+    try:
         import main
         unavailable = {"enabled": True, "status": "unavailable", "detail": "DevTools unavailable"}
         error = {"enabled": True, "status": "error", "detail": "Socket failed"}
@@ -514,6 +559,9 @@ def run_self_tests(log_dir, diagnostics_path):
             and "Amazon Music region" in html
             and "onSongLinkProviderChange" in script
             and "Show listen button" in html
+            and "amazon_music_launcher_override" in script
+            and "amazonLauncherOverride" in script
+            and "Advanced Amazon Music launcher" in html
             and "Auto-restart Amazon Music" in html
             and "Reads Windows notifications locally" in html
             and "Only Amazon Music notification text is used" in html

@@ -186,6 +186,8 @@ def _build_cards(state, config, access):
             detail = devtools_warning
             if card_state == "good":
                 card_state = "warn"
+        if amazon_devtools.get("method"):
+            detail = f"{detail} ({amazon_devtools.get('method')})"
         cards.append({"label": "Amazon Metadata", "value": value, "detail": detail, "state": card_state})
     else:
         cards.append({"label": "Amazon Metadata", "value": "Off", "detail": "Enhanced metadata disabled", "state": "muted"})

@@ -52,6 +52,7 @@ DEFAULTS = {
     "notification_enrichment_enabled": False,
     "amazon_devtools_enabled": False,
     "amazon_devtools_auto_launch": False,
+    "amazon_music_launcher_override": "",
     "privacy_private_session": False,
     "privacy_blocked_keywords": "",
     "privacy_disable_scrobbling": True,
