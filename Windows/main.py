@@ -9,6 +9,7 @@ import ctypes
 import json
 import tempfile
 import io
+import csv
 
 from PIL import Image
 import pystray
@@ -60,6 +61,8 @@ _current_track_raw = None
 active_rpc = None
 _track_timing_cache = {}
 _privacy_restart_lock = threading.Lock()
+_game_mode_process_cache = {"signature": "", "checked_at": 0.0, "active": False}
+_game_mode_suppressed_keys = set()
 
 RPC_CONFIG_KEYS = {
     "discord_client_id",
@@ -82,6 +85,8 @@ RPC_CONFIG_KEYS = {
     "privacy_private_session",
     "privacy_blocked_keywords",
     "privacy_disable_scrobbling",
+    "game_mode_enabled",
+    "game_mode_processes",
 }
 
 
@@ -252,6 +257,90 @@ def _apply_wrong_song_choice(choice, raw_key, title, artist, config):
         if not artist:
             return
         _resolve_missing_title("", artist, raw_key)
+
+
+def _normalise_process_name(value):
+    text = str(value or "").strip().strip('"').strip("'").lower()
+    text = os.path.basename(text)
+    return text
+
+
+def _configured_game_mode_processes(config):
+    value = config.get("game_mode_processes", "")
+    if isinstance(value, list):
+        parts = value
+    else:
+        parts = str(value or "").replace(";", ",").replace("\n", ",").split(",")
+    return {name for name in (_normalise_process_name(part) for part in parts) if name}
+
+
+def _game_mode_matches_processes(configured, running_names):
+    running = set()
+    for name in running_names:
+        clean = _normalise_process_name(name)
+        if clean:
+            running.add(clean)
+            stem, ext = os.path.splitext(clean)
+            if ext == ".exe" and stem:
+                running.add(stem)
+    for name in configured:
+        clean = _normalise_process_name(name)
+        if clean in running:
+            return True
+        stem, ext = os.path.splitext(clean)
+        if ext == ".exe" and stem in running:
+            return True
+        if not ext and f"{clean}.exe" in running:
+            return True
+    return False
+
+
+def _running_process_names():
+    try:
+        completed = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            creationflags=0x08000000,
+        )
+        if completed.returncode != 0:
+            return set()
+        names = set()
+        for row in csv.reader(completed.stdout.splitlines()):
+            if row:
+                name = _normalise_process_name(row[0])
+                if name:
+                    names.add(name)
+        return names
+    except Exception:
+        return set()
+
+
+def _game_mode_active(config):
+    if bool(config.get("game_mode_enabled")):
+        return True
+    configured = _configured_game_mode_processes(config)
+    if not configured:
+        return False
+    signature = "\n".join(sorted(configured))
+    now = time.time()
+    if _game_mode_process_cache.get("signature") == signature and now - _game_mode_process_cache.get("checked_at", 0.0) < 5:
+        return bool(_game_mode_process_cache.get("active"))
+    active = _game_mode_matches_processes(configured, _running_process_names())
+    _game_mode_process_cache.update({"signature": signature, "checked_at": now, "active": active})
+    return active
+
+
+def _should_prompt_wrong_song(raw_key, title, artist, config):
+    if not _same_track_field(title, artist):
+        return False
+    if _game_mode_active(config):
+        if raw_key not in _game_mode_suppressed_keys:
+            print("[GameMode] Wrong-song picker suppressed.")
+            _game_mode_suppressed_keys.add(raw_key)
+        return False
+    return True
 
 
 def _prompt_wrong_song_async(raw_key, title, artist, config, force=False):
@@ -891,7 +980,7 @@ def rpc_loop():
             resumed_from_pause = last_playback_status == "paused"
 
             title, artist, resolved_applied = _apply_resolved_cache(raw_key, title, artist)
-            if not resolved_applied and _same_track_field(title, artist):
+            if not resolved_applied and _should_prompt_wrong_song(raw_key, title, artist, config):
                 _prompt_wrong_song_async(raw_key, title, artist, config)
 
             if title and not artist:
@@ -1221,6 +1310,17 @@ def toggle_private_session(icon=None, item=None):
     print(f"[Privacy] Private session {'enabled' if config['privacy_private_session'] else 'disabled'}.")
 
 
+def toggle_game_mode(icon=None, item=None):
+    global current_config
+    config = load_config_for_update()
+    config["game_mode_enabled"] = not bool(config.get("game_mode_enabled"))
+    save_config(config)
+    current_config = config
+    restart_rpc()
+    update_tray_menu()
+    print(f"[GameMode] {'Enabled' if config['game_mode_enabled'] else 'Disabled'}.")
+
+
 def open_settings(icon=None, item=None):
     global current_config, settings_proc
     if settings_proc and settings_proc.poll() is None:
@@ -1375,6 +1475,8 @@ def build_menu():
         pystray.MenuItem("Launch Amazon Music", launch_amazon_devtools_from_tray),
         pystray.MenuItem("Private Session", toggle_private_session,
                          checked=lambda item: bool(current_config.get("privacy_private_session"))),
+        pystray.MenuItem("Game Mode", toggle_game_mode,
+                         checked=lambda item: bool(current_config.get("game_mode_enabled"))),
         pystray.MenuItem("Wrong Song?", wrong_song_handler),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Start RPC", lambda icon, item: start_rpc(),
