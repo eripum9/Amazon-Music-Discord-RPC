@@ -170,6 +170,22 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Discord asset text", False, str(e)))
 
     try:
+        import main
+        configured = main._configured_game_mode_processes({"game_mode_processes": "Game.exe, C:\\Tools\\OtherGame.exe\nNoExt"})
+        ok = (
+            configured == {"game.exe", "othergame.exe", "noext"}
+            and main._game_mode_matches_processes(configured, {"game.exe"})
+            and main._game_mode_matches_processes({"noext"}, {"NoExt.exe"})
+            and main._should_prompt_wrong_song("Song|Song", "Song", "Song", {"game_mode_enabled": False, "game_mode_processes": ""})
+            and not main._should_prompt_wrong_song("Song|Song", "Song", "Song", {"game_mode_enabled": True, "game_mode_processes": ""})
+            and not main._should_prompt_wrong_song("Song|Artist", "Song", "Artist", {"game_mode_enabled": False, "game_mode_processes": ""})
+        )
+        main._game_mode_suppressed_keys.discard("Song|Song")
+        results.append(_result("Game Mode picker suppression", ok, "Manual and process Game Mode can suppress automatic wrong-song prompts"))
+    except Exception as e:
+        results.append(_result("Game Mode picker suppression", False, str(e)))
+
+    try:
         import inspect
         from album_art import search_tracks
         params = inspect.signature(search_tracks).parameters
@@ -496,6 +512,7 @@ def run_self_tests(log_dir, diagnostics_path):
             html.index('<div class="card-title">Amazon Metadata</div>'),
             html.index('<div class="card-title">Song Link</div>'),
             html.index('<div class="card-title">Privacy</div>'),
+            html.index('<div class="card-title">Game Mode</div>'),
             html.index('<div class="card-title">Custom Album Art</div>'),
             html.index('<div class="card-title">Startup & Presence</div>'),
             html.index('<div class="card-title">Fallback Metadata</div>'),
@@ -514,6 +531,11 @@ def run_self_tests(log_dir, diagnostics_path):
             and "Amazon Music region" in html
             and "onSongLinkProviderChange" in script
             and "Show listen button" in html
+            and "game_mode_enabled" in script
+            and "gameModeEnabled" in script
+            and "game_mode_processes" in script
+            and "gameModeProcesses" in script
+            and "Suppress automatic wrong-song picker popups" in html
             and "Auto-restart Amazon Music" in html
             and "Reads Windows notifications locally" in html
             and "Only Amazon Music notification text is used" in html

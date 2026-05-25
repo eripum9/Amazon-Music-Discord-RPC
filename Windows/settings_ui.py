@@ -23,6 +23,8 @@ _REQUIRED_SETTINGS_KEYS = {
     "privacy_private_session",
     "privacy_disable_scrobbling",
     "privacy_blocked_keywords",
+    "game_mode_enabled",
+    "game_mode_processes",
     "custom_albums",
     "song_link_enabled",
     "song_link_provider",
@@ -100,6 +102,8 @@ def _settings_payload():
         "privacy_private_session",
         "privacy_disable_scrobbling",
         "privacy_blocked_keywords",
+        "game_mode_enabled",
+        "game_mode_processes",
         "song_link_enabled",
         "song_link_provider",
         "amazon_music_link_region",
@@ -796,6 +800,27 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </div>
 
 <div class="card">
+  <div class="card-title">Game Mode</div>
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Enable Game Mode</span>
+      <div class="row-desc">Suppress automatic wrong-song picker popups while active</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="gameModeEnabled" aria-label="Enable Game Mode">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <div class="separator"></div>
+  <div style="padding:6px 0;">
+    <div class="row-label">Auto-enable for apps</div>
+    <div class="row-desc" style="margin-bottom:8px;">Comma-separated process names that enable Game Mode while running</div>
+    <textarea id="gameModeProcesses" placeholder="game.exe, anothergame.exe"></textarea>
+  </div>
+</div>
+
+<div class="card">
   <div class="card-title">Custom Album Art</div>
   <div class="row-desc" style="margin-bottom:10px;">Match album names or aliases to a custom cover image URL</div>
   <div class="custom-album-list" id="customAlbumList"></div>
@@ -996,6 +1021,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       privacy_private_session: document.getElementById('privacyPrivateSession').checked,
       privacy_disable_scrobbling: document.getElementById('privacyDisableScrobbling').checked,
       privacy_blocked_keywords: document.getElementById('privacyBlockedKeywords').value.trim(),
+      game_mode_enabled: document.getElementById('gameModeEnabled').checked,
+      game_mode_processes: document.getElementById('gameModeProcesses').value.trim(),
       custom_albums: collectCustomAlbums(false),
       song_link_enabled: document.getElementById('songLinkEnabled').checked,
       song_link_provider: document.getElementById('songLinkProvider').value,
@@ -1417,6 +1444,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     document.getElementById('privacyPrivateSession').checked = !!cfg.privacy_private_session;
     document.getElementById('privacyDisableScrobbling').checked = cfg.privacy_disable_scrobbling !== false;
     document.getElementById('privacyBlockedKeywords').value = cfg.privacy_blocked_keywords || '';
+    document.getElementById('gameModeEnabled').checked = !!cfg.game_mode_enabled;
+    document.getElementById('gameModeProcesses').value = cfg.game_mode_processes || '';
     renderCustomAlbums(cfg.custom_albums || []);
     document.getElementById('songLinkEnabled').checked = !!cfg.song_link_enabled;
     document.getElementById('songLinkProvider').value = cfg.song_link_provider === 'deezer' ? 'deezer' : 'amazon';
@@ -1774,6 +1803,8 @@ class _Api:
             "privacy_private_session": bool(data.get("privacy_private_session")),
             "privacy_disable_scrobbling": bool(data.get("privacy_disable_scrobbling", True)),
             "privacy_blocked_keywords": data.get("privacy_blocked_keywords", "").strip(),
+            "game_mode_enabled": bool(data.get("game_mode_enabled")),
+            "game_mode_processes": data.get("game_mode_processes", "").strip(),
             "custom_albums": _clean_custom_albums(data.get("custom_albums", [])),
             "song_link_enabled": bool(data.get("song_link_enabled")),
             "song_link_provider": data.get("song_link_provider") if data.get("song_link_provider") in ("amazon", "deezer") else "amazon",
