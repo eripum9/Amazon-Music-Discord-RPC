@@ -154,17 +154,26 @@ def run_self_tests(log_dir, diagnostics_path):
 
     try:
         import inspect
-        from updater import _ps_literal, prompt_for_update, launch_installer
+        from updater import _clean_launch_env, _ps_literal, prompt_for_update, launch_installer
         prompt_source = inspect.getsource(prompt_for_update)
         launch_source = inspect.getsource(launch_installer)
+        cleaned_env = _clean_launch_env({
+            "_PYI_APPLICATION_HOME_DIR": r"C:\Users\erikp\AppData\Local\Temp\_MEI166362",
+            "_PYI_PARENT_PROCESS_LEVEL": "1",
+            "_MEIPASS2": r"C:\Users\erikp\AppData\Local\Temp\_MEI166362",
+            "PYINSTALLER_RESET_ENVIRONMENT": "1",
+            "SAFE_KEY": "value",
+        })
         ok = (
             _ps_literal("a'b") == "'a''b'"
             and "defer_until_exit" in prompt_source
             and "launch_installer" in prompt_source
             and "Get-Process -Id $pidToWait" in launch_source
             and "Start-Process -FilePath $installer" in launch_source
+            and "env=launch_env" in launch_source
+            and cleaned_env == {"SAFE_KEY": "value"}
         )
-        results.append(_result("Updater installer handoff", ok, "Auto-updates can defer installer launch until the app exits"))
+        results.append(_result("Updater installer handoff", ok, "Auto-updates can defer installer launch until the app exits without inherited PyInstaller temp state"))
     except Exception as e:
         results.append(_result("Updater installer handoff", False, str(e)))
 
