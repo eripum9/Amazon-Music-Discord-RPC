@@ -5,8 +5,10 @@ import sys
 import base64
 import json
 import subprocess
+from datetime import datetime
 import webview
-from config import load_config, load_config_for_update, save_config, is_startup_enabled, set_startup, DEFAULT_CLIENT_ID, APP_VERSION, normalize_amazon_music_link_region
+from config import load_config, load_config_for_update, save_config, is_startup_enabled, set_startup, DEFAULT_CLIENT_ID, APP_VERSION, normalize_amazon_music_link_region, DEFAULTS, CONFIG_DIR, SENSITIVE_CONFIG_KEYS, redact_data
+from status_summary import metadata_source_summary
 
 if getattr(sys, 'frozen', False):
     _BUNDLE_DIR = sys._MEIPASS
@@ -14,6 +16,7 @@ else:
     _BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 ICON_PATH = os.path.join(_BUNDLE_DIR, "icon.png")
+DIAGNOSTICS_PATH = os.path.join(CONFIG_DIR, "diagnostics.json")
 _REQUIRED_SETTINGS_KEYS = {
     "use_custom",
     "client_id",
@@ -87,6 +90,53 @@ def _clean_custom_albums(items):
     return cleaned
 
 
+def _read_diagnostics_state():
+    try:
+        with open(DIAGNOSTICS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _settings_export_payload(config, include_tokens=False):
+    exported = {}
+    for key in DEFAULTS:
+        if key in SENSITIVE_CONFIG_KEYS and not include_tokens:
+            continue
+        exported[key] = config.get(key, DEFAULTS.get(key))
+    if include_tokens:
+        safe_config = exported
+    else:
+        safe_config = redact_data(exported, config)
+    return {
+        "format": "AmazonMusicRPC.settings",
+        "app_version": APP_VERSION,
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "include_tokens": bool(include_tokens),
+        "config": safe_config,
+    }
+
+
+def _settings_import_config(payload, existing):
+    if not isinstance(payload, dict):
+        raise ValueError("Settings file is invalid.")
+    source = payload.get("config") if isinstance(payload.get("config"), dict) else payload
+    include_tokens = bool(payload.get("include_tokens"))
+    if not isinstance(source, dict):
+        raise ValueError("Settings file does not contain settings.")
+    merged = dict(existing)
+    for key, value in source.items():
+        if key not in DEFAULTS:
+            continue
+        if key in SENSITIVE_CONFIG_KEYS and not include_tokens:
+            continue
+        merged[key] = value
+    merged["amazon_music_link_region"] = normalize_amazon_music_link_region(merged.get("amazon_music_link_region"))
+    merged["custom_albums"] = _clean_custom_albums(merged.get("custom_albums", []))
+    return merged
+
+
 def _settings_payload():
     cfg = load_config()
     try:
@@ -121,6 +171,7 @@ def _settings_payload():
     payload = {key: cfg.get(key) for key in keys}
     payload["listenbrainz_token_present"] = bool(cfg.get("listenbrainz_token"))
     payload["custom_albums"] = _clean_custom_albums(payload.get("custom_albums"))
+    payload["source_summary"] = metadata_source_summary(_read_diagnostics_state(), cfg)
     try:
         from amazon_devtools import amazon_devtools_launcher_state
         launcher_state = amazon_devtools_launcher_state()
@@ -503,6 +554,90 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     padding: 2px 8px;
     margin-left: auto;
   }
+  .source-strip {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 10px;
+    align-items: center;
+    background: #262626;
+    border: 1px solid #3d3d3d;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: -8px 0 14px;
+  }
+  .source-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #666;
+  }
+  .source-strip.good .source-dot { background: #43b581; }
+  .source-strip.warn .source-dot { background: #faa61a; }
+  .source-strip.bad .source-dot { background: #f04747; }
+  .source-title {
+    color: #fff;
+    font-size: 13px;
+    font-weight: 650;
+  }
+  .source-detail {
+    color: #888;
+    font-size: 11px;
+    margin-top: 1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .button-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .button-row .update-btn { margin-top: 0; }
+  .launcher-list {
+    display: grid;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .launcher-option {
+    width: 100%;
+    text-align: left;
+    background: #262626;
+    border: 1px solid #3d3d3d;
+    color: #ddd;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .launcher-option:hover { border-color: #5865f2; background: #303030; }
+  .launcher-option.selected { border-color: #43b581; background: #243224; }
+  .launcher-name {
+    display: block;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 650;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .launcher-detail {
+    display: block;
+    color: #999;
+    font-size: 11px;
+    margin-top: 3px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .backup-check {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    color: #aaa;
+    font-size: 12px;
+    margin-top: 10px;
+  }
   .intro-overlay {
     position: fixed;
     inset: 0;
@@ -577,6 +712,43 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     color: #ddd;
     font-size: 12px;
   }
+  .wizard-progress {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 18px;
+  }
+  .wizard-dot {
+    height: 5px;
+    flex: 1;
+    border-radius: 999px;
+    background: #444;
+  }
+  .wizard-dot.active { background: #5865f2; }
+  .wizard-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .wizard-choice {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .wizard-choice button {
+    background: #383838;
+    border: 1px solid #4a4a4a;
+    border-radius: 8px;
+    color: #ddd;
+    font-family: inherit;
+    padding: 10px;
+    cursor: pointer;
+  }
+  .wizard-choice button.selected {
+    border-color: #43b581;
+    background: #243224;
+    color: #fff;
+  }
   .modal-overlay {
     position: fixed;
     inset: 0;
@@ -645,16 +817,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 <div class="intro-overlay" id="introOverlay">
   <div class="intro-card">
-    <div class="intro-mark"><img src="data:image/png;base64,{icon_b64}" alt="icon"></div>
-    <div class="intro-title">Amazon Music RPC</div>
-    <div class="intro-copy">An RPC for Amazon Music. These are the main settings worth checking before you leave it running in the tray.</div>
-    <div class="intro-list">
-      <div class="intro-item">Amazon Metadata is the main source for track info, artwork, pause state, and timing.</div>
-      <div class="intro-item">Privacy controls hide tracks you do not want to share.</div>
-      <div class="intro-item">Song Link controls the button shown on your Discord presence.</div>
-      <div class="intro-item">Diagnostics shows status, logs, and development checks.</div>
+    <div class="wizard-progress" id="wizardProgress"></div>
+    <div id="wizardBody"></div>
+    <div class="wizard-actions">
+      <button class="update-btn" id="wizardBack" type="button" onclick="wizardBack()">Back</button>
+      <button class="save-btn" id="wizardNext" type="button" onclick="wizardNext()">Next</button>
     </div>
-    <button class="save-btn" onclick="finishIntro()">Get Started</button>
   </div>
 </div>
 
@@ -689,6 +857,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <span class="version-badge">v{version}</span>
 </div>
 
+<div class="source-strip muted" id="sourceStrip">
+  <div class="source-dot"></div>
+  <div>
+    <div class="source-title" id="sourceTitle">Waiting</div>
+    <div class="source-detail" id="sourceDetail">Waiting for Amazon Music</div>
+  </div>
+</div>
+
 <div class="card">
   <div class="card-title">Amazon Metadata</div>
   <div class="row">
@@ -720,6 +896,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="row-label">Advanced Amazon Music launcher</div>
     <div class="row-desc" style="margin-bottom:8px;">Optional AppID from Get-StartApps or Amazon Music executable path</div>
     <input type="text" id="amazonLauncherOverride" placeholder="Leave empty for automatic detection">
+    <div class="button-row">
+      <button class="update-btn" type="button" onclick="loadLauncherCandidates()">Choose Launcher</button>
+      <button class="update-btn" type="button" onclick="clearLauncherOverride()">Use Automatic</button>
+    </div>
+    <button class="update-btn" type="button" onclick="testLauncherOverride()">Test Selected Launcher</button>
+    <div class="launcher-list" id="launcherCandidates"></div>
   </div>
 </div>
 
@@ -983,6 +1165,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <button class="update-btn" id="clearTokensBtn" type="button" onclick="clearScrobblingTokens()">Clear Scrobbling Tokens</button>
 </div>
 
+<div class="card">
+  <div class="card-title">Settings Backup</div>
+  <div class="row-labels">
+    <span class="row-label">Export or import settings</span>
+    <div class="row-desc">Move your app setup between installs or keep a local backup</div>
+  </div>
+  <label class="backup-check">
+    <input type="checkbox" id="includeTokens">
+    <span>Include scrobbling tokens</span>
+  </label>
+  <div class="button-row">
+    <button class="update-btn" type="button" onclick="exportSettings()">Export Settings</button>
+    <button class="update-btn" type="button" onclick="importSettings()">Import Settings</button>
+  </div>
+</div>
+
 <button class="update-btn" id="updateBtn" onclick="checkForUpdates()">↑ Check for Updates</button>
 <button class="update-btn" id="diagBtn" onclick="pywebview.api.open_diagnostics()">Open Diagnostics</button>
 <button class="update-btn" onclick="pywebview.api.open_url('https://github.com/eripum9/Amazon-Music-Discord-RPC/issues')">Report Issue</button>
@@ -1000,6 +1198,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   let lastLbValidationKey = '';
   let latestConfig = BOOTSTRAP_CONFIG;
   let enhancedMetadataPromptVisible = false;
+  let wizardStep = 0;
+  let wizardMetadataChoice = !!BOOTSTRAP_CONFIG.amazon_devtools_enabled;
+  let launcherCandidatesLoaded = false;
 
   function showSettingsStatus(text, kind) {
     const status = document.getElementById('updateStatus');
@@ -1095,6 +1296,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     if (target.closest('#enhancedMetadataPrompt')) {
       return false;
     }
+    if (target.id === 'includeTokens') {
+      return false;
+    }
     if (target.id === 'amazonDevtoolsEnabled' && !target.checked) {
       return false;
     }
@@ -1161,6 +1365,108 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       '"': '&quot;',
       "'": '&#39;'
     }[ch]));
+  }
+
+  function renderSourceSummary(summary) {
+    summary = summary || {};
+    const strip = document.getElementById('sourceStrip');
+    strip.className = 'source-strip ' + (summary.state || 'muted');
+    document.getElementById('sourceTitle').textContent = summary.label || 'Waiting';
+    document.getElementById('sourceDetail').textContent = summary.detail || 'Waiting for Amazon Music';
+  }
+
+  function wizardSteps() {
+    return [
+      {
+        title: 'Amazon Music RPC',
+        copy: 'A Discord Rich Presence for Amazon Music. This quick setup checks the important parts before the app keeps running in the tray.',
+        items: ['Discord presence shows song, artist, album art, and timer.', 'Privacy controls can hide activity whenever you need them.', 'Diagnostics helps confirm which metadata source is active.']
+      },
+      {
+        title: 'Enhanced metadata',
+        copy: 'Enhanced metadata is recommended because it gives the app richer local playback details from Amazon Music.',
+        choice: true
+      },
+      {
+        title: 'Amazon Music check',
+        copy: 'Launch Amazon Music with metadata enabled now, or continue and do it later from the tray or this settings page.',
+        action: 'launch'
+      },
+      {
+        title: 'Discord status',
+        copy: 'When Discord and Amazon Music are open, the source indicator shows where the current track data is coming from.',
+        status: true
+      },
+      {
+        title: 'Privacy and scrobbling',
+        copy: 'Private session hides Discord presence. Last.fm and ListenBrainz are optional and only send data when you enable them.',
+        items: ['Private session can be toggled from Settings or inside Amazon Music.', 'Keyword filters hide matching tracks, artists, or albums.', 'Scrobbling tokens stay on this device.']
+      }
+    ];
+  }
+
+  function renderWizard() {
+    const steps = wizardSteps();
+    const step = steps[wizardStep] || steps[0];
+    const progress = document.getElementById('wizardProgress');
+    progress.innerHTML = steps.map((_, index) => `<span class="wizard-dot ${index <= wizardStep ? 'active' : ''}"></span>`).join('');
+    let body = '<div class="intro-mark"><img src="data:image/png;base64,{icon_b64}" alt="icon"></div>';
+    body += `<div class="intro-title">${escapeHtml(step.title)}</div>`;
+    body += `<div class="intro-copy">${escapeHtml(step.copy)}</div>`;
+    if (step.items) {
+      body += '<div class="intro-list">' + step.items.map((item) => `<div class="intro-item">${escapeHtml(item)}</div>`).join('') + '</div>';
+    }
+    if (step.choice) {
+      body += `<div class="wizard-choice">
+        <button type="button" class="${wizardMetadataChoice ? 'selected' : ''}" onclick="setWizardMetadata(true)">Enhanced metadata</button>
+        <button type="button" class="${!wizardMetadataChoice ? 'selected' : ''}" onclick="setWizardMetadata(false)">Fallback mode</button>
+      </div>`;
+    }
+    if (step.action) {
+      body += '<button class="update-btn" type="button" onclick="launchAmazonDevtools()">Launch Amazon Music Now</button>';
+    }
+    if (step.status) {
+      const summary = latestConfig.source_summary || {};
+      body += `<div class="intro-list"><div class="intro-item">${escapeHtml(summary.label || 'Waiting')} · ${escapeHtml(summary.detail || 'Waiting for Amazon Music')}</div></div>`;
+    }
+    document.getElementById('wizardBody').innerHTML = body;
+    document.getElementById('wizardBack').style.visibility = wizardStep === 0 ? 'hidden' : 'visible';
+    document.getElementById('wizardNext').textContent = wizardStep === steps.length - 1 ? 'Finish' : 'Next';
+  }
+
+  async function setWizardMetadata(enabled) {
+    wizardMetadataChoice = !!enabled;
+    document.getElementById('amazonDevtoolsEnabled').checked = !!enabled;
+    document.getElementById('amazonDevtoolsAutoLaunch').checked = !!enabled;
+    renderWizard();
+    if (!apiReady()) {
+      return;
+    }
+    try {
+      const result = await pywebview.api.set_enhanced_metadata_prompt(!!enabled, !!enabled);
+      if (result && result.config) {
+        applyConfig(result.config);
+        document.getElementById('introOverlay').classList.add('visible');
+        renderWizard();
+      }
+    } catch (e) {
+      showSettingsStatus('\u2717 Could not save enhanced metadata choice.', 'update-error');
+    }
+  }
+
+  function wizardBack() {
+    wizardStep = Math.max(0, wizardStep - 1);
+    renderWizard();
+  }
+
+  function wizardNext() {
+    const steps = wizardSteps();
+    if (wizardStep >= steps.length - 1) {
+      finishIntro();
+      return;
+    }
+    wizardStep += 1;
+    renderWizard();
   }
 
   function splitAliasText(value) {
@@ -1408,6 +1714,36 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     btn.textContent = 'Clear Scrobbling Tokens';
   }
 
+  async function exportSettings() {
+    try {
+      const includeTokens = document.getElementById('includeTokens').checked;
+      const result = await pywebview.api.export_settings(!!includeTokens);
+      if (result && result.ok) {
+        showSettingsStatus('\u2713 Settings exported.', 'up-to-date');
+      } else {
+        showSettingsStatus('\u2717 ' + ((result && result.error) || 'Settings export cancelled.'), 'update-error');
+      }
+    } catch (e) {
+      showSettingsStatus('\u2717 Could not export settings.', 'update-error');
+    }
+  }
+
+  async function importSettings() {
+    try {
+      const result = await pywebview.api.import_settings();
+      if (result && result.ok) {
+        if (result.config) {
+          applyConfig(result.config);
+        }
+        showSettingsStatus('\u2713 Settings imported.', 'up-to-date');
+      } else {
+        showSettingsStatus('\u2717 ' + ((result && result.error) || 'Settings import cancelled.'), 'update-error');
+      }
+    } catch (e) {
+      showSettingsStatus('\u2717 Could not import settings.', 'update-error');
+    }
+  }
+
   async function save(options) {
     options = options || {};
     const auto = !!options.auto;
@@ -1438,6 +1774,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     applyingConfig = true;
     cfg = cfg || {};
     latestConfig = cfg;
+    wizardMetadataChoice = !!cfg.amazon_devtools_enabled;
+    renderSourceSummary(cfg.source_summary || {});
     if (cfg.use_custom_client_id) {
       document.getElementById('idMode').value = 'custom';
       document.getElementById('customIdGroup').classList.add('visible');
@@ -1509,6 +1847,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
     if (!cfg.intro_seen) {
       document.getElementById('introOverlay').classList.add('visible');
+      renderWizard();
     } else {
       document.getElementById('introOverlay').classList.remove('visible');
       setTimeout(() => maybeShowEnhancedMetadataPrompt(cfg), 0);
@@ -1604,6 +1943,71 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     btn.textContent = amazonLauncherInstalled ? 'Remove Start Menu Launcher' : 'Add Start Menu Launcher';
   }
 
+  function renderLauncherCandidates(items) {
+    const list = document.getElementById('launcherCandidates');
+    if (!items || !items.length) {
+      list.innerHTML = '<div class="empty-state">No launcher candidates found yet.</div>';
+      return;
+    }
+    const current = document.getElementById('amazonLauncherOverride').value.trim();
+    list.innerHTML = items.map((item) => {
+      const value = item.value || '';
+      const selected = value && value === current;
+      const method = item.method || item.kind || 'auto';
+      const source = item.source || 'detected';
+      const literal = JSON.stringify(value).replace(/"/g, '&quot;');
+      return `<button type="button" class="launcher-option ${selected ? 'selected' : ''}" onclick="selectLauncher(${literal})">
+        <span class="launcher-name">${escapeHtml(value || 'Automatic detection')}</span>
+        <span class="launcher-detail">${escapeHtml(method)} · ${escapeHtml(source)}</span>
+      </button>`;
+    }).join('');
+  }
+
+  async function loadLauncherCandidates() {
+    const list = document.getElementById('launcherCandidates');
+    list.innerHTML = '<div class="empty-state">Scanning launchers...</div>';
+    try {
+      const result = await pywebview.api.get_launcher_candidates();
+      launcherCandidatesLoaded = true;
+      renderLauncherCandidates(result.candidates || []);
+    } catch (e) {
+      list.innerHTML = '<div class="empty-state">Could not scan launchers.</div>';
+    }
+  }
+
+  async function selectLauncher(value) {
+    document.getElementById('amazonLauncherOverride').value = value || '';
+    await save({ auto: true });
+    if (launcherCandidatesLoaded) {
+      loadLauncherCandidates();
+    }
+  }
+
+  async function clearLauncherOverride() {
+    document.getElementById('amazonLauncherOverride').value = '';
+    await save({ auto: true });
+    if (launcherCandidatesLoaded) {
+      loadLauncherCandidates();
+    }
+    showSettingsStatus('\u2713 Launcher detection set to automatic.', 'up-to-date');
+  }
+
+  async function testLauncherOverride() {
+    try {
+      await save({ auto: true });
+      const value = document.getElementById('amazonLauncherOverride').value.trim();
+      const result = await pywebview.api.test_amazon_launcher(value);
+      if (result && result.ok) {
+        const method = result.method ? ' (' + result.method + ')' : '';
+        showSettingsStatus('\u2713 Launcher worked.' + method, 'up-to-date');
+      } else {
+        showSettingsStatus('\u2717 ' + ((result && result.error) || 'Launcher did not start enhanced metadata.'), 'update-error');
+      }
+    } catch (e) {
+      showSettingsStatus('\u2717 Could not test launcher.', 'update-error');
+    }
+  }
+
   async function launchAmazonDevtools() {
     try {
       await save({ auto: true });
@@ -1665,6 +2069,7 @@ class _Api:
     def dismiss_intro(self):
         config = load_config_for_update()
         config["intro_seen"] = True
+        config["enhanced_metadata_prompt_seen"] = True
         save_config(config)
         return {"ok": True, "config": _settings_payload()}
 
@@ -1789,6 +2194,64 @@ class _Api:
             return remove_amazon_devtools_launcher()
         except Exception as e:
             return {"ok": False, "error": str(e), "installed": False}
+
+    def get_launcher_candidates(self):
+        try:
+            from amazon_devtools import amazon_music_launcher_candidates
+            config = load_config_for_update()
+            override = config.get("amazon_music_launcher_override", "")
+            candidates = amazon_music_launcher_candidates(override)
+            for candidate in candidates:
+                candidate["selected"] = bool(override and candidate.get("value") == override)
+            return {"ok": True, "override": override, "candidates": candidates}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "candidates": []}
+
+    def set_amazon_launcher_override(self, value):
+        config = load_config_for_update()
+        config["amazon_music_launcher_override"] = str(value or "").strip()
+        save_config(config)
+        if self._on_save:
+            self._on_save(config)
+        return {"ok": True, "config": _settings_payload()}
+
+    def test_amazon_launcher(self, value):
+        try:
+            from amazon_devtools import launch_amazon_music_devtools
+            return launch_amazon_music_devtools(str(value or "").strip())
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def export_settings(self, include_tokens=False):
+        filename = f"AmazonMusicRPC_Settings_{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+        try:
+            from windows_file_dialog import save_file_dialog
+            path = save_file_dialog("Export Amazon Music RPC settings", filename, "json", "JSON files (*.json)|*.json|All files (*.*)|*.*", CONFIG_DIR)
+            if not path:
+                return {"ok": False, "error": "Export cancelled."}
+            payload = _settings_export_payload(load_config_for_update(), bool(include_tokens))
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            return {"ok": True, "path": path}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def import_settings(self):
+        try:
+            from windows_file_dialog import open_file_dialog
+            path = open_file_dialog("Import Amazon Music RPC settings", "JSON files (*.json)|*.json|All files (*.*)|*.*", CONFIG_DIR)
+            if not path:
+                return {"ok": False, "error": "Import cancelled."}
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            config = _settings_import_config(payload, load_config_for_update())
+            save_config(config)
+            set_startup(config.get("start_on_startup"), config.get("start_minimized"))
+            if self._on_save:
+                self._on_save(config)
+            return {"ok": True, "config": _settings_payload()}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     def save_settings(self, data):
         if not isinstance(data, dict):

@@ -264,6 +264,10 @@ def _launcher_candidates(launcher_override=None, start_apps=None, appx_apps=None
     return _dedupe_launcher_candidates(candidates)
 
 
+def amazon_music_launcher_candidates(launcher_override=None):
+    return _launcher_candidates(launcher_override)
+
+
 def _wait_for_page_target(port, timeout=9):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -393,6 +397,12 @@ def _amazon_music_link_host(region=None):
     return f"music.amazon.{normalize_amazon_music_link_region(region)}"
 
 
+def amazon_music_search_link(title, artist, link_region=None):
+    host = _amazon_music_link_host(link_region)
+    query = " ".join(part for part in (_clean(title), _clean(artist)) if part)
+    return f"https://{host}/search/{quote(query, safe='')}" if query else ""
+
+
 def _normalise_amazon_link(url, host):
     parsed = urlparse(url)
     source_host = (parsed.hostname or "").lower()
@@ -403,22 +413,19 @@ def _normalise_amazon_link(url, host):
 
 def _amazon_track_link(payload, title, artist, link_region=None):
     host = _amazon_music_link_host(link_region)
+    track_asin = _clean_asin(payload.get("track_asin"))
+    if track_asin:
+        return f"https://{host}/tracks/{track_asin}"
+
+    search_link = amazon_music_search_link(title, artist, link_region)
+    if search_link:
+        return search_link
+
     direct_link = _clean(payload.get("track_link"))
     if direct_link:
         normalised = _normalise_amazon_link(direct_link, host)
         if normalised:
             return normalised
-
-    track_asin = _clean_asin(payload.get("track_asin"))
-    album_asin = _clean_asin(payload.get("album_asin"))
-    if track_asin and album_asin:
-        return f"https://{host}/albums/{album_asin}?trackAsin={track_asin}"
-    if track_asin:
-        return f"https://{host}/tracks/{track_asin}"
-
-    query = " ".join(part for part in (title, artist) if part)
-    if query:
-        return f"https://{host}/search/{quote(query, safe='')}"
 
     return ""
 
