@@ -10,7 +10,7 @@ Show your Amazon Music songs, album art, pause state, and live timer on Discord.
 [Download for Windows](https://github.com/eripum9/Amazon-Music-Discord-RPC/releases/latest) · [View Demo](https://eripum9.github.io/Amazon-Music-Discord-RPC/#demo) · [Troubleshooting](https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/troubleshooting/) · [Privacy & Security](https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/privacy/)
 
 - ✅ Shows current song, artist, album art, and timer on Discord
-- ✅ Works with the Amazon Music desktop app
+- ✅ Works with Amazon Music for Windows
 - ✅ Includes Last.fm and ListenBrainz scrobbling
 - ✅ Privacy mode and keyword filters
 - ✅ No Python needed — download the installer
@@ -47,13 +47,15 @@ Show your Amazon Music songs, album art, pause state, and live timer on Discord.
 
 Amazon Music metadata is read from the local Amazon Music desktop app when enhanced metadata is enabled. This provides the current title, artist, album, artwork, playback state, and progress timing for Discord Rich Presence.
 
+**Enhanced metadata compatibility:** enhanced Amazon metadata is currently built and tested for the Microsoft Store version of Amazon Music. The website/desktop installer version of Amazon Music may not accept the metadata launch flag and can show errors such as `--remote-debugging-port` being unavailable. If that happens, install the Microsoft Store version for enhanced metadata, or disable enhanced metadata and use fallback mode.
+
 If enhanced Amazon metadata is unavailable, the app falls back to Windows' System Media Transport Controls (SMTC). Notification fallback can optionally enrich that fallback path with artist and album metadata from Amazon Music's Windows notifications.
 
 ## Security & Privacy
 
 Amazon Music RPC is not affiliated with Amazon, Discord, Last.fm, ListenBrainz, Deezer, or Apple.
 
-Enhanced metadata is optional for new installs. When enabled, the app launches or repairs Amazon Music with a local debugging interface so it can read the current Amazon Music page directly. This gives better title, album, artwork, pause state, and timing data than Windows fallback metadata. The debug port is picked randomly from a high local port range for each app session, kept in memory, and the app only attaches to Amazon Music targets on `music.amazon.*`.
+Enhanced metadata is optional for new installs. When enabled, the app launches or repairs the Microsoft Store version of Amazon Music with a local debugging interface so it can read the current Amazon Music page directly. This gives better title, album, artwork, pause state, and timing data than Windows fallback metadata. The debug port is picked randomly from a high local port range for each app session, kept in memory, and the app only attaches to Amazon Music targets on `music.amazon.*`.
 
 Fallback-only mode is available in Settings by turning off **Enhanced Amazon metadata**. In fallback-only mode, the app uses Windows media metadata and optional notification enrichment instead of the Amazon Music debug interface.
 
@@ -127,7 +129,7 @@ python Windows/main.py
 ## Requirements
 
 - **Windows 10/11** (64-bit)
-- **Amazon Music** desktop app
+- **Amazon Music for Windows**. The Microsoft Store version is recommended for enhanced metadata.
 - **Discord** desktop app (running)
 
 No Python installation needed if using the Installer.
