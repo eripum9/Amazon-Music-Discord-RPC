@@ -74,6 +74,7 @@ class MediaSessionReader(private val context: Context) {
             artworkUri = artworkUri,
             artworkSource = artworkSource,
             lookupSource = null,
+            lookupAlbum = null,
             updatedAtMs = now,
         )
     }

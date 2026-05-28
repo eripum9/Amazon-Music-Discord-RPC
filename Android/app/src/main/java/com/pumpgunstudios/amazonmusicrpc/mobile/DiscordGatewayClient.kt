@@ -7,14 +7,19 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URI
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 class DiscordGatewayClient(
@@ -27,6 +32,7 @@ class DiscordGatewayClient(
     private var sequence: Int? = null
     private var heartbeatJob: Job? = null
     private var ready = CompletableDeferred<Unit>()
+    private val externalAssetCache = ConcurrentHashMap<String, String>()
 
     fun connect() {
         if (socket != null) return
@@ -44,12 +50,16 @@ class DiscordGatewayClient(
         socket?.send(presencePayload(track, settings).toString())
     }
 
-    fun clearPresenceBlocking() {
+    fun clearPresenceBlocking(settings: AppSettings = AppSettings()): Boolean {
+        var sent = false
         runBlocking(Dispatchers.IO) {
-            withTimeoutOrNull(2500) {
-                clearPresence()
+            withTimeoutOrNull(5000) {
+                sendPresence(null, settings)
+                delay(250)
+                sent = true
             }
         }
+        return sent
     }
 
     fun close() {
@@ -59,17 +69,6 @@ class DiscordGatewayClient(
         socket = null
         if (!ready.isCompleted) ready.cancel()
         onStatus("Stopped")
-    }
-
-    private suspend fun clearPresence() {
-        val currentSocket = socket ?: return
-        if (!ready.isCompleted) {
-            withTimeoutOrNull(1500) {
-                ready.await()
-            } ?: return
-        }
-        currentSocket.send(presencePayload(null, AppSettings()).toString())
-        delay(250)
     }
 
     private fun listener(): WebSocketListener {
@@ -145,7 +144,7 @@ class DiscordGatewayClient(
         connect()
     }
 
-    private fun presencePayload(track: TrackInfo?, settings: AppSettings): JSONObject {
+    private suspend fun presencePayload(track: TrackInfo?, settings: AppSettings): JSONObject {
         val data = JSONObject()
             .put("afk", false)
             .put("since", JSONObject.NULL)
@@ -159,7 +158,7 @@ class DiscordGatewayClient(
         return JSONObject().put("op", 3).put("d", data)
     }
 
-    private fun activity(track: TrackInfo, settings: AppSettings): JSONObject? {
+    private suspend fun activity(track: TrackInfo, settings: AppSettings): JSONObject? {
         val artist = track.artist?.takeIf { it.isNotBlank() }
         val album = track.album?.takeIf { it.isNotBlank() }
         val playing = track.playbackState == android.media.session.PlaybackState.STATE_PLAYING
@@ -176,7 +175,9 @@ class DiscordGatewayClient(
             .put("instance", true)
         val artworkUri = track.artworkUri?.takeIf { track.hasDiscordArtwork }
         if (artworkUri != null) {
-            activity.getJSONObject("assets").put("large_image", artworkUri)
+            activity.getJSONObject("assets")
+                .put("large_image", resolveDiscordActivityImage(artworkUri, settings))
+                .put("large_url", artworkUri)
         }
         if (paused && settings.showPaused) {
             activity.getJSONObject("assets")
@@ -191,6 +192,53 @@ class DiscordGatewayClient(
             activity.put("timestamps", JSONObject().put("start", start).put("end", end))
         }
         return activity
+    }
+
+    private suspend fun resolveDiscordActivityImage(imageUrl: String, settings: AppSettings): String {
+        discordMediaProxyAsset(imageUrl)?.let { return it }
+        val cacheKey = "${settings.applicationId}|$imageUrl"
+        externalAssetCache[cacheKey]?.let { return it }
+        val resolved = proxyExternalAsset(imageUrl, settings) ?: return imageUrl
+        externalAssetCache[cacheKey] = resolved
+        return resolved
+    }
+
+    private suspend fun proxyExternalAsset(imageUrl: String, settings: AppSettings): String? {
+        if (settings.applicationId.isBlank()) return null
+        val json = JSONObject().put("urls", JSONArray().put(imageUrl)).toString()
+        val request = Request.Builder()
+            .url("https://discord.com/api/v10/applications/${settings.applicationId}/external-assets")
+            .header("Authorization", token)
+            .header("User-Agent", "AmazonMusicRPC-Android-Beta")
+            .post(json.toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .build()
+        return withContext(Dispatchers.IO) {
+            try {
+                http.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@withContext null
+                    val data = JSONArray(response.body?.string().orEmpty())
+                    val assetPath = data.optJSONObject(0)?.optString("external_asset_path").orEmpty()
+                    assetPath.takeIf { it.isNotBlank() }?.let { "mp:$it" }
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
+    private fun discordMediaProxyAsset(imageUrl: String): String? {
+        return try {
+            val uri = URI(imageUrl)
+            val host = uri.host.orEmpty().lowercase()
+            if (host != "media.discordapp.net" && host != "cdn.discordapp.com" && !host.startsWith("images-ext-")) {
+                return null
+            }
+            val path = uri.rawPath?.trimStart('/')?.takeIf { it.isNotBlank() } ?: return null
+            val query = uri.rawQuery?.takeIf { it.isNotBlank() }?.let { "?$it" }.orEmpty()
+            "mp:$path$query"
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun discordAssetText(albumName: String?, title: String?): String {

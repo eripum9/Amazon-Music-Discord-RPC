@@ -50,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -67,6 +68,7 @@ class MainActivity : ComponentActivity() {
                     store = store,
                     startService = { RpcForegroundService.start(this) },
                     stopService = { RpcForegroundService.stop(this) },
+                    clearActivity = { RpcForegroundService.clearActivity(this) },
                     openNotificationAccess = {
                         startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                     },
@@ -95,7 +97,9 @@ private data class RuntimeState(
     val notificationListenerEnabled: Boolean,
     val postNotificationsGranted: Boolean,
     val batteryOptimized: Boolean,
+    val fakeAmazonInstalled: Boolean,
     val trackDiagnostics: TrackDiagnostics,
+    val diagnostics: List<String>,
 )
 
 @Composable
@@ -103,6 +107,7 @@ private fun RpcApp(
     store: SettingsStore,
     startService: () -> Unit,
     stopService: () -> Unit,
+    clearActivity: () -> Unit,
     openNotificationAccess: () -> Unit,
     openAppNotificationSettings: () -> Unit,
     openBatterySettings: () -> Unit,
@@ -151,6 +156,7 @@ private fun RpcApp(
             StatusCard(runtime = runtime, settings = settings)
             ControlsCard(
                 canStart = runtime.notificationListenerEnabled && runtime.postNotificationsGranted,
+                canClear = runtime.serviceRunning || settings.token.isNotBlank(),
                 isRunning = runtime.serviceRunning,
                 onStart = {
                     store.save(settings)
@@ -161,12 +167,50 @@ private fun RpcApp(
                     }
                 },
                 onStop = stopService,
+                onClear = {
+                    store.save(settings)
+                    if (runtime.serviceRunning) {
+                        stopService()
+                    } else {
+                        clearActivity()
+                    }
+                },
+            )
+            TestMetadataCard(
+                companionInstalled = runtime.fakeAmazonInstalled,
+                onOpen = {
+                    store.appendDiagnostic(FakeAmazonController.open(context))
+                    runtime = context.runtimeState(store)
+                },
+                onPlayTrack = { index ->
+                    store.appendDiagnostic(FakeAmazonController.playTrack(context, index))
+                    runtime = context.runtimeState(store)
+                },
+                onPlay = {
+                    store.appendDiagnostic(FakeAmazonController.play(context))
+                    runtime = context.runtimeState(store)
+                },
+                onPause = {
+                    store.appendDiagnostic(FakeAmazonController.pause(context))
+                    runtime = context.runtimeState(store)
+                },
+                onStop = {
+                    store.appendDiagnostic(FakeAmazonController.stop(context))
+                    runtime = context.runtimeState(store)
+                },
             )
             SettingsCard(
                 settings = settings,
                 onSettingsChange = { settings = it },
                 onSave = {
                     store.save(settings)
+                    runtime = context.runtimeState(store)
+                },
+            )
+            DiagnosticsCard(
+                lines = runtime.diagnostics,
+                onClear = {
+                    store.clearDiagnostics()
                     runtime = context.runtimeState(store)
                 },
             )
@@ -267,6 +311,7 @@ private fun StatusCard(runtime: RuntimeState, settings: AppSettings) {
             }
             KeyValueRow("Time bar", runtime.trackDiagnostics.timeBar)
             KeyValueRow("Album art", runtime.trackDiagnostics.artwork)
+            KeyValueRow("Lookup", runtime.trackDiagnostics.lookup)
             KeyValueRow("Source", if (settings.packageFilters.contains("fakeamazon")) "Amazon Music + companion test app" else "Configured media packages")
             KeyValueRow("Mode", if (settings.token.isBlank()) "Local metadata test" else "Discord Gateway")
             KeyValueRow("Paused tracks", if (settings.showPaused) "Visible" else "Hidden")
@@ -277,9 +322,11 @@ private fun StatusCard(runtime: RuntimeState, settings: AppSettings) {
 @Composable
 private fun ControlsCard(
     canStart: Boolean,
+    canClear: Boolean,
     isRunning: Boolean,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    onClear: () -> Unit,
 ) {
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -292,8 +339,53 @@ private fun ControlsCard(
                     Text("Stop")
                 }
             }
+            OutlinedButton(modifier = Modifier.fillMaxWidth(), enabled = canClear, onClick = onClear) {
+                Text("Clear Discord activity")
+            }
             if (!canStart) {
                 Text("Finish the required permission steps before starting RPC.", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TestMetadataCard(
+    companionInstalled: Boolean,
+    onOpen: () -> Unit,
+    onPlayTrack: (Int) -> Unit,
+    onPlay: () -> Unit,
+    onPause: () -> Unit,
+    onStop: () -> Unit,
+) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Test metadata", style = MaterialTheme.typography.titleMedium)
+            KeyValueRow("Companion app", if (companionInstalled) "Installed" else "Not installed")
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = { onPlayTrack(0) }) {
+                    Text("WOLF")
+                }
+                Button(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = { onPlayTrack(1) }) {
+                    Text("Rusty")
+                }
+                Button(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = { onPlayTrack(2) }) {
+                    Text("Noid")
+                }
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onPlay) {
+                    Text("Play")
+                }
+                OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onPause) {
+                    Text("Pause")
+                }
+                OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onStop) {
+                    Text("Stop")
+                }
+            }
+            OutlinedButton(modifier = Modifier.fillMaxWidth(), enabled = companionInstalled, onClick = onOpen) {
+                Text("Open companion app")
             }
         }
     }
@@ -308,6 +400,7 @@ private fun SettingsCard(
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("Settings", style = MaterialTheme.typography.titleMedium)
+            Text("Discord tokens are sensitive. This beta stores the token only in local app preferences and redacts token-shaped values from diagnostics.", style = MaterialTheme.typography.bodySmall)
             OutlinedTextField(
                 modifier = Modifier.fillMaxWidth(),
                 value = settings.token,
@@ -340,6 +433,30 @@ private fun SettingsCard(
             }
             Button(modifier = Modifier.fillMaxWidth(), onClick = onSave) {
                 Text("Save settings")
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticsCard(
+    lines: List<String>,
+    onClear: () -> Unit,
+) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Diagnostics", style = MaterialTheme.typography.titleMedium)
+                OutlinedButton(enabled = lines.isNotEmpty(), onClick = onClear) {
+                    Text("Clear")
+                }
+            }
+            if (lines.isEmpty()) {
+                Text("No diagnostics yet", style = MaterialTheme.typography.bodySmall)
+            } else {
+                lines.takeLast(10).forEach { line ->
+                    Text(line, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                }
             }
         }
     }
@@ -386,7 +503,9 @@ private fun Context.runtimeState(store: SettingsStore): RuntimeState {
         notificationListenerEnabled = notificationListenerEnabled(),
         postNotificationsGranted = postNotificationsGranted(),
         batteryOptimized = batteryOptimized(),
+        fakeAmazonInstalled = FakeAmazonController.isInstalled(this),
         trackDiagnostics = store.trackDiagnostics(),
+        diagnostics = store.diagnostics(),
     )
 }
 

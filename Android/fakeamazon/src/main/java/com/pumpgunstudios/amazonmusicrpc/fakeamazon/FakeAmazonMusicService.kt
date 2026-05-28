@@ -47,6 +47,7 @@ class FakeAmazonMusicService : Service() {
             ACTION_PAUSE -> pause()
             ACTION_NEXT -> next()
             ACTION_PREVIOUS -> previous()
+            ACTION_PLAY_TRACK -> playTrack(intent.getIntExtra(EXTRA_TRACK_INDEX, index))
             ACTION_STOP -> stopFake()
             else -> stopSelf(startId)
         }
@@ -90,6 +91,14 @@ class FakeAmazonMusicService : Service() {
         publish()
     }
 
+    private fun playTrack(trackIndex: Int) {
+        index = trackIndex.coerceIn(fakeTracks.indices)
+        positionMs = 0L
+        updatedAtMs = System.currentTimeMillis()
+        playing = true
+        publish()
+    }
+
     private fun stopFake() {
         syncPosition()
         playing = false
@@ -119,6 +128,7 @@ class FakeAmazonMusicService : Service() {
                 .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
                 .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
                 .putString(MediaMetadata.METADATA_KEY_ALBUM, track.album)
+                .putLong(MediaMetadata.METADATA_KEY_DURATION, track.durationMs)
                 .putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork)
                 .putBitmap(MediaMetadata.METADATA_KEY_ART, artwork)
                 .build()
@@ -205,6 +215,8 @@ class FakeAmazonMusicService : Service() {
         const val ACTION_PAUSE = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.PAUSE"
         const val ACTION_NEXT = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.NEXT"
         const val ACTION_PREVIOUS = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.PREVIOUS"
+        const val ACTION_PLAY_TRACK = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.PLAY_TRACK"
         const val ACTION_STOP = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.STOP"
+        const val EXTRA_TRACK_INDEX = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.TRACK_INDEX"
     }
 }

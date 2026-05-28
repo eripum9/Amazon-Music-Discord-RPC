@@ -5,6 +5,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="com.pumpgunstudios.amazonmusicrpc.fakeamazon.CONTROL_PLAYBACK" />
+
+    <queries>
+        <package android:name="com.amazon.mp3" />
+        <package android:name="com.amazon.music" />
+        <package android:name="com.pumpgunstudios.amazonmusicrpc.fakeamazon" />
+    </queries>
 
     <application
         android:allowBackup="false"

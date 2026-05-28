@@ -13,10 +13,11 @@ data class TrackInfo(
     val artworkUri: String?,
     val artworkSource: String?,
     val lookupSource: String?,
+    val lookupAlbum: String?,
     val updatedAtMs: Long,
 ) {
     val stableKey: String
-        get() = listOf(title, artist.orEmpty(), album.orEmpty(), packageName, playbackState?.toString().orEmpty()).joinToString("|")
+        get() = listOf(title, artist.orEmpty(), album.orEmpty(), packageName, playbackState?.toString().orEmpty(), artworkUri.orEmpty()).joinToString("|")
 
     val hasArtwork: Boolean
         get() = artworkSource != null
@@ -42,6 +43,7 @@ data class TrackInfo(
                 else -> artworkSource
             },
             lookupSource = lookup.source.takeIf { !lookup.isEmpty },
+            lookupAlbum = lookup.album.takeIf { it.isNotBlank() },
         )
     }
 }
