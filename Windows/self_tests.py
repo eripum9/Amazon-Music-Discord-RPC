@@ -2,6 +2,7 @@
 import json
 import os
 import tempfile
+import zipfile
 from config import DEFAULTS, CONFIG_DIR, CONFIG_PATH, load_config, load_config_for_update, normalize_amazon_music_link_region, redact_data, redact_text
 
 
@@ -136,7 +137,8 @@ def run_self_tests(log_dir, diagnostics_path):
 
     try:
         import hashlib
-        from updater import _extract_sha256, verify_file_sha256
+        import inspect
+        from updater import _extract_sha256, verify_file_sha256, prompt_for_update, launch_installer
         fd, path = tempfile.mkstemp(prefix="amrpc_hash_", suffix=".bin", dir=log_dir)
         with os.fdopen(fd, "wb") as f:
             f.write(b"amazon music rpc installer test")
@@ -151,6 +153,46 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Updater SHA256 trust", False, str(e)))
 
     try:
+        import inspect
+        from updater import _clean_launch_env, _ps_literal, prompt_for_update, launch_installer
+        prompt_source = inspect.getsource(prompt_for_update)
+        launch_source = inspect.getsource(launch_installer)
+        cleaned_env = _clean_launch_env({
+            "_PYI_APPLICATION_HOME_DIR": r"C:\Users\erikp\AppData\Local\Temp\_MEI166362",
+            "_PYI_PARENT_PROCESS_LEVEL": "1",
+            "_MEIPASS2": r"C:\Users\erikp\AppData\Local\Temp\_MEI166362",
+            "PYINSTALLER_RESET_ENVIRONMENT": "1",
+            "SAFE_KEY": "value",
+        })
+        ok = (
+            _ps_literal("a'b") == "'a''b'"
+            and "defer_until_exit" in prompt_source
+            and "launch_installer" in prompt_source
+            and "Get-Process -Id $pidToWait" in launch_source
+            and "Start-Process -FilePath $installer" in launch_source
+            and "env=launch_env" in launch_source
+            and cleaned_env == {"SAFE_KEY": "value"}
+        )
+        results.append(_result("Updater installer handoff", ok, "Auto-updates can defer installer launch until the app exits without inherited PyInstaller temp state"))
+    except Exception as e:
+        results.append(_result("Updater installer handoff", False, str(e)))
+
+    try:
+        installer_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "installer.iss")
+        with open(installer_path, "r", encoding="utf-8") as f:
+            installer_script = f.read()
+        ok = (
+            "CloseApplications=no" in installer_script
+            and "RestartApplications=no" in installer_script
+            and "BeforeInstall: KillRunningApp" in installer_script
+            and '/F /T /IM "{#MyAppExeName}"' in installer_script
+            and 'WorkingDir: "{app}"' in installer_script
+        )
+        results.append(_result("Installer running-app guard", ok, "Installer stops the running app before replacing files and launches from the install directory"))
+    except Exception as e:
+        results.append(_result("Installer running-app guard", False, str(e)))
+
+    try:
         from album_art import _clean_title
         ok = _clean_title("Song [Explicit]") == "Song"
         results.append(_result("Metadata cleanup", ok, "Explicit marker stripped"))
@@ -158,16 +200,158 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Metadata cleanup", False, str(e)))
 
     try:
-        from discord_rpc import _discord_asset_text
+        import discord_rpc
+        from discord_rpc import _discord_asset_text, _button_signature, DiscordRPC
+        class FakePresence:
+            def __init__(self):
+                self.calls = []
+
+            def update(self, payload_override=None):
+                self.calls.append(("update", payload_override))
+                return {"ok": True}
+
+            def clear(self):
+                self.calls.append(("clear", None))
+
+        original_sleep = discord_rpc.time.sleep
+        discord_rpc.time.sleep = lambda _: None
+        fake = FakePresence()
+        try:
+            rpc = DiscordRPC.__new__(DiscordRPC)
+            rpc.client_id = "client"
+            rpc.rpc = fake
+            rpc.connected = True
+            rpc._last_track_key = None
+            rpc._last_button_signature = None
+            rpc._backoff = 3
+            rpc._next_retry = 0
+            rpc.update("Song A", "Artist", buttons=[{"label": "Listen on Amazon Music", "url": "https://music.amazon.com/tracks/a"}])
+            rpc.update("Song B", "Artist", buttons=[{"label": "Listen on Amazon Music", "url": "https://music.amazon.com/tracks/b"}])
+            rpc.update("Song C", "Artist")
+        finally:
+            discord_rpc.time.sleep = original_sleep
+        call_order = [call[0] for call in fake.calls]
+        last_payload = fake.calls[-1][1]["args"]["activity"]
         ok = (
             _discord_asset_text("Z", "Off the Record") == "Album: Z"
             and _discord_asset_text("", "A") == "Track: A"
             and _discord_asset_text("Wolf", "IFHY") == "Wolf"
             and len(_discord_asset_text("Z", "Off the Record")) >= 2
+            and _button_signature([{"label": "A", "url": "1"}]) != _button_signature([{"label": "A", "url": "2"}])
+            and call_order == ["update", "clear", "update", "clear", "update"]
+            and last_payload.get("buttons") == []
         )
-        results.append(_result("Discord asset text", ok, "One-letter albums are expanded for Discord validation"))
+        results.append(_result("Discord presence payload", ok, "One-letter asset text and button URL refresh behavior are guarded"))
     except Exception as e:
-        results.append(_result("Discord asset text", False, str(e)))
+        results.append(_result("Discord presence payload", False, str(e)))
+
+    try:
+        import main
+        configured = main._configured_game_mode_processes({"game_mode_processes": "Game.exe, C:\\Tools\\OtherGame.exe\nNoExt"})
+        ok = (
+            configured == {"game.exe", "othergame.exe", "noext"}
+            and main._game_mode_matches_processes(configured, {"game.exe"})
+            and main._game_mode_matches_processes({"noext"}, {"NoExt.exe"})
+            and main._should_prompt_wrong_song("Song|Song", "Song", "Song", {"game_mode_enabled": False, "game_mode_processes": ""})
+            and not main._should_prompt_wrong_song("Song|Song", "Song", "Song", {"game_mode_enabled": True, "game_mode_processes": ""})
+            and not main._should_prompt_wrong_song("Song|Artist", "Song", "Artist", {"game_mode_enabled": False, "game_mode_processes": ""})
+        )
+        main._game_mode_suppressed_keys.discard("Song|Song")
+        results.append(_result("Game Mode picker suppression", ok, "Manual and process Game Mode can suppress automatic wrong-song prompts"))
+    except Exception as e:
+        results.append(_result("Game Mode picker suppression", False, str(e)))
+
+    try:
+        import inspect
+        import main
+        old_running = main.rpc_running
+        old_config = dict(main.current_config) if isinstance(main.current_config, dict) else {}
+        main.rpc_running = True
+        main.current_config = {
+            **old_config,
+            "privacy_private_session": False,
+            "amazon_devtools_enabled": True,
+            "game_mode_enabled": True,
+            "song_link_provider": "amazon",
+        }
+        try:
+            snapshot = main._tray_menu_snapshot({
+                "discord_status": "connected",
+                "presence_visible": True,
+                "track": {
+                    "title": "Rusty",
+                    "artist": "Tyler, The Creator",
+                    "album": "Wolf",
+                    "position": 65,
+                    "duration": 315,
+                    "status": "playing",
+                },
+                "amazon_devtools": {"status": "found", "title": "Rusty"},
+                "track_link": "https://music.amazon.com/search/Rusty",
+            })
+            main_source = inspect.getsource(main)
+            ok = (
+                snapshot.get("rpc") == "On"
+                and snapshot.get("discord") == "Connected"
+                and snapshot.get("source") == "Amazon Metadata"
+                and snapshot.get("devtools_status") == "Found"
+                and snapshot.get("time") == "1:05 / 5:15"
+                and main._tray_icon_title(snapshot) == "Rusty - Tyler, The Creator"
+                and "QtTrayController" in main_source
+                and "--tray-popup-host" not in main_source
+                and "_install_custom_tray_click" not in main_source
+                and "pystray._win32" not in main_source
+            )
+        finally:
+            main.rpc_running = old_running
+            main.current_config = old_config
+        results.append(_result("Qt tray state", ok, "Tray state exposes live RPC, source, track, link, and timing state"))
+    except Exception as e:
+        results.append(_result("Qt tray state", False, str(e)))
+
+    try:
+        import inspect
+        import qt_tray_ui
+        snapshot = {
+            "rpc": "On",
+            "discord": "Connected",
+            "presence": "Visible",
+            "source": "Amazon Metadata",
+            "source_detail": "Noid",
+            "title": "Noid",
+            "artist": "Tyler, The Creator",
+            "album": "Chromakopia",
+            "time": "1:01 / 4:35",
+            "private": False,
+            "devtools_status": "Found",
+            "game_mode": "Off",
+        }
+        payload = qt_tray_ui.drawer_payload(snapshot)
+        bottom_right = qt_tray_ui.drawer_geometry(10_000, 10_000, (0, 0, 1920, 1080))
+        top_left = qt_tray_ui.drawer_geometry(0, 0, (0, 0, 320, 500))
+        source = inspect.getsource(qt_tray_ui)
+        ok = (
+            payload.get("status") == "Running"
+            and payload.get("title") == "Noid"
+            and "Album: Chromakopia" in payload.get("meta")
+            and any(row[0] == "DevTools" and row[1] == "Found" for row in payload.get("diagnostics", []))
+            and qt_tray_ui.DRAWER_WIDTH == 336
+            and qt_tray_ui.DRAWER_HEIGHT == 464
+            and bottom_right[2:] == (336, 464)
+            and bottom_right[0] <= 1920 - 336
+            and bottom_right[1] <= 1080 - 464
+            and top_left[0] >= 0
+            and top_left[1] >= 0
+            and "setFixedSize(DRAWER_WIDTH, DRAWER_HEIGHT)" in source
+            and "QSystemTrayIcon" in source
+            and "QWidgetAction" in source
+            and "setContextMenu" in source
+            and "WindowDeactivate" not in source
+            and {"settings", "diagnostics", "launch_amazon", "private", "game_mode", "wrong_song", "toggle_rpc", "updates", "quit"}.issubset(qt_tray_ui.TRAY_COMMANDS)
+        )
+        results.append(_result("Qt tray drawer", ok, "Qt tray drawer payload, commands, and geometry are stable"))
+    except Exception as e:
+        results.append(_result("Qt tray drawer", False, str(e)))
 
     try:
         import inspect
@@ -226,6 +410,27 @@ def run_self_tests(log_dir, diagnostics_path):
                 100,
                 True,
             )
+            seek_forward_ts, seek_forward_paused, seek_forward_refreshed = main._playing_start_ts(
+                {"position": 90},
+                "Song|Artist",
+                930,
+                None,
+                False,
+            )
+            seek_back_ts, seek_back_paused, seek_back_refreshed = main._playing_start_ts(
+                {"position": 40},
+                "Song|Artist",
+                900,
+                None,
+                False,
+            )
+            stable_ts, stable_paused, stable_refreshed = main._playing_start_ts(
+                {"position": 70.5},
+                "Song|Artist",
+                930,
+                None,
+                False,
+            )
             zero_ts = main._track_start_ts({"position": 0}, "Fresh|Track", use_cache=False)
         ok = (
             resumed_ts == 896
@@ -234,14 +439,23 @@ def run_self_tests(log_dir, diagnostics_path):
             and fallback_ts == 900
             and fallback_paused is None
             and not fallback_refreshed
+            and seek_forward_ts == 910
+            and seek_forward_paused is None
+            and seek_forward_refreshed
+            and seek_back_ts == 960
+            and seek_back_paused is None
+            and seek_back_refreshed
+            and stable_ts == 930
+            and stable_paused is None
+            and not stable_refreshed
             and zero_ts == 1000
         )
-        results.append(_result("Resume timing refresh", ok, "Playing after pause uses current playback position before paused fallback"))
+        results.append(_result("Playback timing refresh", ok, "Playing after pause and timebar seek changes refresh Discord timer"))
     except Exception as e:
-        results.append(_result("Resume timing refresh", False, str(e)))
+        results.append(_result("Playback timing refresh", False, str(e)))
 
     try:
-        from amazon_devtools import _normalise_track_payload, apply_devtools_to_track
+        from amazon_devtools import _normalise_track_payload, apply_devtools_to_track, amazon_music_search_link
         devtools = _normalise_track_payload({
             "status": "found",
             "title": "Treehome95 [Explicit]",
@@ -262,8 +476,15 @@ def run_self_tests(log_dir, diagnostics_path):
             "album_asin": "B00C3O5AD8",
             "music_host": "music.amazon.de",
         }, "de")
+        stale_direct = _normalise_track_payload({
+            "status": "found",
+            "title": "Current Song",
+            "artist": "Current Artist",
+            "track_link": "https://music.amazon.de/tracks/OLDTRACK",
+            "music_host": "music.amazon.de",
+        })
         merged, changed = apply_devtools_to_track({"title": "Treehome95", "artist": "", "album": "", "status": "playing"}, devtools)
-        ok = changed and merged["artist"].startswith("Tyler") and merged["album"] == "Wolf" and merged["duration"] == 179 and merged["position"] == 138 and merged["status"] == "paused" and merged["_amazon_track_link"] == "https://music.amazon.com/albums/B00C3O5AD8?trackAsin=B00C3O5D3A" and devtools_de.get("track_link") == "https://music.amazon.de/albums/B00C3O5AD8?trackAsin=B00C3O5D3A"
+        ok = changed and merged["artist"].startswith("Tyler") and merged["album"] == "Wolf" and merged["duration"] == 179 and merged["position"] == 138 and merged["status"] == "paused" and merged["_amazon_track_link"] == "https://music.amazon.com/tracks/B00C3O5D3A" and devtools_de.get("track_link") == "https://music.amazon.de/tracks/B00C3O5D3A" and stale_direct.get("track_link") == "https://music.amazon.com/search/Current%20Song%20Current%20Artist" and amazon_music_search_link("Noid", "Tyler, The Creator", "de") == "https://music.amazon.de/search/Noid%20Tyler%2C%20The%20Creator"
         results.append(_result("Amazon DevTools metadata", ok, "DevTools metadata can repair artist, album, art, position, duration, status, and configurable region link"))
     except Exception as e:
         results.append(_result("Amazon DevTools metadata", False, str(e)))
@@ -398,18 +619,84 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Amazon DevTools port hardening", False, str(e)))
 
     try:
+        import inspect
+        from amazon_devtools import (
+            APP_USER_MODEL_ID,
+            LAUNCH_FAILURE_HELP,
+            _appx_aumid_candidates,
+            _attempt_failure,
+            _build_aumid,
+            _launcher_candidates,
+            _launch_aumid,
+            _launch_exe,
+            _powershell_executable,
+            _powershell_json,
+            _start_app_candidates,
+            amazon_music_launcher_candidates,
+        )
+        existing_path = r"C:\Amazon Music\Amazon Music.exe"
+        exists = lambda path: path == existing_path
+        start_apps = [
+            {"Name": "Amazon Music", "AppID": "Website.Package!AmazonMusic"},
+            {"Name": "Amazon Music", "AppID": existing_path},
+            {"Name": "Amazon Music", "AppID": r"C:\Missing\Amazon Music.exe"},
+            {"Name": "Amazon Music RPC", "AppID": r"C:\Amazon Music RPC\AmazonMusicRPC.exe"},
+        ]
+        appx_apps = [
+            {"PackageFamilyName": "AmazonMobileLLC.AmazonMusic_alt", "AppId": "AmazonMusic"},
+        ]
+        candidates = _launcher_candidates("Override.Package!App", start_apps, appx_apps, exists)
+        methods = [candidate.get("method") for candidate in candidates]
+        values = [candidate.get("value") for candidate in candidates]
+        missing_path_candidates = _start_app_candidates([{"Name": "Amazon Music", "AppID": r"C:\Missing\Amazon Music.exe"}], lambda path: False)
+        package_failure = _attempt_failure({"method": "auto-aumid", "value": "Missing.Package!App"}, 'Package was not found. 0x80073CF1')
+        old_path = os.environ.get("PATH")
+        os.environ["PATH"] = ""
+        try:
+            ps_json = _powershell_json("[PSCustomObject]@{Name='Amazon Music';AppID='Test.Package!App'} | ConvertTo-Json -Compress")
+        finally:
+            if old_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = old_path
+        powershell_path = _powershell_executable()
+        ok = (
+            _build_aumid("PackageFamily", "App") == "PackageFamily!App"
+            and values[:4] == ["Override.Package!App", "Website.Package!AmazonMusic", existing_path, "AmazonMobileLLC.AmazonMusic_alt!AmazonMusic"]
+            and methods[:4] == ["override-aumid", "auto-aumid", "auto-exe", "auto-aumid"]
+            and candidates[-1].get("method") == "hardcoded-store"
+            and candidates[-1].get("value") == APP_USER_MODEL_ID
+            and isinstance(amazon_music_launcher_candidates("Override.Package!App"), list)
+            and not missing_path_candidates
+            and "package was not found" in package_failure.lower()
+            and LAUNCH_FAILURE_HELP.startswith("Could not launch Amazon Music")
+            and "--remote-debugging-port={port}" in inspect.getsource(_launch_aumid)
+            and "--remote-debugging-port={port}" in inspect.getsource(_launch_exe)
+            and (os.path.isabs(powershell_path) or powershell_path.lower() == "powershell.exe")
+            and ps_json and ps_json[0].get("AppID") == "Test.Package!App"
+            and '["powershell"' not in inspect.getsource(_launch_aumid)
+        )
+        results.append(_result("Amazon DevTools launcher discovery", ok, "Launcher candidates cover override, Start Apps, Appx, executable paths, and Store fallback"))
+    except Exception as e:
+        results.append(_result("Amazon DevTools launcher discovery", False, str(e)))
+
+    try:
+        import inspect
         import main
         unavailable = {"enabled": True, "status": "unavailable", "detail": "DevTools unavailable"}
         error = {"enabled": True, "status": "error", "detail": "Socket failed"}
         launching = {"enabled": True, "status": "launching", "detail": "Starting Amazon Music"}
         restarting = {"enabled": True, "status": "restarting", "detail": "Restarting Amazon Music"}
         waiting = main._devtools_no_track_state(True, {"enabled": True, "status": "no_match", "detail": "No title"})
+        source = inspect.getsource(main.rpc_loop)
         ok = (
             main._devtools_no_track_state(True, unavailable) == unavailable
             and main._devtools_no_track_state(True, error) == error
             and main._devtools_no_track_state(True, launching) == launching
             and main._devtools_no_track_state(True, restarting) == restarting
             and waiting.get("status") == "waiting"
+            and "amazon_running_hint" in source
+            and "None if amazon_running_hint is False else get_track_sync()" in source
         )
         results.append(_result("Amazon DevTools diagnostics state", ok, "Unavailable, launch, restart, and error states are preserved without a track"))
     except Exception as e:
@@ -462,9 +749,28 @@ def run_self_tests(log_dir, diagnostics_path):
     try:
         import diagnostics_ui
         cards = diagnostics_ui._build_cards({}, load_config(), {"value": "Unavailable", "state": "bad"})
-        results.append(_result("Diagnostics cards", len(cards) == 8, f"{len(cards)} cards"))
+        ok = len(cards) == 9 and any(card.get("label") == "Source" for card in cards)
+        results.append(_result("Diagnostics cards", ok, f"{len(cards)} cards"))
     except Exception as e:
         results.append(_result("Diagnostics cards", False, str(e)))
+
+    try:
+        from status_summary import metadata_source_summary
+        private = metadata_source_summary({"privacy": {"hidden": True, "reason": "Keyword filter"}}, {})
+        amazon = metadata_source_summary({"track": {"status": "playing", "title": "Song"}, "amazon_devtools": {"status": "found", "title": "Song"}}, {"amazon_devtools_enabled": True})
+        paused = metadata_source_summary({"track": {"status": "paused", "title": "Song"}}, {})
+        notify = metadata_source_summary({"track": {"status": "playing", "title": "Song"}, "notification": {"title": "Song"}}, {"notification_enrichment_enabled": True})
+        smtc = metadata_source_summary({"track": {"status": "playing", "title": "Song"}}, {})
+        ok = (
+            private.get("label") == "Private"
+            and amazon.get("label") == "Amazon Metadata"
+            and paused.get("label") == "Paused"
+            and notify.get("label") == "Notification Fallback"
+            and smtc.get("label") == "SMTC Fallback"
+        )
+        results.append(_result("Metadata source summary", ok, "Source labels cover privacy, Amazon, notification, SMTC, and pause states"))
+    except Exception as e:
+        results.append(_result("Metadata source summary", False, str(e)))
 
     try:
         import diagnostics_ui
@@ -484,6 +790,75 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Diagnostics snapshot", False, str(e)))
 
     try:
+        import inspect
+        from media_reader import get_track_sync
+        params = inspect.signature(get_track_sync).parameters
+        source = inspect.getsource(get_track_sync)
+        ok = (
+            "timeout" in params
+            and params["timeout"].default <= 3
+            and "asyncio.wait_for" in source
+            and "asyncio.TimeoutError" in source
+        )
+        results.append(_result("SMTC fallback timeout", ok, "Fallback media reads cannot freeze the RPC loop when Amazon Music is closed"))
+    except Exception as e:
+        results.append(_result("SMTC fallback timeout", False, str(e)))
+
+    try:
+        import diagnostics_ui
+        import inspect
+        fd, report_path = tempfile.mkstemp(prefix="amrpc_diag_report_", suffix=".zip", dir=CONFIG_DIR)
+        os.close(fd)
+        diagnostics_ui._write_diagnostics_report(report_path, include_tests=False)
+        with zipfile.ZipFile(report_path, "r") as archive:
+            names = set(archive.namelist())
+            report = json.loads(archive.read("report.json").decode("utf-8"))
+        os.remove(report_path)
+        ok = (
+            {"report.json", "config.redacted.json", "diagnostics.redacted.json"}.issubset(names)
+            and "source_summary" in report
+            and "create_file_dialog" not in inspect.getsource(diagnostics_ui._Api.export_diagnostics_report)
+        )
+        results.append(_result("Diagnostics export", ok, "Diagnostics ZIP includes redacted state, config, logs, source, and launcher data"))
+    except Exception as e:
+        results.append(_result("Diagnostics export", False, str(e)))
+
+    try:
+        import settings_ui
+        import inspect
+        existing = {**DEFAULTS, "listenbrainz_token": "old-token", "lastfm_session_key": "old-session"}
+        exported = settings_ui._settings_export_payload({**existing, "listenbrainz_token": "secret-token"}, False)
+        exported_with_tokens = settings_ui._settings_export_payload({**existing, "listenbrainz_token": "secret-token"}, True)
+        imported = settings_ui._settings_import_config(
+            {"include_tokens": False, "config": {"listenbrainz_token": "new-token", "start_minimized": False, "amazon_music_link_region": "de"}},
+            existing,
+        )
+        imported_with_tokens = settings_ui._settings_import_config(
+            {"include_tokens": True, "config": {"listenbrainz_token": "new-token"}},
+            existing,
+        )
+        ok = (
+            "listenbrainz_token" not in exported.get("config", {})
+            and exported_with_tokens.get("config", {}).get("listenbrainz_token") == "secret-token"
+            and imported.get("listenbrainz_token") == "old-token"
+            and imported.get("start_minimized") is False
+            and imported.get("amazon_music_link_region") == "de"
+            and imported_with_tokens.get("listenbrainz_token") == "new-token"
+            and "create_file_dialog" not in inspect.getsource(settings_ui._Api.export_settings)
+            and "create_file_dialog" not in inspect.getsource(settings_ui._Api.import_settings)
+        )
+        results.append(_result("Settings backup restore", ok, "Settings export redacts tokens unless requested and import preserves tokens by default"))
+    except Exception as e:
+        results.append(_result("Settings backup restore", False, str(e)))
+
+    try:
+        from windows_file_dialog import _ps_literal
+        ok = _ps_literal("a'b") == "'a''b'"
+        results.append(_result("Windows file dialogs", ok, "External file picker quoting is available"))
+    except Exception as e:
+        results.append(_result("Windows file dialogs", False, str(e)))
+
+    try:
         import settings_ui
         html = (
             settings_ui.HTML_TEMPLATE
@@ -496,10 +871,12 @@ def run_self_tests(log_dir, diagnostics_path):
             html.index('<div class="card-title">Amazon Metadata</div>'),
             html.index('<div class="card-title">Song Link</div>'),
             html.index('<div class="card-title">Privacy</div>'),
+            html.index('<div class="card-title">Game Mode</div>'),
             html.index('<div class="card-title">Custom Album Art</div>'),
             html.index('<div class="card-title">Startup & Presence</div>'),
             html.index('<div class="card-title">Fallback Metadata</div>'),
             html.index('<div class="card-title">Discord Client ID</div>'),
+            html.index('<div class="card-title">Settings Backup</div>'),
         ]
         ok = (
             "What\\\\'s new" not in script
@@ -514,6 +891,17 @@ def run_self_tests(log_dir, diagnostics_path):
             and "Amazon Music region" in html
             and "onSongLinkProviderChange" in script
             and "Show listen button" in html
+            and "amazon_music_launcher_override" in script
+            and "amazonLauncherOverride" in script
+            and "Advanced Amazon Music launcher" in html
+            and "Choose Launcher" in html
+            and "loadLauncherCandidates" in script
+            and "testLauncherOverride" in script
+            and "game_mode_enabled" in script
+            and "gameModeEnabled" in script
+            and "game_mode_processes" in script
+            and "gameModeProcesses" in script
+            and "Suppress automatic wrong-song picker popups" in html
             and "Auto-restart Amazon Music" in html
             and "Reads Windows notifications locally" in html
             and "Only Amazon Music notification text is used" in html
@@ -527,6 +915,14 @@ def run_self_tests(log_dir, diagnostics_path):
             and "Token saved. Paste a new token to replace it." in script
             and "clearScrobblingTokens" in script
             and "clear_scrobbling_tokens" in script
+            and "Settings Backup" in html
+            and "exportSettings" in script
+            and "importSettings" in script
+            and "sourceStrip" in html
+            and "renderSourceSummary" in script
+            and "renderWizard" in script
+            and "wizardNext" in script
+            and "wizardBack" in script
             and "closeMetadataWarning" in script
             and "acceptMetadataWarning" in script
             and "window.confirm" not in script

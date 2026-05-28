@@ -63,8 +63,11 @@ async def get_current_track():
     return await _get_media_info(session)
 
 
-def get_track_sync():
-    return asyncio.run(get_current_track())
+def get_track_sync(timeout=2.5):
+    try:
+        return asyncio.run(asyncio.wait_for(get_current_track(), timeout))
+    except asyncio.TimeoutError:
+        return None
 
 
 if __name__ == "__main__":

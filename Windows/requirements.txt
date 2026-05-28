@@ -2,7 +2,7 @@ winsdk
 pypresence
 requests
 Pillow
-pystray
+PySide6-Essentials
 pywebview
 pylast
 liblistenbrainz

@@ -14,6 +14,8 @@ REPO = "eripum9/Amazon-Music-Discord-RPC"
 RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases"
 SHA256_RE = re.compile(r"\b[a-fA-F0-9]{64}\b")
+PYINSTALLER_ENV_PREFIXES = ("_PYI_", "PYINSTALLER_")
+PYINSTALLER_ENV_KEYS = {"_MEIPASS2"}
 
 
 def _parse_version(tag):
@@ -101,6 +103,20 @@ def _extract_sha256(body, asset_name=""):
     return found[0][1]
 
 
+def _ps_literal(value):
+    return "'" + str(value or "").replace("'", "''") + "'"
+
+
+def _clean_launch_env(base=None):
+    env = dict(base or os.environ)
+    for key in list(env):
+        upper = key.upper()
+        value = str(env.get(key, ""))
+        if upper in PYINSTALLER_ENV_KEYS or upper.startswith(PYINSTALLER_ENV_PREFIXES) or "_MEI" in value:
+            env.pop(key, None)
+    return env
+
+
 def _release_url(data):
     if data.get("html_url"):
         return data.get("html_url")
@@ -135,6 +151,34 @@ def verify_file_sha256(path, expected_sha256):
     return actual
 
 
+def launch_installer(installer_path, wait_for_pid=None):
+    launch_env = _clean_launch_env()
+    if wait_for_pid:
+        try:
+            pid = int(wait_for_pid)
+        except (TypeError, ValueError):
+            pid = 0
+        script = f"""
+$installer = {_ps_literal(installer_path)}
+$workingDir = {_ps_literal(os.path.dirname(installer_path))}
+$pidToWait = {pid}
+if ($pidToWait -gt 0) {{
+    while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{
+        Start-Sleep -Milliseconds 400
+    }}
+}}
+Get-ChildItem Env: | Where-Object {{ $_.Name -like '_PYI_*' -or $_.Name -like 'PYINSTALLER_*' -or $_.Name -eq '_MEIPASS2' -or $_.Value -like '*_MEI*' }} | ForEach-Object {{ Remove-Item -Path ('Env:' + $_.Name) -ErrorAction SilentlyContinue }}
+Start-Process -FilePath $installer -WorkingDirectory $workingDir
+"""
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-Command", script],
+            creationflags=0x08000000,
+            env=launch_env,
+        )
+        return
+    subprocess.Popen([installer_path], cwd=os.path.dirname(installer_path) or None, creationflags=0x08000000, env=launch_env)
+
+
 def check_for_update():
     try:
         resp = requests.get(RELEASES_URL, timeout=10)
@@ -153,7 +197,7 @@ def check_for_update():
     return False, None, None, "", RELEASES_PAGE, ""
 
 
-def prompt_for_update(latest_ver, download_url, changelog="", release_url=None, expected_sha256=""):
+def prompt_for_update(latest_ver, download_url, changelog="", release_url=None, expected_sha256="", defer_until_exit=False):
     MB_YESNO = 0x04
     MB_ICONQUESTION = 0x20
     MB_ICONWARNING = 0x30
@@ -199,7 +243,7 @@ def prompt_for_update(latest_ver, download_url, changelog="", release_url=None, 
     )
     if run_result != IDYES:
         return None
-    subprocess.Popen([installer_path], creationflags=0x08000000)
+    launch_installer(installer_path, os.getpid() if defer_until_exit else None)
     return installer_path
 
 

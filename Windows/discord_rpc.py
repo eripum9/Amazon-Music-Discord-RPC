@@ -23,12 +23,25 @@ def _discord_asset_text(album_name, title):
     return "Unknown Album"
 
 
+def _button_signature(buttons):
+    if not buttons:
+        return ""
+    parts = []
+    for button in buttons:
+        if isinstance(button, dict):
+            parts.append(f"{button.get('label', '')}={button.get('url', '')}")
+        else:
+            parts.append(str(button))
+    return "|".join(parts)
+
+
 class DiscordRPC:
     def __init__(self, client_id):
         self.client_id = client_id
         self.rpc = Presence(client_id)
         self.connected = False
         self._last_track_key = None
+        self._last_button_signature = None
         self._backoff = 3
         self._next_retry = 0
 
@@ -65,6 +78,13 @@ class DiscordRPC:
             return
 
         track_key = f"{title}|{artist}"
+        button_signature = _button_signature(buttons)
+        if self._last_button_signature is not None and button_signature != self._last_button_signature:
+            try:
+                self.rpc.clear()
+                time.sleep(0.35)
+            except Exception:
+                pass
 
         activity = {
             "type": ActivityType.LISTENING.value,
@@ -93,6 +113,8 @@ class DiscordRPC:
 
         if buttons:
             activity["buttons"] = buttons
+        elif self._last_button_signature:
+            activity["buttons"] = []
 
         payload = {
             "cmd": "SET_ACTIVITY",
@@ -109,6 +131,7 @@ class DiscordRPC:
                 print(f"[RPC] Now showing: {title} by {artist} | {album_name or 'no album'}")
                 print(f"[RPC] Response: {resp}")
                 self._last_track_key = track_key
+            self._last_button_signature = button_signature
         except Exception as e:
             print(f"[RPC] Update failed: {e}")
             traceback.print_exc()
@@ -120,6 +143,7 @@ class DiscordRPC:
         try:
             self.rpc.clear()
             self._last_track_key = None
+            self._last_button_signature = None
             print("[RPC] Presence cleared.")
         except Exception as e:
             print(f"[RPC] Clear failed: {e}")

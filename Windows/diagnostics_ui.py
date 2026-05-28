@@ -2,11 +2,15 @@
 import base64
 import json
 import os
+import platform
 import sys
 import time
 import webbrowser
+import zipfile
+from datetime import datetime
 import webview
 from config import load_config, load_config_for_update, save_config, CONFIG_DIR, CONFIG_PATH, APP_VERSION, redact_data, redact_text
+from status_summary import metadata_source_summary
 
 if getattr(sys, 'frozen', False):
     _BUNDLE_DIR = sys._MEIPASS
@@ -119,6 +123,64 @@ def _scrobble_label(status):
     }.get(status, "Unknown")
 
 
+def _report_system_info():
+    return {
+        "app_version": APP_VERSION,
+        "python": sys.version,
+        "platform": platform.platform(),
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "config_path": CONFIG_PATH,
+        "diagnostics_path": DIAGNOSTICS_PATH,
+        "log_path": LOG_PATH,
+    }
+
+
+def _report_launcher_candidates(config):
+    try:
+        from amazon_devtools import amazon_music_launcher_candidates
+        return amazon_music_launcher_candidates(config.get("amazon_music_launcher_override", ""))
+    except Exception as e:
+        return [{"error": str(e)}]
+
+
+def _write_diagnostics_report(path, include_tests=True):
+    config = load_config()
+    state = _read_state()
+    report = {
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "system": _report_system_info(),
+        "source_summary": metadata_source_summary(state, config),
+        "notification_access": _notification_access(),
+        "launcher_candidates": _report_launcher_candidates(config),
+    }
+    if include_tests:
+        try:
+            from self_tests import run_self_tests
+            report["self_tests"] = run_self_tests(CONFIG_DIR, DIAGNOSTICS_PATH)
+        except Exception as e:
+            report["self_tests"] = [{"name": "Self-tests", "status": "fail", "detail": str(e)}]
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("report.json", json.dumps(redact_data(report, config), indent=2))
+        archive.writestr("config.redacted.json", json.dumps(redact_data(config, config), indent=2))
+        archive.writestr("diagnostics.redacted.json", json.dumps(redact_data(state, config), indent=2))
+        for item in _log_files():
+            log_path = item.get("path", "")
+            label = os.path.basename(item.get("label", "") or os.path.basename(log_path) or "console.log")
+            try:
+                if os.path.exists(log_path):
+                    size = os.path.getsize(log_path)
+                    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                        if size > 1000000:
+                            f.seek(max(0, size - 1000000))
+                        content = f.read()
+                else:
+                    content = ""
+                archive.writestr(f"logs/{label}", redact_text(content, config))
+            except Exception as e:
+                archive.writestr(f"logs/{label}.error.txt", redact_text(str(e), config))
+    return path
+
+
 def _build_cards(state, config, access):
     updated_at = state.get("updated_at")
     stale = not updated_at or time.time() - updated_at > 12
@@ -151,6 +213,9 @@ def _build_cards(state, config, access):
         cards.append({"label": "Amazon Music", "value": status.title(), "detail": title, "state": card_state})
     else:
         cards.append({"label": "Amazon Music", "value": "Not detected", "detail": "No active Amazon Music session found", "state": "bad" if state and not stale else "muted"})
+
+    source = metadata_source_summary(state, config)
+    cards.append({"label": "Source", "value": source["label"], "detail": source["detail"], "state": source["state"]})
 
     if config.get("notification_enrichment_enabled"):
         detail = access.get("detail") or "Notification fallback enabled"
@@ -186,6 +251,8 @@ def _build_cards(state, config, access):
             detail = devtools_warning
             if card_state == "good":
                 card_state = "warn"
+        if amazon_devtools.get("method"):
+            detail = f"{detail} ({amazon_devtools.get('method')})"
         cards.append({"label": "Amazon Metadata", "value": value, "detail": detail, "state": card_state})
     else:
         cards.append({"label": "Amazon Metadata", "value": "Off", "detail": "Enhanced metadata disabled", "state": "muted"})
@@ -565,6 +632,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
     <div class="actions">
       <button onclick="refreshNow()">Refresh</button>
+      <button onclick="exportReport()">Export Report</button>
       <button onclick="openTests()">Tests</button>
       <button onclick="pywebview.api.open_report_issue()">Report Issue</button>
       <button id="pauseBtn" onclick="togglePause()">Pause Log</button>
@@ -742,6 +810,21 @@ function refreshNow() {
   refreshLog();
 }
 
+async function exportReport() {
+  const status = document.getElementById('logStatus');
+  status.textContent = 'Exporting report';
+  try {
+    const result = await pywebview.api.export_diagnostics_report();
+    if (result && result.ok) {
+      status.textContent = 'Report exported';
+    } else {
+      status.textContent = (result && result.error) || 'Export cancelled';
+    }
+  } catch (e) {
+    status.textContent = 'Export failed';
+  }
+}
+
 async function openTests() {
   const result = await pywebview.api.get_test_warning();
   if (result && result.dismissed) {
@@ -870,6 +953,18 @@ class _Api:
 
     def open_report_issue(self):
         webbrowser.open(ISSUES_URL)
+
+    def export_diagnostics_report(self):
+        filename = f"AmazonMusicRPC_Diagnostics_{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
+        try:
+            from windows_file_dialog import save_file_dialog
+            path = save_file_dialog("Export Amazon Music RPC diagnostics", filename, "zip", "ZIP files (*.zip)|*.zip|All files (*.*)|*.*", CONFIG_DIR)
+            if not path:
+                return {"ok": False, "error": "Export cancelled."}
+            _write_diagnostics_report(path)
+            return {"ok": True, "path": path}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     def get_test_warning(self):
         return {"dismissed": bool(load_config().get("diagnostics_tests_warning_dismissed"))}

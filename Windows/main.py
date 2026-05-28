@@ -9,17 +9,16 @@ import ctypes
 import json
 import tempfile
 import io
-
-from PIL import Image
-import pystray
+import csv
 
 from media_reader import get_track_sync
 from notification_reader import get_notification_track_sync, is_new_notification
 from album_art import get_album_art, search_tracks, find_custom_album_art
-from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, launch_amazon_music_devtools, restart_amazon_music_devtools, amazon_music_is_running, devtools_environment
+from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, launch_amazon_music_devtools, restart_amazon_music_devtools, amazon_music_is_running, devtools_environment, amazon_music_search_link
 from amazon_status_overlay import AmazonStatusOverlay
 from discord_rpc import DiscordRPC
 from config import load_config, load_config_for_update, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION, redact_data
+from status_summary import metadata_source_summary
 from updater import check_for_update, prompt_for_update
 
 if getattr(sys, 'frozen', False):
@@ -33,6 +32,7 @@ ICON_PATH = os.path.join(BUNDLE_DIR, "icon.png")
 MUTEX_NAME = "AmazonMusicRPC_SingleInstance"
 EVENT_NAME = "AmazonMusicRPC_OpenSettings"
 EVENT_NAME_LAUNCH_AMAZON = "AmazonMusicRPC_LaunchAmazonDevtools"
+EVENT_NAME_COMMAND = "AmazonMusicRPC_TrayCommand"
 
 if getattr(sys, 'frozen', False):
     LOG_DIR = os.path.join(os.environ.get("APPDATA", ""), "AmazonMusicRPC")
@@ -40,8 +40,10 @@ else:
     LOG_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(LOG_DIR, "console.log")
 DIAGNOSTICS_PATH = os.path.join(LOG_DIR, "diagnostics.json")
+COMMAND_PATH = os.path.join(LOG_DIR, "tray_command.json")
 MAX_OLD_LOGS = 5
 DEVTOOLS_REPAIR_GRACE_SECONDS = 7
+PLAYBACK_TIME_DRIFT_SECONDS = 1.0
 
 rpc_thread = None
 rpc_running = False
@@ -60,6 +62,10 @@ _current_track_raw = None
 active_rpc = None
 _track_timing_cache = {}
 _privacy_restart_lock = threading.Lock()
+_game_mode_process_cache = {"signature": "", "checked_at": 0.0, "active": False}
+_game_mode_suppressed_keys = set()
+_last_tray_state = {}
+_last_tray_signature = ""
 
 RPC_CONFIG_KEYS = {
     "discord_client_id",
@@ -82,6 +88,8 @@ RPC_CONFIG_KEYS = {
     "privacy_private_session",
     "privacy_blocked_keywords",
     "privacy_disable_scrobbling",
+    "game_mode_enabled",
+    "game_mode_processes",
 }
 
 
@@ -90,6 +98,7 @@ def _rpc_config_snapshot(config):
 
 
 def _write_diagnostics_state(**state):
+    global _last_tray_state
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
         payload = {
@@ -102,6 +111,8 @@ def _write_diagnostics_state(**state):
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
         os.replace(tmp_path, DIAGNOSTICS_PATH)
+        _last_tray_state = payload
+        update_tray_state(payload)
     except Exception:
         pass
 
@@ -114,18 +125,53 @@ def _read_diagnostics_state():
         return {}
 
 
+def _write_tray_command(command):
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        payload = {"command": command, "created_at": time.time()}
+        tmp_path = COMMAND_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        os.replace(tmp_path, COMMAND_PATH)
+        return True
+    except Exception as e:
+        print(f"[Tray] Could not write command: {e}")
+        return False
+
+
+def _signal_primary_command(command):
+    if not _write_tray_command(command):
+        return False
+    kernel32 = ctypes.windll.kernel32
+    event = kernel32.OpenEventW(0x2, False, EVENT_NAME_COMMAND)
+    if event:
+        kernel32.SetEvent(event)
+        kernel32.CloseHandle(event)
+        return True
+    return False
+
+
+def _read_tray_command():
+    try:
+        with open(COMMAND_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        return str(payload.get("command") or "")
+    except Exception:
+        return ""
+
+
 def _set_private_session_enabled(enabled):
     global current_config
     enabled = bool(enabled)
     config = load_config_for_update()
     if bool(config.get("privacy_private_session")) == enabled:
         current_config = config
-        update_tray_menu()
+        update_tray_state()
         return
     config["privacy_private_session"] = enabled
     save_config(config)
     current_config = config
-    update_tray_menu()
+    update_tray_state()
     if enabled:
         clear_current_presence("private session enabled")
 
@@ -254,6 +300,90 @@ def _apply_wrong_song_choice(choice, raw_key, title, artist, config):
         _resolve_missing_title("", artist, raw_key)
 
 
+def _normalise_process_name(value):
+    text = str(value or "").strip().strip('"').strip("'").lower()
+    text = os.path.basename(text)
+    return text
+
+
+def _configured_game_mode_processes(config):
+    value = config.get("game_mode_processes", "")
+    if isinstance(value, list):
+        parts = value
+    else:
+        parts = str(value or "").replace(";", ",").replace("\n", ",").split(",")
+    return {name for name in (_normalise_process_name(part) for part in parts) if name}
+
+
+def _game_mode_matches_processes(configured, running_names):
+    running = set()
+    for name in running_names:
+        clean = _normalise_process_name(name)
+        if clean:
+            running.add(clean)
+            stem, ext = os.path.splitext(clean)
+            if ext == ".exe" and stem:
+                running.add(stem)
+    for name in configured:
+        clean = _normalise_process_name(name)
+        if clean in running:
+            return True
+        stem, ext = os.path.splitext(clean)
+        if ext == ".exe" and stem in running:
+            return True
+        if not ext and f"{clean}.exe" in running:
+            return True
+    return False
+
+
+def _running_process_names():
+    try:
+        completed = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            creationflags=0x08000000,
+        )
+        if completed.returncode != 0:
+            return set()
+        names = set()
+        for row in csv.reader(completed.stdout.splitlines()):
+            if row:
+                name = _normalise_process_name(row[0])
+                if name:
+                    names.add(name)
+        return names
+    except Exception:
+        return set()
+
+
+def _game_mode_active(config):
+    if bool(config.get("game_mode_enabled")):
+        return True
+    configured = _configured_game_mode_processes(config)
+    if not configured:
+        return False
+    signature = "\n".join(sorted(configured))
+    now = time.time()
+    if _game_mode_process_cache.get("signature") == signature and now - _game_mode_process_cache.get("checked_at", 0.0) < 5:
+        return bool(_game_mode_process_cache.get("active"))
+    active = _game_mode_matches_processes(configured, _running_process_names())
+    _game_mode_process_cache.update({"signature": signature, "checked_at": now, "active": active})
+    return active
+
+
+def _should_prompt_wrong_song(raw_key, title, artist, config):
+    if not _same_track_field(title, artist):
+        return False
+    if _game_mode_active(config):
+        if raw_key not in _game_mode_suppressed_keys:
+            print("[GameMode] Wrong-song picker suppressed.")
+            _game_mode_suppressed_keys.add(raw_key)
+        return False
+    return True
+
+
 def _prompt_wrong_song_async(raw_key, title, artist, config, force=False):
     global _picker_pending_key
     if not force and raw_key in _wrong_song_prompted_keys:
@@ -321,14 +451,29 @@ def _track_start_ts(track, raw_key, use_cache=True):
     return start_ts
 
 
+def _track_position(track):
+    try:
+        position = track.get("position")
+        if position is not None and float(position) >= 0:
+            return float(position)
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
 def _playing_start_ts(track, raw_key, last_start_ts, paused_position, resumed_from_pause):
-    if resumed_from_pause and track.get("position") is not None:
+    position = _track_position(track)
+    if resumed_from_pause and position is not None:
         return _track_start_ts(track, raw_key, use_cache=False), None, True
     if last_start_ts is None:
-        if track.get("position") is not None:
+        if position is not None:
             return _track_start_ts(track, raw_key), None, False
         if paused_position is not None:
             return int(time.time() - paused_position), None, False
+    elif position is not None:
+        drift = position - (time.time() - last_start_ts)
+        if abs(drift) > PLAYBACK_TIME_DRIFT_SECONDS:
+            return _track_start_ts(track, raw_key, use_cache=False), None, True
     return last_start_ts, paused_position, False
 
 
@@ -627,21 +772,24 @@ def rpc_loop():
         "listenbrainz": listenbrainz_state,
     }
 
-    def _selected_button_link():
+    def _selected_button_link(title="", artist=""):
         if song_link_provider == "deezer":
             return "Listen on Deezer", last_deezer_track_link
-        return "Listen on Amazon Music", last_amazon_track_link
+        return "Listen on Amazon Music", last_amazon_track_link or amazon_music_search_link(title, artist, amazon_music_link_region)
 
-    def _link_buttons():
+    def _link_buttons(title="", artist=""):
         if not song_link_enabled:
             return None
-        label, url = _selected_button_link()
+        label, url = _selected_button_link(title, artist)
         if not url:
             return None
         return [{"label": label, "url": url}]
 
-    def _diagnostics_track_link():
-        _, url = _selected_button_link()
+    def _diagnostics_track_link(track=None):
+        track = track or {}
+        title = track.get("title", "")
+        artist = track.get("artist", "")
+        _, url = _selected_button_link(title, artist)
         return url or last_amazon_track_link or last_deezer_track_link or ""
 
     def _ensure_deezer_button_link(title, artist):
@@ -662,7 +810,7 @@ def rpc_loop():
             presence_visible=presence,
             album_art_url=last_art_url or "",
             album_name=last_album_name or "",
-            track_link=_diagnostics_track_link(),
+            track_link=_diagnostics_track_link(track),
             notification_enabled=notification_enrichment_enabled,
             notification=_current_notif_data,
             amazon_devtools=_current_amazon_devtools,
@@ -684,6 +832,7 @@ def rpc_loop():
             track = None
 
             devtools_found = False
+            amazon_running_hint = None
             if amazon_devtools_enabled:
                 try:
                     devtools = get_devtools_track_sync(amazon_music_link_region)
@@ -709,7 +858,8 @@ def rpc_loop():
                             print(f"[Amazon] Metadata: '{track.get('title', '')}' by '{track.get('artist', '')}'")
                     elif devtools.get("status") == "unavailable" and amazon_devtools_auto_launch:
                         now = time.time()
-                        if not amazon_music_is_running():
+                        amazon_running_hint = amazon_music_is_running()
+                        if not amazon_running_hint:
                             devtools_unavailable_since = None
                             devtools_restart_attempted = False
                             _current_amazon_devtools = {
@@ -731,8 +881,10 @@ def rpc_loop():
                                         "status": "restarting",
                                         "detail": "Restarted Amazon Music for metadata",
                                         "source": "amazon_devtools",
+                                        "method": restart_result.get("method", ""),
                                     }
-                                    print("[Amazon] Restarted Amazon Music for metadata.")
+                                    method = f" ({restart_result.get('method')})" if restart_result.get("method") else ""
+                                    print(f"[Amazon] Restarted Amazon Music for metadata{method}.")
                                 else:
                                     _current_amazon_devtools = {
                                         "enabled": True,
@@ -757,7 +909,7 @@ def rpc_loop():
 
             _notif_album = None
             if not devtools_found:
-                track = get_track_sync()
+                track = None if amazon_running_hint is False else get_track_sync()
 
             if notification_enrichment_enabled and not devtools_found and track and track["status"] == "playing":
                 try:
@@ -850,16 +1002,18 @@ def rpc_loop():
                     elif last_start_ts is not None:
                         paused_position = time.time() - last_start_ts
                         last_start_ts = None
-                    buttons = _link_buttons()
                     title_parts = last_track_key.split("|", 1)
+                    paused_title = title_parts[0]
+                    paused_artist = title_parts[1] if len(title_parts) > 1 else ""
+                    buttons = _link_buttons(paused_title, paused_artist)
                     pause_start_ts = None
                     pause_duration = 0
                     if paused_position is not None:
                         pause_start_ts = int(time.time() - paused_position)
                         pause_duration = last_deezer_duration or (track["duration"] if track["duration"] else 0)
                     rpc.update(
-                        title=title_parts[0],
-                        artist=title_parts[1] if len(title_parts) > 1 else "",
+                        title=paused_title,
+                        artist=paused_artist,
                         album_art_url=last_art_url,
                         album_name=last_album_name,
                         start_ts=pause_start_ts,
@@ -870,8 +1024,8 @@ def rpc_loop():
                     )
                     presence_visible = True
                     paused_track = dict(track)
-                    paused_track["title"] = title_parts[0]
-                    paused_track["artist"] = title_parts[1] if len(title_parts) > 1 else ""
+                    paused_track["title"] = paused_title
+                    paused_track["artist"] = paused_artist
                     paused_track["album"] = last_album_name or track.get("album", "")
                     _update_state(track=paused_track, presence=True)
                 elif presence_visible:
@@ -889,7 +1043,7 @@ def rpc_loop():
             resumed_from_pause = last_playback_status == "paused"
 
             title, artist, resolved_applied = _apply_resolved_cache(raw_key, title, artist)
-            if not resolved_applied and _same_track_field(title, artist):
+            if not resolved_applied and _should_prompt_wrong_song(raw_key, title, artist, config):
                 _prompt_wrong_song_async(raw_key, title, artist, config)
 
             if title and not artist:
@@ -1067,7 +1221,10 @@ def rpc_loop():
                 resumed_from_pause,
             )
             if time_refreshed:
-                print(f"[RPC] Resumed, refreshed playback time for: {title}")
+                if resumed_from_pause:
+                    print(f"[RPC] Resumed, refreshed playback time for: {title}")
+                else:
+                    print(f"[RPC] Playback position changed, refreshed timer for: {title}")
 
             if _notif_album:
                 last_album_name = _notif_album
@@ -1085,8 +1242,10 @@ def rpc_loop():
             last_art_url, last_album_name = _apply_custom_album_override(
                 config, last_art_url, last_album_name, _notif_album, track.get("album", "")
             )
+            if track.get("_amazon_track_link"):
+                last_amazon_track_link = track.get("_amazon_track_link")
 
-            buttons = _link_buttons()
+            buttons = _link_buttons(title, artist)
 
             state_track = dict(track)
             state_track["title"] = title
@@ -1178,13 +1337,13 @@ def start_rpc():
     rpc_running = True
     rpc_thread = threading.Thread(target=rpc_loop, daemon=True)
     rpc_thread.start()
-    update_tray_menu()
+    update_tray_state()
 
 
 def stop_rpc():
     global rpc_running
     rpc_running = False
-    update_tray_menu()
+    update_tray_state()
 
 
 def restart_rpc():
@@ -1217,6 +1376,17 @@ def toggle_private_session(icon=None, item=None):
         clear_current_presence("private session enabled")
     restart_rpc()
     print(f"[Privacy] Private session {'enabled' if config['privacy_private_session'] else 'disabled'}.")
+
+
+def toggle_game_mode(icon=None, item=None):
+    global current_config
+    config = load_config_for_update()
+    config["game_mode_enabled"] = not bool(config.get("game_mode_enabled"))
+    save_config(config)
+    current_config = config
+    restart_rpc()
+    update_tray_state()
+    print(f"[GameMode] {'Enabled' if config['game_mode_enabled'] else 'Disabled'}.")
 
 
 def open_settings(icon=None, item=None):
@@ -1283,7 +1453,8 @@ def launch_amazon_devtools_from_tray(icon=None, item=None):
     def _worker():
         result = launch_amazon_music_devtools()
         if result.get("ok"):
-            print("[Amazon] Launched Amazon Music for metadata.")
+            method = f" ({result.get('method')})" if result.get("method") else ""
+            print(f"[Amazon] Launched Amazon Music for metadata{method}.")
         else:
             print(f"[Amazon] Could not launch metadata mode: {result.get('error')}")
 
@@ -1313,7 +1484,7 @@ def _prompt_and_install_update(latest_ver, download_url, changelog="", release_u
     MB_TOPMOST = 0x40000
     print(f"[Update] Downloading installer...")
     try:
-        installer_path = prompt_for_update(latest_ver, download_url, changelog, release_url, expected_sha256)
+        installer_path = prompt_for_update(latest_ver, download_url, changelog, release_url, expected_sha256, defer_until_exit=True)
         if not installer_path:
             return
         print(f"[Update] Downloaded to {installer_path}, launching installer...")
@@ -1340,6 +1511,120 @@ def _check_for_update_and_prompt():
         print(f"[Update] Check failed: {e}")
 
 
+def toggle_rpc_from_tray(icon=None, item=None):
+    if rpc_running:
+        stop_rpc()
+    else:
+        start_rpc()
+
+
+def _handle_tray_command(command):
+    command = str(command or "").strip().lower()
+    if command == "settings":
+        open_settings()
+    elif command == "diagnostics":
+        open_diagnostics()
+    elif command == "launch_amazon":
+        launch_amazon_devtools_from_tray()
+    elif command == "private":
+        toggle_private_session()
+    elif command == "game_mode":
+        toggle_game_mode()
+    elif command == "wrong_song":
+        wrong_song_handler()
+    elif command == "toggle_rpc":
+        toggle_rpc_from_tray()
+    elif command == "updates":
+        threading.Thread(target=_check_for_update_and_prompt, daemon=True).start()
+    elif command == "quit" and tray_icon is not None:
+        on_quit(tray_icon, None)
+
+
+def _tray_trim(value, limit=58):
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    while "  " in text:
+        text = text.replace("  ", " ")
+    if len(text) <= limit:
+        return text
+    return text[:max(0, limit - 3)].rstrip() + "..."
+
+
+def _format_tray_seconds(value):
+    try:
+        total = int(float(value))
+    except (TypeError, ValueError):
+        return ""
+    if total < 0:
+        return ""
+    minutes, seconds = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
+def _tray_time_label(track):
+    position = _format_tray_seconds(track.get("position"))
+    duration = _format_tray_seconds(track.get("duration"))
+    if position and duration:
+        return f"{position} / {duration}"
+    return duration or position
+
+
+def _tray_line(label, value, limit=64):
+    text = _tray_trim(value, max(10, limit - len(label) - 2))
+    return f"{label}: {text}" if text else f"{label}: -"
+
+
+def _tray_menu_snapshot(state=None):
+    state = state if isinstance(state, dict) else (_last_tray_state or _read_diagnostics_state())
+    config = current_config if isinstance(current_config, dict) else {}
+    track = state.get("track") if isinstance(state.get("track"), dict) else {}
+    privacy = state.get("privacy") if isinstance(state.get("privacy"), dict) else {}
+    amazon = state.get("amazon_devtools") if isinstance(state.get("amazon_devtools"), dict) else {}
+    source = metadata_source_summary(state, config)
+    title = track.get("title") or ""
+    artist = track.get("artist") or ""
+    album = track.get("album") or state.get("album_name") or ""
+    track_link = state.get("track_link") or ""
+    presence_visible = bool(state.get("presence_visible"))
+    private = bool(config.get("privacy_private_session") or privacy.get("hidden"))
+    return {
+        "rpc": "On" if rpc_running else "Off",
+        "discord": str(state.get("discord_status") or ("connected" if active_rpc and active_rpc.connected else "waiting")).title(),
+        "presence": "Private" if private else ("Visible" if presence_visible else "Hidden"),
+        "source": source.get("label") or "Waiting",
+        "source_detail": source.get("detail") or "",
+        "title": title,
+        "artist": artist,
+        "album": album,
+        "time": _tray_time_label(track),
+        "track_link": track_link,
+        "has_track": bool(title or artist or album),
+        "private": private,
+        "devtools": "On" if config.get("amazon_devtools_enabled") else "Off",
+        "devtools_status": str(amazon.get("status") or ("off" if not config.get("amazon_devtools_enabled") else "waiting")).title(),
+        "game_mode": "On" if config.get("game_mode_enabled") else "Off",
+        "link_provider": str(config.get("song_link_provider") or "amazon").title(),
+    }
+
+
+def _tray_signature(snapshot):
+    keys = ("rpc", "discord", "presence", "source", "title", "artist", "album", "time", "track_link", "devtools", "devtools_status", "game_mode", "link_provider")
+    return "|".join(str(snapshot.get(key) or "") for key in keys)
+
+
+def _tray_icon_title(snapshot):
+    if snapshot.get("private"):
+        return "Amazon Music RPC - Private"
+    if snapshot.get("title"):
+        title = snapshot.get("title")
+        artist = snapshot.get("artist")
+        text = f"{title} - {artist}" if artist else title
+        return _tray_trim(text, 120)
+    return f"Amazon Music RPC - RPC {snapshot.get('rpc', 'Off')}"
+
+
 def on_quit(icon, item):
     global rpc_running, settings_proc, diagnostics_proc, status_overlay
     rpc_running = False
@@ -1352,36 +1637,30 @@ def on_quit(icon, item):
     if diagnostics_proc and diagnostics_proc.poll() is None:
         diagnostics_proc.terminate()
         diagnostics_proc = None
-    icon.stop()
+    if icon is not None and hasattr(icon, "stop"):
+        icon.stop()
 
 
-def update_tray_menu():
+def update_tray_state(state=None, force=False):
+    global _last_tray_state, _last_tray_signature
     if tray_icon is None:
         return
-    tray_icon.menu = build_menu()
-    tray_icon.update_menu()
+    if isinstance(state, dict):
+        _last_tray_state = state
+    snapshot = _tray_menu_snapshot(_last_tray_state)
+    signature = _tray_signature(snapshot)
+    if not force and signature == _last_tray_signature:
+        return
+    _last_tray_signature = signature
+    snapshot["tooltip"] = _tray_icon_title(snapshot)
+    try:
+        tray_icon.update_state(snapshot)
+    except Exception:
+        pass
 
 
-def build_menu():
-    status_text = "Status: Running" if rpc_running else "Status: Stopped"
-    return pystray.Menu(
-        pystray.MenuItem(status_text, None, enabled=False),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Settings", open_settings),
-        pystray.MenuItem("Diagnostics", open_diagnostics),
-        pystray.MenuItem("Launch Amazon Music", launch_amazon_devtools_from_tray),
-        pystray.MenuItem("Private Session", toggle_private_session,
-                         checked=lambda item: bool(current_config.get("privacy_private_session"))),
-        pystray.MenuItem("Wrong Song?", wrong_song_handler),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Start RPC", lambda icon, item: start_rpc(),
-                         visible=lambda item: not rpc_running),
-        pystray.MenuItem("Stop RPC", lambda icon, item: stop_rpc(),
-                         visible=lambda item: rpc_running),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Check for Updates", lambda icon, item: threading.Thread(target=_check_for_update_and_prompt, daemon=True).start()),
-        pystray.MenuItem("Quit", on_quit),
-    )
+def update_tray_menu(state=None, force=False):
+    update_tray_state(state, force)
 
 
 def main():
@@ -1395,6 +1674,12 @@ def main():
     if '--diagnostics' in sys.argv:
         from diagnostics_ui import DiagnosticsWindow
         DiagnosticsWindow().show()
+        return
+
+    if '--tray-command' in sys.argv:
+        idx = sys.argv.index('--tray-command')
+        command = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else ""
+        _signal_primary_command(command)
         return
 
     if '--launch-amazon-devtools' in sys.argv:
@@ -1437,20 +1722,28 @@ def main():
 
     settings_event = kernel32.CreateEventW(None, False, False, EVENT_NAME)
     launch_amazon_event = kernel32.CreateEventW(None, False, False, EVENT_NAME_LAUNCH_AMAZON)
+    tray_command_event = kernel32.CreateEventW(None, False, False, EVENT_NAME_COMMAND)
 
     def _watch_for_settings_signal():
-        while rpc_running or tray_icon:
+        while True:
             result = kernel32.WaitForSingleObject(settings_event, 1000)
             if result == 0:
                 open_settings()
     threading.Thread(target=_watch_for_settings_signal, daemon=True).start()
 
     def _watch_for_launch_amazon_signal():
-        while rpc_running or tray_icon:
+        while True:
             result = kernel32.WaitForSingleObject(launch_amazon_event, 1000)
             if result == 0:
                 launch_amazon_devtools_from_tray()
     threading.Thread(target=_watch_for_launch_amazon_signal, daemon=True).start()
+
+    def _watch_for_tray_command_signal():
+        while True:
+            result = kernel32.WaitForSingleObject(tray_command_event, 1000)
+            if result == 0:
+                _handle_tray_command(_read_tray_command())
+    threading.Thread(target=_watch_for_tray_command_signal, daemon=True).start()
 
     _rotate_logs()
     sys.stdout = _LogTee(sys.__stdout__, LOG_PATH)
@@ -1461,17 +1754,20 @@ def main():
     config_exists = os.path.exists(CONFIG_PATH)
     current_config = load_config()
 
-    if os.path.exists(ICON_PATH):
-        icon_image = Image.open(ICON_PATH)
-    else:
-        icon_image = Image.new("RGB", (64, 64), (0, 168, 150))
+    from qt_tray_ui import QtTrayController
 
-    tray_icon = pystray.Icon(
-        "AmazonMusicRPC",
-        icon_image,
-        "Amazon Music RPC",
-        menu=build_menu(),
-    )
+    tray_callbacks = {
+        "settings": open_settings,
+        "diagnostics": open_diagnostics,
+        "launch_amazon": launch_amazon_devtools_from_tray,
+        "private": toggle_private_session,
+        "game_mode": toggle_game_mode,
+        "wrong_song": wrong_song_handler,
+        "toggle_rpc": toggle_rpc_from_tray,
+        "updates": lambda: threading.Thread(target=_check_for_update_and_prompt, daemon=True).start(),
+        "quit": lambda: on_quit(tray_icon, None),
+    }
+    tray_icon = QtTrayController(ICON_PATH, tray_callbacks)
 
     start_rpc()
     _sync_status_overlay(current_config)
@@ -1488,6 +1784,7 @@ def main():
     if should_open_settings:
         open_settings()
 
+    update_tray_state(force=True)
     tray_icon.run()
 
     stop_rpc()

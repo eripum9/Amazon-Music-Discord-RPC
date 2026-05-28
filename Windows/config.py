@@ -16,7 +16,7 @@ if not os.environ.get("APPDATA") or getattr(sys, "frozen", False) is False:
     CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
     CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
-APP_VERSION = "3.1.3"
+APP_VERSION = "3.3.3"
 AMAZON_MUSIC_LINK_REGIONS = (
     "com",
     "de",
@@ -52,9 +52,12 @@ DEFAULTS = {
     "notification_enrichment_enabled": False,
     "amazon_devtools_enabled": False,
     "amazon_devtools_auto_launch": False,
+    "amazon_music_launcher_override": "",
     "privacy_private_session": False,
     "privacy_blocked_keywords": "",
     "privacy_disable_scrobbling": True,
+    "game_mode_enabled": False,
+    "game_mode_processes": "",
     "intro_seen": False,
     "enhanced_metadata_prompt_seen": False,
     "diagnostics_tests_warning_dismissed": False,
