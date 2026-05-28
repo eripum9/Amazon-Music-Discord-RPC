@@ -3,7 +3,7 @@
 import os
 
 from PySide6.QtCore import QObject, QPoint, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QCursor, QFontMetrics, QIcon, QPainter, QPen
+from PySide6.QtGui import QCursor, QColor, QFontMetrics, QIcon, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractButton,
@@ -154,11 +154,11 @@ class ToggleSwitch(QAbstractButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         bg = COLORS["accent"] if self.isChecked() else "#666666"
-        painter.setBrush(bg)
-        painter.setPen(QPen("#777777" if not self.isChecked() else COLORS["accent"], 1))
+        painter.setBrush(QColor(bg))
+        painter.setPen(QPen(QColor("#777777" if not self.isChecked() else COLORS["accent"]), 1))
         painter.drawRoundedRect(1, 1, 46, 24, 12, 12)
         knob_x = 24 if self.isChecked() else 3
-        painter.setBrush("#ffffff")
+        painter.setBrush(QColor("#ffffff"))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(knob_x, 3, 20, 20)
 

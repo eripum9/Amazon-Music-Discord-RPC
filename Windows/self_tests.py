@@ -666,18 +666,22 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Amazon DevTools launcher discovery", False, str(e)))
 
     try:
+        import inspect
         import main
         unavailable = {"enabled": True, "status": "unavailable", "detail": "DevTools unavailable"}
         error = {"enabled": True, "status": "error", "detail": "Socket failed"}
         launching = {"enabled": True, "status": "launching", "detail": "Starting Amazon Music"}
         restarting = {"enabled": True, "status": "restarting", "detail": "Restarting Amazon Music"}
         waiting = main._devtools_no_track_state(True, {"enabled": True, "status": "no_match", "detail": "No title"})
+        source = inspect.getsource(main.rpc_loop)
         ok = (
             main._devtools_no_track_state(True, unavailable) == unavailable
             and main._devtools_no_track_state(True, error) == error
             and main._devtools_no_track_state(True, launching) == launching
             and main._devtools_no_track_state(True, restarting) == restarting
             and waiting.get("status") == "waiting"
+            and "amazon_running_hint" in source
+            and "None if amazon_running_hint is False else get_track_sync()" in source
         )
         results.append(_result("Amazon DevTools diagnostics state", ok, "Unavailable, launch, restart, and error states are preserved without a track"))
     except Exception as e:
@@ -769,6 +773,21 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Diagnostics snapshot", ok, "Snapshot API returned expected fields"))
     except Exception as e:
         results.append(_result("Diagnostics snapshot", False, str(e)))
+
+    try:
+        import inspect
+        from media_reader import get_track_sync
+        params = inspect.signature(get_track_sync).parameters
+        source = inspect.getsource(get_track_sync)
+        ok = (
+            "timeout" in params
+            and params["timeout"].default <= 3
+            and "asyncio.wait_for" in source
+            and "asyncio.TimeoutError" in source
+        )
+        results.append(_result("SMTC fallback timeout", ok, "Fallback media reads cannot freeze the RPC loop when Amazon Music is closed"))
+    except Exception as e:
+        results.append(_result("SMTC fallback timeout", False, str(e)))
 
     try:
         import diagnostics_ui

@@ -832,6 +832,7 @@ def rpc_loop():
             track = None
 
             devtools_found = False
+            amazon_running_hint = None
             if amazon_devtools_enabled:
                 try:
                     devtools = get_devtools_track_sync(amazon_music_link_region)
@@ -857,7 +858,8 @@ def rpc_loop():
                             print(f"[Amazon] Metadata: '{track.get('title', '')}' by '{track.get('artist', '')}'")
                     elif devtools.get("status") == "unavailable" and amazon_devtools_auto_launch:
                         now = time.time()
-                        if not amazon_music_is_running():
+                        amazon_running_hint = amazon_music_is_running()
+                        if not amazon_running_hint:
                             devtools_unavailable_since = None
                             devtools_restart_attempted = False
                             _current_amazon_devtools = {
@@ -907,7 +909,7 @@ def rpc_loop():
 
             _notif_album = None
             if not devtools_found:
-                track = get_track_sync()
+                track = None if amazon_running_hint is False else get_track_sync()
 
             if notification_enrichment_enabled and not devtools_found and track and track["status"] == "playing":
                 try:
