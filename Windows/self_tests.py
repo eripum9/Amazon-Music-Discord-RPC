@@ -629,6 +629,8 @@ def run_self_tests(log_dir, diagnostics_path):
             _launcher_candidates,
             _launch_aumid,
             _launch_exe,
+            _powershell_executable,
+            _powershell_json,
             _start_app_candidates,
             amazon_music_launcher_candidates,
         )
@@ -648,6 +650,16 @@ def run_self_tests(log_dir, diagnostics_path):
         values = [candidate.get("value") for candidate in candidates]
         missing_path_candidates = _start_app_candidates([{"Name": "Amazon Music", "AppID": r"C:\Missing\Amazon Music.exe"}], lambda path: False)
         package_failure = _attempt_failure({"method": "auto-aumid", "value": "Missing.Package!App"}, 'Package was not found. 0x80073CF1')
+        old_path = os.environ.get("PATH")
+        os.environ["PATH"] = ""
+        try:
+            ps_json = _powershell_json("[PSCustomObject]@{Name='Amazon Music';AppID='Test.Package!App'} | ConvertTo-Json -Compress")
+        finally:
+            if old_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = old_path
+        powershell_path = _powershell_executable()
         ok = (
             _build_aumid("PackageFamily", "App") == "PackageFamily!App"
             and values[:4] == ["Override.Package!App", "Website.Package!AmazonMusic", existing_path, "AmazonMobileLLC.AmazonMusic_alt!AmazonMusic"]
@@ -660,6 +672,9 @@ def run_self_tests(log_dir, diagnostics_path):
             and LAUNCH_FAILURE_HELP.startswith("Could not launch Amazon Music")
             and "--remote-debugging-port={port}" in inspect.getsource(_launch_aumid)
             and "--remote-debugging-port={port}" in inspect.getsource(_launch_exe)
+            and (os.path.isabs(powershell_path) or powershell_path.lower() == "powershell.exe")
+            and ps_json and ps_json[0].get("AppID") == "Test.Package!App"
+            and '["powershell"' not in inspect.getsource(_launch_aumid)
         )
         results.append(_result("Amazon DevTools launcher discovery", ok, "Launcher candidates cover override, Start Apps, Appx, executable paths, and Store fallback"))
     except Exception as e:

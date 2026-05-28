@@ -108,6 +108,34 @@ def _ps_literal(value):
     return "'" + str(value or "").replace("'", "''") + "'"
 
 
+def _powershell_executable():
+    windows_dir = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+    candidates = [
+        os.path.join(windows_dir, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+        os.path.join(windows_dir, "Sysnative", "WindowsPowerShell", "v1.0", "powershell.exe"),
+        os.path.join(windows_dir, "SysWOW64", "WindowsPowerShell", "v1.0", "powershell.exe"),
+        "powershell.exe",
+    ]
+    for candidate in candidates:
+        if os.path.isabs(candidate):
+            if os.path.exists(candidate):
+                return candidate
+        else:
+            return candidate
+    return "powershell.exe"
+
+
+def _run_powershell(script, timeout=8):
+    return subprocess.run(
+        [_powershell_executable(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=timeout,
+        creationflags=0x08000000 if os.name == "nt" else 0,
+    )
+
+
 def _json_items(value):
     if isinstance(value, list):
         return [item for item in value if isinstance(item, dict)]
@@ -118,14 +146,7 @@ def _json_items(value):
 
 def _powershell_json(script, timeout=8):
     try:
-        completed = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout,
-            creationflags=0x08000000 if os.name == "nt" else 0,
-        )
+        completed = _run_powershell(script, timeout)
     except Exception:
         return []
     if completed.returncode != 0:
@@ -317,14 +338,7 @@ Add-Type -TypeDefinition $code
 [AppActivator]::Activate({_ps_literal(app_id)}, {_ps_literal(args)})
 """
     try:
-        completed = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=15,
-            creationflags=0x08000000 if os.name == "nt" else 0,
-        )
+        completed = _run_powershell(script, 15)
     except Exception as e:
         return {"ok": False, "error": str(e)}
     if completed.returncode != 0:
@@ -872,14 +886,7 @@ $targets = @(Get-Process | Where-Object {{
 if ($targets.Count -gt 0) {{ "true" }} else {{ "false" }}
 """
     try:
-        completed = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=5,
-            creationflags=0x08000000 if os.name == "nt" else 0,
-        )
+        completed = _run_powershell(script, 5)
     except Exception:
         return False
     return completed.returncode == 0 and _clean(completed.stdout).lower() == "true"
@@ -912,14 +919,7 @@ foreach ($id in $ids) {{
 ($ids -join ',')
 """
     try:
-        completed = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=15,
-            creationflags=0x08000000 if os.name == "nt" else 0,
-        )
+        completed = _run_powershell(script, 15)
     except Exception as e:
         return {"ok": False, "error": str(e), "stopped": []}
     stopped = [item for item in _clean(completed.stdout).split(",") if item]
@@ -994,14 +994,7 @@ $shortcut.IconLocation = {_ps_literal(icon_path)}
 $shortcut.Save()
 """
     try:
-        completed = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=15,
-            creationflags=0x08000000 if os.name == "nt" else 0,
-        )
+        completed = _run_powershell(script, 15)
     except Exception as e:
         return {"ok": False, "error": str(e), **amazon_devtools_launcher_state()}
     if completed.returncode != 0:
