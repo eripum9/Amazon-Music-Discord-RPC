@@ -1,2 +1,5 @@
--r requirements.txt
 pytest
+requests
+pypresence
+PySide6-Essentials
+cryptography
