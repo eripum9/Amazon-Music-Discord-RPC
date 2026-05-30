@@ -12,6 +12,7 @@ def test_contribution_and_issue_templates_exist():
         ".github/ISSUE_TEMPLATE/enhanced_metadata.yml",
         ".github/ISSUE_TEMPLATE/android_beta.yml",
         "docs/android-beta.md",
+        "docs/platform-roadmap.md",
     ]
     missing = [path for path in required if not (ROOT / path).exists()]
     assert missing == []
@@ -41,4 +42,15 @@ def test_readme_keeps_landing_and_support_links():
     assert "wiki/troubleshooting" in readme
     assert "wiki/privacy" in readme
     assert "docs/android-beta.md" in readme
+    assert "docs/platform-roadmap.md" in readme
     assert "CONTRIBUTING.md" in readme
+
+
+def test_platform_roadmap_keeps_android_before_linux_and_macos():
+    roadmap = (ROOT / "docs/platform-roadmap.md").read_text(encoding="utf-8")
+    android = (ROOT / "docs/android-beta.md").read_text(encoding="utf-8")
+    assert "Do not start Linux or macOS implementation work until Android" in roadmap
+    assert "research/linux-metadata-rpc" in roadmap
+    assert "research/macos-metadata-rpc" in roadmap
+    assert "Repeatable Emulator Test Path" in android
+    assert "Beta Exit Criteria" in android

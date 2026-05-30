@@ -29,6 +29,7 @@ Do not post Last.fm session keys, ListenBrainz tokens, Discord tokens, config fi
 - `beta/androidbuild` is the Android beta branch.
 - `fix/*` branches are for focused issue fixes.
 - `beta/*` branches are for experimental work that should not affect stable Windows releases.
+- Linux and macOS work should not start until the platform roadmap criteria are met.
 
 ## Windows Development
 
@@ -84,3 +85,5 @@ Keep pull requests focused. A good pull request includes:
 - Any compatibility notes for enhanced metadata, fallback mode, or Android beta behavior
 
 For Windows releases, follow [docs/release-checklist.md](docs/release-checklist.md).
+
+For platform expansion, follow [docs/platform-roadmap.md](docs/platform-roadmap.md).

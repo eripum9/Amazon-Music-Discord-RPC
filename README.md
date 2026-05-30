@@ -136,6 +136,12 @@ python Windows/main.py
 
 No Python installation needed if using the Installer.
 
+## Platform Status
+
+- Windows is the stable supported platform.
+- Android is experimental on the `beta/androidbuild` branch and tracked in [docs/android-beta.md](docs/android-beta.md).
+- Linux and macOS are research-only until Android has a usable beta. The platform feasibility notes are in [docs/platform-roadmap.md](docs/platform-roadmap.md).
+
 ## Building
 
 Windows app source, dependencies, icons, and packaging files live in `Windows/` so the root can stay shared for docs and future platform work.
