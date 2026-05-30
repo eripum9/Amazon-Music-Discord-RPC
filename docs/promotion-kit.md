@@ -20,12 +20,25 @@ GitHub: https://github.com/eripum9/Amazon-Music-Discord-RPC
 
 Feedback, bug reports, and feature ideas are welcome.
 
+Bug reports and feature requests: https://github.com/eripum9/Amazon-Music-Discord-RPC/issues
+
 ## Update Post Ideas
 
 - I added Last.fm and ListenBrainz scrobbling to my Amazon Music Discord Rich Presence app.
 - Amazon Music on Discord now supports album art, pause state, and privacy mode.
 - I made a Windows installer for my open-source Amazon Music Discord status app.
 - Amazon Music Discord presence now has stronger privacy controls and safer update verification.
+- I started an Android beta for Amazon Music Discord presence and need testers.
+
+## Support Link To Use
+
+Point users to GitHub issues for bug reports and feature requests:
+
+https://github.com/eripum9/Amazon-Music-Discord-RPC/issues
+
+For setup problems, point users to the troubleshooting guide:
+
+https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/troubleshooting/
 
 ## Demo Video Title
 

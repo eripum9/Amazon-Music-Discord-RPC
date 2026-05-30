@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Troubleshooting guide
+    url: https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/troubleshooting/
+    about: Check common fixes before opening a bug.
+  - name: Privacy and security
+    url: https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/privacy/
+    about: Learn what the app reads, stores, and sends.

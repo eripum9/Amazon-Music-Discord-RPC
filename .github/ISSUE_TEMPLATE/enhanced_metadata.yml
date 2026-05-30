@@ -1,0 +1,81 @@
+name: Enhanced metadata issue
+description: Report Amazon Music launch, DevTools, artwork, timing, or metadata problems.
+title: "[Enhanced metadata]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Enhanced metadata is currently built and tested for the Microsoft Store version of Amazon Music. The website installer may reject metadata launch flags.
+  - type: input
+    id: app_version
+    attributes:
+      label: Amazon Music RPC version
+      description: Example: v3.3.3
+    validations:
+      required: true
+  - type: dropdown
+    id: amazon_music_source
+    attributes:
+      label: Amazon Music install source
+      options:
+        - Microsoft Store
+        - Amazon website installer
+        - I am not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: launch_path
+    attributes:
+      label: How Amazon Music was launched
+      options:
+        - From Amazon Music RPC
+        - From Windows Start menu
+        - From taskbar shortcut
+        - Already running before Amazon Music RPC started
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: auto_repair
+    attributes:
+      label: Automatic metadata repair
+      options:
+        - Enabled
+        - Disabled
+        - I am not sure
+    validations:
+      required: true
+  - type: input
+    id: launcher_override
+    attributes:
+      label: Advanced launcher override
+      description: Paste only the launcher ID or path if you set one. Leave empty if automatic detection is used.
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics details
+      description: Paste the Amazon Music, Amazon Metadata, Source, and Recent log details. Remove private account names and tokens.
+      value: |
+        - Amazon Music card:
+        - Amazon Metadata card:
+        - Source card:
+        - Launcher detail:
+        - Recent log lines:
+    validations:
+      required: true
+  - type: textarea
+    id: track
+    attributes:
+      label: Track example
+      description: Include title, artist, album, expected artwork/link, and what Discord showed instead.
+      placeholder: |
+        Expected:
+        Actual:
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true

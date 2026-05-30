@@ -1,0 +1,48 @@
+name: Feature request
+description: Suggest an improvement or new feature.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What should the app do?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Discord Rich Presence
+        - Enhanced metadata
+        - Fallback metadata
+        - Album art or links
+        - Privacy controls
+        - Scrobbling
+        - Settings UI
+        - Diagnostics or logs
+        - Installer or updater
+        - Android beta
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: context
+    attributes:
+      label: Extra context
+      description: Add screenshots, mockups, or examples if useful.

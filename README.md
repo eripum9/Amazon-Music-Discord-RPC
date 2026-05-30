@@ -7,7 +7,7 @@ Show your Amazon Music songs, album art, pause state, and live timer on Discord.
 ![Windows](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-yellow)
 
-[Download for Windows](https://github.com/eripum9/Amazon-Music-Discord-RPC/releases/latest) · [View Demo](https://eripum9.github.io/Amazon-Music-Discord-RPC/#demo) · [Troubleshooting](https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/troubleshooting/) · [Privacy & Security](https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/privacy/)
+[Download for Windows](https://github.com/eripum9/Amazon-Music-Discord-RPC/releases/latest) · [View Demo](https://eripum9.github.io/Amazon-Music-Discord-RPC/#demo) · [Troubleshooting](https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/troubleshooting/) · [Privacy & Security](https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/privacy/) · [Android Beta](docs/android-beta.md)
 
 - ✅ Shows current song, artist, album art, and timer on Discord
 - ✅ Works with Amazon Music for Windows
@@ -176,6 +176,13 @@ Windows\build.bat
 Settings are stored in `%APPDATA%\AmazonMusicRPC\config.json` (or the `Windows/` directory when running from source).
 
 Right-click the tray icon and select **Settings** to open the configuration window.
+
+## Support And Contributions
+
+- Use the [troubleshooting guide](https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/troubleshooting/) for common setup issues.
+- Use GitHub issues for bugs, enhanced metadata problems, Android beta reports, and feature requests.
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+- Android beta status is tracked in [docs/android-beta.md](docs/android-beta.md).
 
 ## Credits
 

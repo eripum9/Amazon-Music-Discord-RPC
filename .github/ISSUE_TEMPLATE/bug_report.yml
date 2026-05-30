@@ -1,0 +1,111 @@
+name: Bug report
+description: Report a problem with the Windows app.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Do not include Last.fm session keys, ListenBrainz tokens, Discord tokens, or unredacted config files.
+  - type: input
+    id: app_version
+    attributes:
+      label: Amazon Music RPC version
+      description: Example: v3.3.3
+    validations:
+      required: true
+  - type: dropdown
+    id: install_type
+    attributes:
+      label: Install type
+      options:
+        - Windows installer
+        - Running from source
+        - Portable or copied build
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: windows_version
+    attributes:
+      label: Windows version
+      description: Example: Windows 11 24H2
+    validations:
+      required: true
+  - type: dropdown
+    id: amazon_music_source
+    attributes:
+      label: Amazon Music source
+      options:
+        - Microsoft Store
+        - Amazon website installer
+        - Unknown
+        - Not related to Amazon Music launch
+    validations:
+      required: true
+  - type: dropdown
+    id: enhanced_metadata
+    attributes:
+      label: Enhanced metadata
+      options:
+        - Enabled
+        - Disabled
+        - I am not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: fallback_metadata
+    attributes:
+      label: Fallback metadata or notification enrichment
+      options:
+        - SMTC fallback only
+        - Notification enrichment enabled
+        - Both disabled
+        - I am not sure
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the exact actions that trigger the issue.
+      placeholder: |
+        1. Start Amazon Music RPC
+        2. Open Amazon Music
+        3. Play a track
+        4. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics checklist
+      description: Open Diagnostics, export or copy the relevant state, and remove private data before posting.
+      value: |
+        - Discord card:
+        - RPC card:
+        - Amazon Music card:
+        - Amazon Metadata card:
+        - Source card:
+        - Privacy card:
+        - Recent log lines:
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Extra context
+      description: Screenshots are useful, but blur private names, tokens, and account details.
