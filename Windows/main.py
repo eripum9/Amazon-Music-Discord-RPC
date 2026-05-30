@@ -9,7 +9,6 @@ import ctypes
 import json
 import tempfile
 import io
-import csv
 
 from media_reader import get_track_sync
 from notification_reader import get_notification_track_sync, is_new_notification
@@ -18,6 +17,8 @@ from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, la
 from amazon_status_overlay import AmazonStatusOverlay
 from discord_rpc import DiscordRPC
 from config import load_config, load_config_for_update, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION, redact_data
+from metadata_pipeline import apply_art_result, apply_devtools_source, base_track_for_devtools, diagnostics_track_link, link_buttons, merge_notification_metadata, should_lookup_deezer_button
+from rpc_state import GameModeState, ResolvedTrackStore, TrackTimingState, configured_game_mode_processes, devtools_no_track_state, duration_value, game_mode_matches_processes, hidden_privacy_track, normalise_process_name, normalised_text, privacy_keywords, privacy_match, running_process_names, same_track_field, track_info_payload, track_position
 from status_summary import metadata_source_summary
 from updater import check_for_update, prompt_for_update
 
@@ -43,7 +44,6 @@ DIAGNOSTICS_PATH = os.path.join(LOG_DIR, "diagnostics.json")
 COMMAND_PATH = os.path.join(LOG_DIR, "tray_command.json")
 MAX_OLD_LOGS = 5
 DEVTOOLS_REPAIR_GRACE_SECONDS = 7
-PLAYBACK_TIME_DRIFT_SECONDS = 1.0
 
 rpc_thread = None
 rpc_running = False
@@ -54,16 +54,19 @@ diagnostics_proc = None
 status_overlay = None
 _picker_lock = threading.Lock()
 _picker_pending_key = None
-_resolved_cache = {}
-_resolved_track_info = {}
-_skipped_keys = set()
+_resolved_store = ResolvedTrackStore()
+_resolved_cache = _resolved_store.cache
+_resolved_track_info = _resolved_store.track_info
+_skipped_keys = _resolved_store.skipped_keys
 _wrong_song_prompted_keys = set()
 _current_track_raw = None
 active_rpc = None
-_track_timing_cache = {}
+_timing_state = TrackTimingState()
+_track_timing_cache = _timing_state.cache
 _privacy_restart_lock = threading.Lock()
-_game_mode_process_cache = {"signature": "", "checked_at": 0.0, "active": False}
-_game_mode_suppressed_keys = set()
+_game_mode_state = GameModeState()
+_game_mode_process_cache = _game_mode_state.process_cache
+_game_mode_suppressed_keys = _game_mode_state.suppressed_keys
 _last_tray_state = {}
 _last_tray_signature = ""
 
@@ -202,58 +205,20 @@ def _sync_status_overlay(config=None):
         status_overlay = None
 
 
-def _privacy_keywords(config):
-    raw = config.get("privacy_blocked_keywords", "")
-    return [item.strip().lower() for item in raw.replace("\n", ",").split(",") if item.strip()]
-
-
-def _privacy_match(config, title="", artist="", album=""):
-    if config.get("privacy_private_session"):
-        return "Private session enabled"
-    haystack = f"{title} {artist} {album}".lower()
-    for keyword in _privacy_keywords(config):
-        if keyword in haystack:
-            return f"Matched privacy keyword: {keyword}"
-    return ""
-
-
-def _normalised_text(value):
-    return " ".join(str(value or "").strip().lower().split())
-
-
-def _same_track_field(left, right):
-    left = _normalised_text(left)
-    right = _normalised_text(right)
-    return bool(left and right and left == right)
-
-
-def _duration_value(value):
-    try:
-        return max(0, int(float(value or 0)))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _track_info_payload(track):
-    return {
-        "title": track.get("title", ""),
-        "artist": track.get("artist", ""),
-        "album": track.get("album", ""),
-        "art_url": track.get("art_url", ""),
-        "track_link": track.get("track_link", ""),
-        "duration": _duration_value(track.get("duration", 0)),
-    }
+_privacy_keywords = privacy_keywords
+_privacy_match = privacy_match
+_normalised_text = normalised_text
+_same_track_field = same_track_field
+_duration_value = duration_value
+_track_info_payload = track_info_payload
+_normalise_process_name = normalise_process_name
+_configured_game_mode_processes = configured_game_mode_processes
+_game_mode_matches_processes = game_mode_matches_processes
+_running_process_names = running_process_names
 
 
 def _store_resolved_track(raw_key, track):
-    if not isinstance(track, dict):
-        return
-    payload = _track_info_payload(track)
-    if raw_key:
-        _resolved_track_info[raw_key] = payload
-    resolved_key = f"{payload['title']}|{payload['artist']}"
-    if payload["title"] or payload["artist"]:
-        _resolved_track_info[resolved_key] = payload
+    _resolved_store.store_track(raw_key, track)
 
 
 def _apply_custom_album_override(config, art_url, album_name, *album_names):
@@ -264,30 +229,17 @@ def _apply_custom_album_override(config, art_url, album_name, *album_names):
 
 
 def _apply_resolved_cache(raw_key, title, artist):
-    resolved = _resolved_cache.get(raw_key)
-    if not resolved:
-        return title, artist, False
-    return resolved[0] or title, resolved[1] or artist, True
+    return _resolved_store.apply_cache(raw_key, title, artist)
 
 
 def _resolved_art(raw_key, title, artist, fallback_album=""):
-    info = _resolved_track_info.get(raw_key) or _resolved_track_info.get(f"{title}|{artist}")
-    if not info or not info.get("art_url"):
-        return None
-    return (
-        info.get("art_url", ""),
-        info.get("album", "") or fallback_album,
-        info.get("track_link", ""),
-        _duration_value(info.get("duration", 0)),
-    )
+    return _resolved_store.resolved_art(raw_key, title, artist, fallback_album)
 
 
 def _apply_wrong_song_choice(choice, raw_key, title, artist, config):
     if not choice:
         return
-    _resolved_cache.pop(raw_key, None)
-    _resolved_track_info.pop(raw_key, None)
-    _skipped_keys.discard(raw_key)
+    _resolved_store.clear_choice(raw_key)
     if choice == "artist":
         if not title:
             return
@@ -300,88 +252,19 @@ def _apply_wrong_song_choice(choice, raw_key, title, artist, config):
         _resolve_missing_title("", artist, raw_key)
 
 
-def _normalise_process_name(value):
-    text = str(value or "").strip().strip('"').strip("'").lower()
-    text = os.path.basename(text)
-    return text
-
-
-def _configured_game_mode_processes(config):
-    value = config.get("game_mode_processes", "")
-    if isinstance(value, list):
-        parts = value
-    else:
-        parts = str(value or "").replace(";", ",").replace("\n", ",").split(",")
-    return {name for name in (_normalise_process_name(part) for part in parts) if name}
-
-
-def _game_mode_matches_processes(configured, running_names):
-    running = set()
-    for name in running_names:
-        clean = _normalise_process_name(name)
-        if clean:
-            running.add(clean)
-            stem, ext = os.path.splitext(clean)
-            if ext == ".exe" and stem:
-                running.add(stem)
-    for name in configured:
-        clean = _normalise_process_name(name)
-        if clean in running:
-            return True
-        stem, ext = os.path.splitext(clean)
-        if ext == ".exe" and stem in running:
-            return True
-        if not ext and f"{clean}.exe" in running:
-            return True
-    return False
-
-
-def _running_process_names():
-    try:
-        completed = subprocess.run(
-            ["tasklist", "/FO", "CSV", "/NH"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-            creationflags=0x08000000,
-        )
-        if completed.returncode != 0:
-            return set()
-        names = set()
-        for row in csv.reader(completed.stdout.splitlines()):
-            if row:
-                name = _normalise_process_name(row[0])
-                if name:
-                    names.add(name)
-        return names
-    except Exception:
-        return set()
-
-
 def _game_mode_active(config):
-    if bool(config.get("game_mode_enabled")):
-        return True
-    configured = _configured_game_mode_processes(config)
-    if not configured:
-        return False
-    signature = "\n".join(sorted(configured))
-    now = time.time()
-    if _game_mode_process_cache.get("signature") == signature and now - _game_mode_process_cache.get("checked_at", 0.0) < 5:
-        return bool(_game_mode_process_cache.get("active"))
-    active = _game_mode_matches_processes(configured, _running_process_names())
-    _game_mode_process_cache.update({"signature": signature, "checked_at": now, "active": active})
-    return active
+    return _game_mode_state.active(config, _running_process_names)
 
 
 def _should_prompt_wrong_song(raw_key, title, artist, config):
-    if not _same_track_field(title, artist):
-        return False
-    if _game_mode_active(config):
-        if raw_key not in _game_mode_suppressed_keys:
-            print("[GameMode] Wrong-song picker suppressed.")
-            _game_mode_suppressed_keys.add(raw_key)
-        return False
-    return True
+    return _game_mode_state.should_prompt_wrong_song(
+        raw_key,
+        title,
+        artist,
+        config,
+        _running_process_names,
+        lambda: print("[GameMode] Wrong-song picker suppressed."),
+    )
 
 
 def _prompt_wrong_song_async(raw_key, title, artist, config, force=False):
@@ -423,71 +306,21 @@ def _prompt_wrong_song_async(raw_key, title, artist, config, force=False):
 
 
 def _cached_start_ts(raw_key):
-    cached = _track_timing_cache.get(raw_key)
-    if not cached:
-        return None
-    if time.time() - cached.get("updated_at", 0) > 45:
-        _track_timing_cache.pop(raw_key, None)
-        return None
-    return cached.get("start_ts")
+    return _timing_state.cached_start_ts(raw_key)
 
 
 def _track_start_ts(track, raw_key, use_cache=True):
-    position = track.get("position")
-    start_ts = None
-    try:
-        if position is not None and float(position) >= 0:
-            start_ts = int(time.time() - float(position))
-    except (TypeError, ValueError):
-        start_ts = None
-    if start_ts is None and use_cache:
-        start_ts = _cached_start_ts(raw_key) or int(time.time())
-    if start_ts is None:
-        start_ts = int(time.time())
-    _track_timing_cache[raw_key] = {
-        "start_ts": start_ts,
-        "updated_at": time.time(),
-    }
-    return start_ts
+    return _timing_state.track_start_ts(track, raw_key, use_cache)
 
 
-def _track_position(track):
-    try:
-        position = track.get("position")
-        if position is not None and float(position) >= 0:
-            return float(position)
-    except (TypeError, ValueError):
-        pass
-    return None
+_track_position = track_position
 
 
 def _playing_start_ts(track, raw_key, last_start_ts, paused_position, resumed_from_pause):
-    position = _track_position(track)
-    if resumed_from_pause and position is not None:
-        return _track_start_ts(track, raw_key, use_cache=False), None, True
-    if last_start_ts is None:
-        if position is not None:
-            return _track_start_ts(track, raw_key), None, False
-        if paused_position is not None:
-            return int(time.time() - paused_position), None, False
-    elif position is not None:
-        drift = position - (time.time() - last_start_ts)
-        if abs(drift) > PLAYBACK_TIME_DRIFT_SECONDS:
-            return _track_start_ts(track, raw_key, use_cache=False), None, True
-    return last_start_ts, paused_position, False
+    return _timing_state.playing_start_ts(track, raw_key, last_start_ts, paused_position, resumed_from_pause)
 
 
-def _devtools_no_track_state(enabled, current_state):
-    if not enabled:
-        return current_state
-    current_state = current_state if isinstance(current_state, dict) else {}
-    if current_state.get("status") in {"unavailable", "error", "launching", "restarting"}:
-        return current_state
-    return {
-        "enabled": True,
-        "status": "waiting",
-        "detail": "No Amazon Music metadata or SMTC fallback session",
-    }
+_devtools_no_track_state = devtools_no_track_state
 
 
 def _signal_primary_launch_amazon():
@@ -772,29 +605,31 @@ def rpc_loop():
         "listenbrainz": listenbrainz_state,
     }
 
-    def _selected_button_link(title="", artist=""):
-        if song_link_provider == "deezer":
-            return "Listen on Deezer", last_deezer_track_link
-        return "Listen on Amazon Music", last_amazon_track_link or amazon_music_search_link(title, artist, amazon_music_link_region)
-
     def _link_buttons(title="", artist=""):
-        if not song_link_enabled:
-            return None
-        label, url = _selected_button_link(title, artist)
-        if not url:
-            return None
-        return [{"label": label, "url": url}]
+        return link_buttons(
+            song_link_enabled,
+            song_link_provider,
+            amazon_music_link_region,
+            last_amazon_track_link,
+            last_deezer_track_link,
+            title,
+            artist,
+            amazon_music_search_link,
+        )
 
     def _diagnostics_track_link(track=None):
-        track = track or {}
-        title = track.get("title", "")
-        artist = track.get("artist", "")
-        _, url = _selected_button_link(title, artist)
-        return url or last_amazon_track_link or last_deezer_track_link or ""
+        return diagnostics_track_link(
+            track,
+            song_link_provider,
+            amazon_music_link_region,
+            last_amazon_track_link,
+            last_deezer_track_link,
+            amazon_music_search_link,
+        )
 
     def _ensure_deezer_button_link(title, artist):
         nonlocal last_deezer_track_link, last_deezer_duration
-        if song_link_provider != "deezer" or last_deezer_track_link or not title or not artist:
+        if not should_lookup_deezer_button(song_link_provider, last_deezer_track_link, title, artist):
             return
         _, _, deezer_link, deezer_duration = get_album_art(title, artist)
         last_deezer_track_link = deezer_link or ""
@@ -840,18 +675,13 @@ def rpc_loop():
                     if devtools.get("status") == "found":
                         devtools_unavailable_since = None
                         devtools_restart_attempted = False
-                        devtools_found = True
                         _current_notif_data = None
                         _notif_art_fetched_for = None
-                        track = {
-                            "title": "",
-                            "artist": "",
-                            "album": "",
-                            "status": "playing",
-                            "position": None,
-                            "duration": 0,
-                        }
-                        track, devtools_changed = apply_devtools_to_track(track, devtools)
+                        track, devtools_changed, devtools_found = apply_devtools_source(
+                            base_track_for_devtools(),
+                            devtools,
+                            apply_devtools_to_track,
+                        )
                         amazon_metadata_key = f"{track.get('title', '')}|{track.get('artist', '')}|{track.get('album', '')}|{track.get('status', '')}"
                         if devtools_changed and amazon_metadata_key != last_amazon_metadata_key:
                             last_amazon_metadata_key = amazon_metadata_key
@@ -920,17 +750,8 @@ def rpc_loop():
                     _current_notif_data = notif
                     print(f"[Notif] New notification: '{notif['title']}' by '{notif['artist']}' — {notif['album']}")
                 if _current_notif_data:
-                    notif_title = (_current_notif_data["title"] or "").lower().strip()
-                    smtc_title = (track["title"] or "").lower().strip()
-                    if smtc_title and notif_title and (smtc_title == notif_title or smtc_title in notif_title or notif_title in smtc_title):
-                        if _current_notif_data["title"]:
-                            track["title"] = _current_notif_data["title"]
-                        if _current_notif_data["artist"]:
-                            track["artist"] = _current_notif_data["artist"]
-                        if _current_notif_data["album"]:
-                            track["album"] = _current_notif_data["album"]
-                            _notif_album = _current_notif_data["album"]
-                    else:
+                    track, _notif_album, keep_notification = merge_notification_metadata(track, _current_notif_data)
+                    if not keep_notification:
                         _current_notif_data = None
 
             if track is None:
@@ -969,14 +790,7 @@ def rpc_loop():
                     last_album_name = None
                     last_amazon_track_link = None
                     last_deezer_track_link = None
-                    hidden_track = {
-                        "title": "Hidden by privacy controls",
-                        "artist": "",
-                        "album": "",
-                        "status": track["status"],
-                        "position": track.get("position"),
-                        "duration": track.get("duration"),
-                    }
+                    hidden_track = hidden_privacy_track(track)
                     _update_state(track=hidden_track, presence=False, privacy_reason=privacy_reason)
                     time.sleep(3)
                     continue
@@ -1087,14 +901,7 @@ def rpc_loop():
                     last_art_fetch_key = None
                     last_amazon_track_link = None
                     last_deezer_track_link = None
-                    hidden_track = {
-                        "title": "Hidden by privacy controls",
-                        "artist": "",
-                        "album": "",
-                        "status": track["status"],
-                        "position": track.get("position"),
-                        "duration": track.get("duration"),
-                    }
+                    hidden_track = hidden_privacy_track(track)
                     last_playback_status = "playing"
                     _update_state(track=hidden_track, presence=False, privacy_reason=privacy_reason)
                     time.sleep(3)
@@ -1119,27 +926,13 @@ def rpc_loop():
                 last_deezer_track_link = None
 
                 resolved = _resolved_art(raw_key, title, artist, track.get("album", ""))
-                if resolved:
-                    last_art_url, last_album_name, last_deezer_track_link, last_deezer_duration = resolved
-                elif track.get("_amazon_art_url"):
-                    last_art_url = track.get("_amazon_art_url")
-                    last_album_name = track.get("album", "")
-                    last_amazon_track_link = track.get("_amazon_track_link", "")
-                    last_deezer_track_link = None
-                    last_deezer_duration = track.get("duration") or 0
-                else:
-                    last_art_url, last_album_name, last_deezer_track_link, last_deezer_duration = get_album_art(title, artist)
-                    last_amazon_track_link = None
-                if _notif_album:
-                    last_album_name = _notif_album
-                elif not last_album_name and track["album"]:
-                    last_album_name = track["album"]
-                if track.get("_amazon_art_url"):
-                    last_art_url = track.get("_amazon_art_url")
-                    last_album_name = track.get("album", "") or last_album_name
-                    last_deezer_duration = track.get("duration") or last_deezer_duration
-                if track.get("_amazon_track_link"):
-                    last_amazon_track_link = track.get("_amazon_track_link")
+                fetched = None if resolved or track.get("_amazon_art_url") else get_album_art(title, artist)
+                art_state = apply_art_result(track, resolved, fetched, _notif_album, last_album_name)
+                last_art_url = art_state["art_url"]
+                last_album_name = art_state["album"]
+                last_deezer_track_link = art_state["deezer_link"]
+                last_deezer_duration = art_state["duration"]
+                last_amazon_track_link = art_state["amazon_link"]
                 _ensure_deezer_button_link(title, artist)
                 last_art_url, last_album_name = _apply_custom_album_override(
                     config, last_art_url, last_album_name, _notif_album, track.get("album", "")
@@ -1171,27 +964,13 @@ def rpc_loop():
                                 pass
             elif raw_key in _resolved_cache and last_art_fetch_key != track_art_key:
                 resolved = _resolved_art(raw_key, title, artist, track.get("album", ""))
-                if resolved:
-                    last_art_url, last_album_name, last_deezer_track_link, last_deezer_duration = resolved
-                elif track.get("_amazon_art_url"):
-                    last_art_url = track.get("_amazon_art_url")
-                    last_album_name = track.get("album", "")
-                    last_amazon_track_link = track.get("_amazon_track_link", "")
-                    last_deezer_track_link = None
-                    last_deezer_duration = track.get("duration") or 0
-                else:
-                    last_art_url, last_album_name, last_deezer_track_link, last_deezer_duration = get_album_art(title, artist)
-                    last_amazon_track_link = None
-                if _notif_album:
-                    last_album_name = _notif_album
-                elif not last_album_name and track["album"]:
-                    last_album_name = track["album"]
-                if track.get("_amazon_art_url"):
-                    last_art_url = track.get("_amazon_art_url")
-                    last_album_name = track.get("album", "") or last_album_name
-                    last_deezer_duration = track.get("duration") or last_deezer_duration
-                if track.get("_amazon_track_link"):
-                    last_amazon_track_link = track.get("_amazon_track_link")
+                fetched = None if resolved or track.get("_amazon_art_url") else get_album_art(title, artist)
+                art_state = apply_art_result(track, resolved, fetched, _notif_album, last_album_name)
+                last_art_url = art_state["art_url"]
+                last_album_name = art_state["album"]
+                last_deezer_track_link = art_state["deezer_link"]
+                last_deezer_duration = art_state["duration"]
+                last_amazon_track_link = art_state["amazon_link"]
                 _ensure_deezer_button_link(title, artist)
                 last_art_url, last_album_name = _apply_custom_album_override(
                     config, last_art_url, last_album_name, _notif_album, track.get("album", "")
@@ -1254,14 +1033,7 @@ def rpc_loop():
             state_track.pop("_amazon_art_url", None)
             state_track.pop("_amazon_track_link", None)
             if privacy_reason:
-                hidden_track = {
-                    "title": "Hidden by privacy controls",
-                    "artist": "",
-                    "album": "",
-                    "status": track["status"],
-                    "position": track.get("position"),
-                    "duration": track.get("duration"),
-                }
+                hidden_track = hidden_privacy_track(track)
                 _update_state(track=hidden_track, presence=False, privacy_reason=privacy_reason)
             else:
                 rpc.update(

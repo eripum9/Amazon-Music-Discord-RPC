@@ -14,6 +14,7 @@ import time
 import urllib.request
 from urllib.parse import quote, urlparse, urlunparse
 from config import load_config, normalize_amazon_music_link_region
+from launcher_diagnostics import format_launcher_failure, launcher_attempt_failure, launcher_candidate_label
 
 
 APP_USER_MODEL_ID = "AmazonMobileLLC.AmazonMusic_kc6t79cpj4tp0!AmazonMobileLLC.AmazonMusic"
@@ -369,23 +370,15 @@ def _launch_candidate(candidate, port):
 
 
 def _candidate_label(candidate):
-    return f"{candidate.get('method', 'unknown')} {candidate.get('value', '')}".strip()
+    return launcher_candidate_label(candidate)
 
 
 def _attempt_failure(candidate, error):
-    text = _clean(error)
-    label = _candidate_label(candidate)
-    if "0x80073cf1" in text.lower() or "package was not found" in text.lower():
-        return f"{label}: package was not found"
-    if not text:
-        text = "launch failed"
-    return f"{label}: {text}"
+    return launcher_attempt_failure(candidate, error)
 
 
 def _format_launcher_failure(attempts):
-    if not attempts:
-        return LAUNCH_FAILURE_HELP
-    return f"{LAUNCH_FAILURE_HELP} Last attempts: {'; '.join(attempts[-3:])}"
+    return format_launcher_failure(attempts, LAUNCH_FAILURE_HELP)
 
 
 def _remember_launch(method, launcher, port):

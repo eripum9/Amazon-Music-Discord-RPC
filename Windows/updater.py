@@ -9,13 +9,12 @@ import tempfile
 import webbrowser
 import requests
 from config import APP_VERSION
+from launcher_diagnostics import pyinstaller_environment_keys
 
 REPO = "eripum9/Amazon-Music-Discord-RPC"
 RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases"
 SHA256_RE = re.compile(r"\b[a-fA-F0-9]{64}\b")
-PYINSTALLER_ENV_PREFIXES = ("_PYI_", "PYINSTALLER_")
-PYINSTALLER_ENV_KEYS = {"_MEIPASS2"}
 
 
 def _parse_version(tag):
@@ -109,11 +108,8 @@ def _ps_literal(value):
 
 def _clean_launch_env(base=None):
     env = dict(base or os.environ)
-    for key in list(env):
-        upper = key.upper()
-        value = str(env.get(key, ""))
-        if upper in PYINSTALLER_ENV_KEYS or upper.startswith(PYINSTALLER_ENV_PREFIXES) or "_MEI" in value:
-            env.pop(key, None)
+    for key in pyinstaller_environment_keys(env):
+        env.pop(key, None)
     return env
 
 
