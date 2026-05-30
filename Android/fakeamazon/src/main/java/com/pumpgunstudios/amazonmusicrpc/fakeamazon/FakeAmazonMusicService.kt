@@ -24,6 +24,8 @@ class FakeAmazonMusicService : Service() {
     private var positionMs = 0L
     private var playing = false
     private var updatedAtMs = 0L
+    private var includeArtwork = true
+    private var includeDuration = true
 
     override fun onCreate() {
         super.onCreate()
@@ -34,6 +36,14 @@ class FakeAmazonMusicService : Service() {
                 override fun onPause() = pause()
                 override fun onSkipToNext() = next()
                 override fun onSkipToPrevious() = previous()
+                override fun onFastForward() = seekBy(30000L)
+                override fun onRewind() = seekBy(-30000L)
+                override fun onSeekTo(pos: Long) {
+                    syncPosition()
+                    positionMs = pos.coerceIn(0L, fakeTracks[index].durationMs)
+                    updatedAtMs = System.currentTimeMillis()
+                    publish()
+                }
                 override fun onStop() = stopFake()
             })
             isActive = true
@@ -47,6 +57,10 @@ class FakeAmazonMusicService : Service() {
             ACTION_PAUSE -> pause()
             ACTION_NEXT -> next()
             ACTION_PREVIOUS -> previous()
+            ACTION_SEEK_FORWARD -> seekBy(30000L)
+            ACTION_SEEK_BACK -> seekBy(-30000L)
+            ACTION_TOGGLE_ARTWORK -> toggleArtwork()
+            ACTION_TOGGLE_DURATION -> toggleDuration()
             ACTION_PLAY_TRACK -> playTrack(intent.getIntExtra(EXTRA_TRACK_INDEX, index))
             ACTION_STOP -> stopFake()
             else -> stopSelf(startId)
@@ -99,6 +113,23 @@ class FakeAmazonMusicService : Service() {
         publish()
     }
 
+    private fun seekBy(deltaMs: Long) {
+        syncPosition()
+        positionMs = (positionMs + deltaMs).coerceIn(0L, fakeTracks[index].durationMs)
+        updatedAtMs = System.currentTimeMillis()
+        publish()
+    }
+
+    private fun toggleArtwork() {
+        includeArtwork = !includeArtwork
+        publish()
+    }
+
+    private fun toggleDuration() {
+        includeDuration = !includeDuration
+        publish()
+    }
+
     private fun stopFake() {
         syncPosition()
         playing = false
@@ -122,17 +153,19 @@ class FakeAmazonMusicService : Service() {
     private fun publish() {
         syncPosition()
         val track = fakeTracks[index]
-        val artwork = artworkBitmap(track)
-        mediaSession.setMetadata(
-            MediaMetadata.Builder()
-                .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
-                .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
-                .putString(MediaMetadata.METADATA_KEY_ALBUM, track.album)
-                .putLong(MediaMetadata.METADATA_KEY_DURATION, track.durationMs)
-                .putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork)
-                .putBitmap(MediaMetadata.METADATA_KEY_ART, artwork)
-                .build()
-        )
+        val artwork = if (includeArtwork) artworkBitmap(track) else null
+        val metadata = MediaMetadata.Builder()
+            .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
+            .putString(MediaMetadata.METADATA_KEY_ALBUM, track.album)
+        if (includeDuration) {
+            metadata.putLong(MediaMetadata.METADATA_KEY_DURATION, track.durationMs)
+        }
+        if (artwork != null) {
+            metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork)
+            metadata.putBitmap(MediaMetadata.METADATA_KEY_ART, artwork)
+        }
+        mediaSession.setMetadata(metadata.build())
         mediaSession.setPlaybackState(
             PlaybackState.Builder()
                 .setState(if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED, positionMs, if (playing) 1f else 0f, System.currentTimeMillis())
@@ -148,28 +181,35 @@ class FakeAmazonMusicService : Service() {
             PlaybackState.ACTION_PLAY_PAUSE or
             PlaybackState.ACTION_SKIP_TO_NEXT or
             PlaybackState.ACTION_SKIP_TO_PREVIOUS or
+            PlaybackState.ACTION_FAST_FORWARD or
+            PlaybackState.ACTION_REWIND or
+            PlaybackState.ACTION_SEEK_TO or
             PlaybackState.ACTION_STOP
     }
 
-    private fun notification(track: FakeTrack, artwork: Bitmap): Notification {
+    private fun notification(track: FakeTrack, artwork: Bitmap?): Notification {
         val playPauseAction = if (playing) {
             NotificationCompat.Action(R.drawable.ic_fake_amazon, "Pause", pending(ACTION_PAUSE))
         } else {
             NotificationCompat.Action(R.drawable.ic_fake_amazon, "Play", pending(ACTION_PLAY))
         }
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_fake_amazon)
             .setContentTitle(track.title)
             .setContentText("${track.artist} • ${track.album}")
-            .setLargeIcon(artwork)
-            .setProgress(track.durationMs.toInt(), positionMs.toInt(), false)
             .setOngoing(playing)
             .setOnlyAlertOnce(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .addAction(NotificationCompat.Action(R.drawable.ic_fake_amazon, "Previous", pending(ACTION_PREVIOUS)))
             .addAction(playPauseAction)
             .addAction(NotificationCompat.Action(R.drawable.ic_fake_amazon, "Next", pending(ACTION_NEXT)))
-            .build()
+        if (artwork != null) {
+            builder.setLargeIcon(artwork)
+        }
+        if (includeDuration) {
+            builder.setProgress(track.durationMs.toInt(), positionMs.toInt(), false)
+        }
+        return builder.build()
     }
 
     private fun artworkBitmap(track: FakeTrack): Bitmap {
@@ -215,6 +255,10 @@ class FakeAmazonMusicService : Service() {
         const val ACTION_PAUSE = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.PAUSE"
         const val ACTION_NEXT = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.NEXT"
         const val ACTION_PREVIOUS = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.PREVIOUS"
+        const val ACTION_SEEK_FORWARD = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.SEEK_FORWARD"
+        const val ACTION_SEEK_BACK = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.SEEK_BACK"
+        const val ACTION_TOGGLE_ARTWORK = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.TOGGLE_ARTWORK"
+        const val ACTION_TOGGLE_DURATION = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.TOGGLE_DURATION"
         const val ACTION_PLAY_TRACK = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.PLAY_TRACK"
         const val ACTION_STOP = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.STOP"
         const val EXTRA_TRACK_INDEX = "com.pumpgunstudios.amazonmusicrpc.fakeamazon.TRACK_INDEX"

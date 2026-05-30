@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -38,6 +40,7 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     send = { action -> sendAction(this, action) },
+                    sendTrack = { index -> sendTrack(this, index) },
                 )
             }
         }
@@ -48,6 +51,7 @@ class MainActivity : ComponentActivity() {
 private fun FakeAmazonApp(
     requestNotifications: (androidx.activity.result.ActivityResultLauncher<String>) -> Unit,
     send: (String) -> Unit,
+    sendTrack: (Int) -> Unit,
 ) {
     val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     Scaffold { padding ->
@@ -55,7 +59,8 @@ private fun FakeAmazonApp(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(20.dp),
+                .padding(20.dp)
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text("Fake Amazon Music", style = MaterialTheme.typography.headlineMedium)
@@ -93,6 +98,30 @@ private fun FakeAmazonApp(
                 }
             }
 
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(modifier = Modifier.weight(1f), onClick = { send(FakeAmazonMusicService.ACTION_SEEK_BACK) }) {
+                    Text("-30s")
+                }
+                Button(modifier = Modifier.weight(1f), onClick = { send(FakeAmazonMusicService.ACTION_SEEK_FORWARD) }) {
+                    Text("+30s")
+                }
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(modifier = Modifier.weight(1f), onClick = { send(FakeAmazonMusicService.ACTION_TOGGLE_ARTWORK) }) {
+                    Text("Toggle artwork")
+                }
+                Button(modifier = Modifier.weight(1f), onClick = { send(FakeAmazonMusicService.ACTION_TOGGLE_DURATION) }) {
+                    Text("Toggle duration")
+                }
+            }
+
+            fakeTracks.forEachIndexed { index, track ->
+                Button(modifier = Modifier.fillMaxWidth(), onClick = { sendTrack(index) }) {
+                    Text("${track.title} - ${track.artist} - Album: ${track.album}")
+                }
+            }
+
             Button(modifier = Modifier.fillMaxWidth(), onClick = { send(FakeAmazonMusicService.ACTION_STOP) }) {
                 Text("Stop fake playback")
             }
@@ -102,6 +131,17 @@ private fun FakeAmazonApp(
 
 private fun sendAction(context: Context, action: String) {
     val intent = Intent(context, FakeAmazonMusicService::class.java).setAction(action)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        context.startForegroundService(intent)
+    } else {
+        context.startService(intent)
+    }
+}
+
+private fun sendTrack(context: Context, index: Int) {
+    val intent = Intent(context, FakeAmazonMusicService::class.java)
+        .setAction(FakeAmazonMusicService.ACTION_PLAY_TRACK)
+        .putExtra(FakeAmazonMusicService.EXTRA_TRACK_INDEX, index)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         context.startForegroundService(intent)
     } else {

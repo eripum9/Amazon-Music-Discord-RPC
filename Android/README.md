@@ -64,6 +64,9 @@ The Amazon Music RPC app can control the companion test source from the Test met
 - WOLF - Tyler, The Creator - Wolf
 - Rusty - Tyler, The Creator - Wolf
 - Noid - Tyler, The Creator - Chromakopia+
+- Play, pause, stop, seek backward 30 seconds, and seek forward 30 seconds
+- Toggle artwork off to test Deezer/iTunes/MusicBrainz fallback artwork
+- Toggle duration off to test lookup duration fallback
 
 Use Clear Discord activity to clear stale Rich Presence when a local Discord token is saved. Stop RPC also attempts to clear the activity before shutting down.
 

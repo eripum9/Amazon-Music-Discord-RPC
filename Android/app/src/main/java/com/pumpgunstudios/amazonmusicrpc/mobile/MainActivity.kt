@@ -194,6 +194,22 @@ private fun RpcApp(
                     store.appendDiagnostic(FakeAmazonController.pause(context))
                     runtime = context.runtimeState(store)
                 },
+                onSeekBack = {
+                    store.appendDiagnostic(FakeAmazonController.seekBack(context))
+                    runtime = context.runtimeState(store)
+                },
+                onSeekForward = {
+                    store.appendDiagnostic(FakeAmazonController.seekForward(context))
+                    runtime = context.runtimeState(store)
+                },
+                onToggleArtwork = {
+                    store.appendDiagnostic(FakeAmazonController.toggleArtwork(context))
+                    runtime = context.runtimeState(store)
+                },
+                onToggleDuration = {
+                    store.appendDiagnostic(FakeAmazonController.toggleDuration(context))
+                    runtime = context.runtimeState(store)
+                },
                 onStop = {
                     store.appendDiagnostic(FakeAmazonController.stop(context))
                     runtime = context.runtimeState(store)
@@ -356,6 +372,10 @@ private fun TestMetadataCard(
     onPlayTrack: (Int) -> Unit,
     onPlay: () -> Unit,
     onPause: () -> Unit,
+    onSeekBack: () -> Unit,
+    onSeekForward: () -> Unit,
+    onToggleArtwork: () -> Unit,
+    onToggleDuration: () -> Unit,
     onStop: () -> Unit,
 ) {
     Card {
@@ -382,6 +402,22 @@ private fun TestMetadataCard(
                 }
                 OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onStop) {
                     Text("Stop")
+                }
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onSeekBack) {
+                    Text("-30s")
+                }
+                OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onSeekForward) {
+                    Text("+30s")
+                }
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onToggleArtwork) {
+                    Text("Artwork")
+                }
+                OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onToggleDuration) {
+                    Text("Duration")
                 }
             }
             OutlinedButton(modifier = Modifier.fillMaxWidth(), enabled = companionInstalled, onClick = onOpen) {

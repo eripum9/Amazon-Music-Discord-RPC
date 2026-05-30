@@ -13,6 +13,10 @@ object FakeAmazonController {
     private const val ACTION_PLAY = "$PACKAGE_NAME.PLAY"
     private const val ACTION_PAUSE = "$PACKAGE_NAME.PAUSE"
     private const val ACTION_STOP = "$PACKAGE_NAME.STOP"
+    private const val ACTION_SEEK_FORWARD = "$PACKAGE_NAME.SEEK_FORWARD"
+    private const val ACTION_SEEK_BACK = "$PACKAGE_NAME.SEEK_BACK"
+    private const val ACTION_TOGGLE_ARTWORK = "$PACKAGE_NAME.TOGGLE_ARTWORK"
+    private const val ACTION_TOGGLE_DURATION = "$PACKAGE_NAME.TOGGLE_DURATION"
     private const val ACTION_PLAY_TRACK = "$PACKAGE_NAME.PLAY_TRACK"
     private const val EXTRA_TRACK_INDEX = "$PACKAGE_NAME.TRACK_INDEX"
 
@@ -48,6 +52,22 @@ object FakeAmazonController {
         return startService(context, ACTION_PAUSE)
     }
 
+    fun seekForward(context: Context): String {
+        return startService(context, ACTION_SEEK_FORWARD)
+    }
+
+    fun seekBack(context: Context): String {
+        return startService(context, ACTION_SEEK_BACK)
+    }
+
+    fun toggleArtwork(context: Context): String {
+        return startService(context, ACTION_TOGGLE_ARTWORK)
+    }
+
+    fun toggleDuration(context: Context): String {
+        return startService(context, ACTION_TOGGLE_DURATION)
+    }
+
     fun stop(context: Context): String {
         return startService(context, ACTION_STOP)
     }
@@ -69,6 +89,10 @@ object FakeAmazonController {
                 ACTION_PLAY_TRACK -> "Sent fake track ${trackIndex?.plus(1) ?: 1}"
                 ACTION_PLAY -> "Sent fake playback play"
                 ACTION_PAUSE -> "Sent fake playback pause"
+                ACTION_SEEK_FORWARD -> "Sent fake playback seek +30s"
+                ACTION_SEEK_BACK -> "Sent fake playback seek -30s"
+                ACTION_TOGGLE_ARTWORK -> "Toggled fake artwork"
+                ACTION_TOGGLE_DURATION -> "Toggled fake duration"
                 ACTION_STOP -> "Sent fake playback stop"
                 else -> "Sent fake playback action"
             }
