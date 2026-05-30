@@ -1,0 +1,32 @@
+name: Windows Tests
+
+on:
+  push:
+    branches:
+      - master
+      - "fix/**"
+      - "beta/**"
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  windows-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r Windows/requirements-dev.txt
+      - name: Compile
+        run: python -m py_compile Windows/main.py Windows/amazon_devtools.py Windows/media_reader.py Windows/discord_rpc.py Windows/config.py Windows/updater.py Windows/status_summary.py Windows/qt_tray_ui.py Windows/self_tests.py Windows/release_smoke.py
+      - name: Pytest
+        run: python -m pytest Windows/tests
+      - name: Release smoke
+        run: python Windows/release_smoke.py --allow-missing-installer
+      - name: Whitespace
+        run: git diff --check
