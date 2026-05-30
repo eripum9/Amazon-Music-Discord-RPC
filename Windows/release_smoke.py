@@ -9,6 +9,7 @@ if str(WINDOWS_DIR) not in sys.path:
     sys.path.insert(0, str(WINDOWS_DIR))
 
 from config import APP_VERSION
+from security_trust import release_notes_trust_errors
 from updater import file_sha256
 
 VERSION_RE = re.compile(r'#define\s+MyAppVersion\s+"([^"]+)"')
@@ -48,8 +49,8 @@ def main():
         notes = Path(args.release_notes)
         if not notes.exists():
             errors.append(f"Release notes not found: {notes}")
-        elif smoke["sha256"] and smoke["sha256"].lower() not in notes.read_text(encoding="utf-8").lower():
-            errors.append("Release notes do not contain the installer SHA256")
+        else:
+            errors.extend(release_notes_trust_errors(notes.read_text(encoding="utf-8"), smoke["sha256"]))
 
     print(json.dumps(smoke, indent=2))
     if errors:

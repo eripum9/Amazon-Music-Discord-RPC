@@ -52,7 +52,7 @@ The app does not upload raw logs or config files automatically.
 
 ## Tokens And Secrets
 
-Last.fm session keys and ListenBrainz tokens are currently stored in the app config file when those features are enabled. Diagnostics and log views redact known token values, and Settings includes a clear-token action, but `%APPDATA%\AmazonMusicRPC\config.json` should still be treated as private.
+Last.fm session keys and ListenBrainz tokens are currently stored in the app config file when those features are enabled. Diagnostics and log views redact known token values, Settings exports omit tokens unless explicitly requested, and Settings includes a clear-token action, but `%APPDATA%\AmazonMusicRPC\config.json` should still be treated as private.
 
 Do not paste config files, diagnostics, or logs publicly unless you have checked that tokens and private data are removed.
 
@@ -80,7 +80,7 @@ Private session mode clears Discord Rich Presence and can stop scrobbling while 
 
 The updater checks GitHub releases and can download the latest installer. It opens the GitHub release page before running the installer and verifies the installer SHA256 when a hash is present in the release notes.
 
-Each release should include a SHA256 line for `AmazonMusicRPC_Setup.exe`. Signed release tags and code-signed Windows installers are still planned hardening steps.
+Each release should include a SHA256 line for `AmazonMusicRPC_Setup.exe`, a clear changelog, and an enhanced metadata compatibility note. Signed release tags and code-signed Windows installers are still planned hardening steps.
 
 ## Uninstall
 

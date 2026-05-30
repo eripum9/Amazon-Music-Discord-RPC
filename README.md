@@ -107,7 +107,7 @@ Download `AmazonMusicRPC_Setup.exe` from [Releases](../../releases), run it, and
 
 ### Release Verification
 
-Release notes should include a SHA256 hash for `AmazonMusicRPC_Setup.exe`. The built-in updater opens the GitHub release page before running an installer and verifies the installer hash when a SHA256 value is present in the release notes.
+Release notes should include a SHA256 hash for `AmazonMusicRPC_Setup.exe`, a clear changelog, and an enhanced metadata compatibility note. The built-in updater opens the GitHub release page before running an installer and verifies the installer hash when a SHA256 value is present in the release notes.
 
 To check a downloaded installer manually in PowerShell:
 
@@ -116,6 +116,8 @@ Get-FileHash .\AmazonMusicRPC_Setup.exe -Algorithm SHA256
 ```
 
 Compare the output with the SHA256 value shown on the GitHub release page. If a release does not include a hash, review the release page before installing.
+
+Maintainer release steps are tracked in [docs/release-checklist.md](docs/release-checklist.md).
 
 ### From Source
 

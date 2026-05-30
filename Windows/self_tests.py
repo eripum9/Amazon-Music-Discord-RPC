@@ -91,6 +91,21 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Secret redaction", False, str(e)))
 
     try:
+        from security_trust import redaction_audit, token_storage_review
+        secrets = {
+            "listenbrainz_token": "listenbrainz_secret_value",
+            "lastfm_session_key": "lastfm_secret_value",
+            "lastfm_api_secret": "lastfm_app_secret_value",
+        }
+        clean = redaction_audit(secrets, {"report": {"token": "[redacted]"}})
+        leaked = redaction_audit(secrets, {"report": secrets["listenbrainz_token"]})
+        review = token_storage_review(secrets)
+        ok = clean.get("ok") is True and leaked.get("ok") is False and "DPAPI" in review.get("future_hardening", [])
+        results.append(_result("Security trust audit", ok, "Token storage is reviewed and redaction leaks are detectable"))
+    except Exception as e:
+        results.append(_result("Security trust audit", False, str(e)))
+
+    try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
         fd, path = tempfile.mkstemp(prefix="amrpc_test_", suffix=".tmp", dir=CONFIG_DIR)
         os.close(fd)
@@ -151,6 +166,15 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Updater SHA256 trust", ok, "Release hashes can be parsed and verified"))
     except Exception as e:
         results.append(_result("Updater SHA256 trust", False, str(e)))
+
+    try:
+        from security_trust import release_notes_trust_errors
+        digest = "a" * 64
+        body = f"## What's New\n\n- Fixed enhanced metadata compatibility for Microsoft Store users.\n\n## Installation\n\nAmazonMusicRPC_Setup.exe SHA256: {digest}\n\nFallback mode remains available."
+        ok = release_notes_trust_errors(body, digest) == []
+        results.append(_result("Release checklist trust", ok, "Release notes require installer, SHA256, changelog, and compatibility text"))
+    except Exception as e:
+        results.append(_result("Release checklist trust", False, str(e)))
 
     try:
         import inspect

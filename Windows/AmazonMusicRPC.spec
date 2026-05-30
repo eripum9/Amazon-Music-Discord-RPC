@@ -25,6 +25,7 @@ a = Analysis(
         'rpc_state',
         'metadata_pipeline',
         'launcher_diagnostics',
+        'security_trust',
         'qt_tray_ui',
         'windows_file_dialog',
         'self_tests',

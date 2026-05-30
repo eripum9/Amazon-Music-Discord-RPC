@@ -27,7 +27,7 @@ To run without enhanced metadata, open Settings and turn off **Enhanced Amazon m
 
 ## Tokens
 
-Last.fm session keys and ListenBrainz tokens are stored locally in the app config today. Diagnostics and log views redact known token values, and Settings includes a clear-token action.
+Last.fm session keys and ListenBrainz tokens are stored locally in the app config today. Diagnostics and log views redact known token values, Settings exports omit tokens unless explicitly requested, and Settings includes a clear-token action.
 
 Treat `%APPDATA%\AmazonMusicRPC\config.json` as private.
 
