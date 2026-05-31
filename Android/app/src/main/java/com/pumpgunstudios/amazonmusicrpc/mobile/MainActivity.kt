@@ -32,12 +32,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -115,6 +118,8 @@ private fun RpcApp(
     val context = LocalContext.current
     var settings by remember { mutableStateOf(store.load()) }
     var runtime by remember { mutableStateOf(context.runtimeState(store)) }
+    var showDeveloperWarning by remember { mutableStateOf(false) }
+    var developerWarningDontShowAgain by remember { mutableStateOf(false) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         runtime = context.runtimeState(store)
         if (granted) {
@@ -176,8 +181,20 @@ private fun RpcApp(
                     }
                 },
             )
-            TestMetadataCard(
+            DeveloperToolsCard(
+                settings = settings,
                 companionInstalled = runtime.fakeAmazonInstalled,
+                onDeveloperToolsChange = { enabled ->
+                    if (enabled && !settings.developerWarningDismissed) {
+                        developerWarningDontShowAgain = false
+                        showDeveloperWarning = true
+                    } else {
+                        val next = settings.copy(developerToolsEnabled = enabled)
+                        settings = next
+                        store.save(next)
+                        runtime = context.runtimeState(store)
+                    }
+                },
                 onOpen = {
                     store.appendDiagnostic(FakeAmazonController.open(context))
                     runtime = context.runtimeState(store)
@@ -215,6 +232,23 @@ private fun RpcApp(
                     runtime = context.runtimeState(store)
                 },
             )
+            if (showDeveloperWarning) {
+                DeveloperToolsWarningDialog(
+                    dontShowAgain = developerWarningDontShowAgain,
+                    onDontShowAgainChange = { developerWarningDontShowAgain = it },
+                    onConfirm = {
+                        val next = settings.copy(
+                            developerToolsEnabled = true,
+                            developerWarningDismissed = developerWarningDontShowAgain,
+                        )
+                        settings = next
+                        store.save(next)
+                        runtime = context.runtimeState(store)
+                        showDeveloperWarning = false
+                    },
+                    onDismiss = { showDeveloperWarning = false },
+                )
+            }
             SettingsCard(
                 settings = settings,
                 onSettingsChange = { settings = it },
@@ -241,11 +275,11 @@ private fun Header(runtime: RuntimeState) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Amazon Music RPC", style = MaterialTheme.typography.headlineMedium)
-                Text("Android beta", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                Text("Android", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             }
             StatusPill(if (runtime.serviceRunning) "Running" else "Stopped", runtime.serviceRunning)
         }
-        Text("Set up permissions, test metadata locally, then connect Discord when you are ready.", style = MaterialTheme.typography.bodyMedium)
+        Text("Set up permissions, then connect Discord when you are ready.", style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -276,14 +310,14 @@ private fun SetupChecklist(
             )
             ChecklistRow(
                 title = "Battery optimization",
-                detail = if (runtime.batteryOptimized) "May stop the beta during longer tests" else "Not restricted by battery optimization",
+                detail = if (runtime.batteryOptimized) "May stop RPC during longer sessions" else "Not restricted by battery optimization",
                 ok = !runtime.batteryOptimized,
                 actionText = if (runtime.batteryOptimized) "Open" else null,
                 onAction = openBatterySettings,
             )
             ChecklistRow(
                 title = "Discord mode",
-                detail = if (metadataOnly) "Metadata test mode, nothing is sent to Discord" else "Gateway mode will send Rich Presence updates",
+                detail = if (metadataOnly) "Local preview mode, nothing is sent to Discord" else "Gateway mode will send Rich Presence updates",
                 ok = true,
                 actionText = null,
                 onAction = {},
@@ -328,8 +362,8 @@ private fun StatusCard(runtime: RuntimeState, settings: AppSettings) {
             KeyValueRow("Time bar", runtime.trackDiagnostics.timeBar)
             KeyValueRow("Album art", runtime.trackDiagnostics.artwork)
             KeyValueRow("Lookup", runtime.trackDiagnostics.lookup)
-            KeyValueRow("Source", if (settings.packageFilters.contains("fakeamazon")) "Amazon Music + companion test app" else "Configured media packages")
-            KeyValueRow("Mode", if (settings.token.isBlank()) "Local metadata test" else "Discord Gateway")
+            KeyValueRow("Source", if (settings.developerToolsEnabled) "Amazon Music + developer companion" else "Configured media packages")
+            KeyValueRow("Mode", if (settings.token.isBlank()) "Local preview" else "Discord Gateway")
             KeyValueRow("Paused tracks", if (settings.showPaused) "Visible" else "Hidden")
         }
     }
@@ -366,8 +400,10 @@ private fun ControlsCard(
 }
 
 @Composable
-private fun TestMetadataCard(
+private fun DeveloperToolsCard(
+    settings: AppSettings,
     companionInstalled: Boolean,
+    onDeveloperToolsChange: (Boolean) -> Unit,
     onOpen: () -> Unit,
     onPlayTrack: (Int) -> Unit,
     onPlay: () -> Unit,
@@ -380,51 +416,92 @@ private fun TestMetadataCard(
 ) {
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Test metadata", style = MaterialTheme.typography.titleMedium)
-            KeyValueRow("Companion app", if (companionInstalled) "Installed" else "Not installed")
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = { onPlayTrack(0) }) {
-                    Text("WOLF")
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Developer tools", style = MaterialTheme.typography.titleMedium)
+                    Text("Hidden controls for local metadata testing.", style = MaterialTheme.typography.bodySmall)
                 }
-                Button(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = { onPlayTrack(1) }) {
-                    Text("Rusty")
-                }
-                Button(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = { onPlayTrack(2) }) {
-                    Text("Noid")
-                }
+                Switch(checked = settings.developerToolsEnabled, onCheckedChange = onDeveloperToolsChange)
             }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onPlay) {
-                    Text("Play")
+            if (settings.developerToolsEnabled) {
+                Text("Use these controls only while developing or verifying the Android companion test app.", style = MaterialTheme.typography.bodySmall)
+                KeyValueRow("Companion app", if (companionInstalled) "Installed" else "Not installed")
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = { onPlayTrack(0) }) {
+                        Text("WOLF")
+                    }
+                    Button(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = { onPlayTrack(1) }) {
+                        Text("Rusty")
+                    }
+                    Button(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = { onPlayTrack(2) }) {
+                        Text("Noid")
+                    }
                 }
-                OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onPause) {
-                    Text("Pause")
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onPlay) {
+                        Text("Play")
+                    }
+                    OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onPause) {
+                        Text("Pause")
+                    }
+                    OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onStop) {
+                        Text("Stop")
+                    }
                 }
-                OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onStop) {
-                    Text("Stop")
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onSeekBack) {
+                        Text("-30s")
+                    }
+                    OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onSeekForward) {
+                        Text("+30s")
+                    }
                 }
-            }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onSeekBack) {
-                    Text("-30s")
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onToggleArtwork) {
+                        Text("Artwork")
+                    }
+                    OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onToggleDuration) {
+                        Text("Duration")
+                    }
                 }
-                OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onSeekForward) {
-                    Text("+30s")
+                OutlinedButton(modifier = Modifier.fillMaxWidth(), enabled = companionInstalled, onClick = onOpen) {
+                    Text("Open companion app")
                 }
-            }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onToggleArtwork) {
-                    Text("Artwork")
-                }
-                OutlinedButton(modifier = Modifier.weight(1f), enabled = companionInstalled, onClick = onToggleDuration) {
-                    Text("Duration")
-                }
-            }
-            OutlinedButton(modifier = Modifier.fillMaxWidth(), enabled = companionInstalled, onClick = onOpen) {
-                Text("Open companion app")
             }
         }
     }
+}
+
+@Composable
+private fun DeveloperToolsWarningDialog(
+    dontShowAgain: Boolean,
+    onDontShowAgainChange: (Boolean) -> Unit,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Developer tools") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("This is meant for development and should not be used by a normal user. Only interact with this if you KNOW WHAT YOU ARE DOING.")
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Checkbox(checked = dontShowAgain, onCheckedChange = onDontShowAgainChange)
+                    Text("Don't say again", style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("Enable")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
 }
 
 @Composable
@@ -436,12 +513,12 @@ private fun SettingsCard(
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("Settings", style = MaterialTheme.typography.titleMedium)
-            Text("Discord tokens are sensitive. This beta stores the token only in local app preferences and redacts token-shaped values from diagnostics.", style = MaterialTheme.typography.bodySmall)
+            Text("Discord tokens are sensitive. This app stores the token only in local app preferences and redacts token-shaped values from diagnostics.", style = MaterialTheme.typography.bodySmall)
             OutlinedTextField(
                 modifier = Modifier.fillMaxWidth(),
                 value = settings.token,
                 onValueChange = { onSettingsChange(settings.copy(token = it)) },
-                label = { Text("Discord token, optional for metadata test") },
+                label = { Text("Discord token") },
                 visualTransformation = PasswordVisualTransformation(),
                 singleLine = true,
             )

@@ -66,9 +66,9 @@ class RpcForegroundService : Service() {
         val settings = settingsStore.load()
         gateway?.close()
         gateway = if (settings.token.isBlank()) {
-            settingsStore.setStatus("Metadata test mode")
-            settingsStore.appendDiagnostic("Started in metadata test mode")
-            updateNotification("Metadata test mode")
+            settingsStore.setStatus("Local preview mode")
+            settingsStore.appendDiagnostic("Started in local preview mode")
+            updateNotification("Local preview mode")
             null
         } else {
             settingsStore.appendDiagnostic("Connecting to Discord Gateway")
@@ -83,7 +83,7 @@ class RpcForegroundService : Service() {
             while (isActive) {
                 val currentSettings = settingsStore.load()
                 val track = try {
-                    mediaSessionReader.read(currentSettings.packageFilters)
+                    mediaSessionReader.read(currentSettings.effectivePackageFilters())
                 } catch (e: SecurityException) {
                     settingsStore.setStatus("Enable notification access")
                     updateNotification("Enable notification access")
@@ -239,10 +239,10 @@ class RpcForegroundService : Service() {
 }
 
 private fun TrackInfo?.diagnosticText(metadataOnly: Boolean): String {
-    if (this == null) return if (metadataOnly) "Metadata: no active media" else "No active media"
+    if (this == null) return if (metadataOnly) "Local preview: no active media" else "No active media"
     val artistText = artist?.takeIf { it.isNotBlank() } ?: "Unknown artist"
     val albumText = album?.takeIf { it.isNotBlank() } ?: "Unknown album"
-    val prefix = if (metadataOnly) "Metadata" else "Presence"
+    val prefix = if (metadataOnly) "Local preview" else "Presence"
     return "$prefix track: $title - $artistText - $albumText"
 }
 

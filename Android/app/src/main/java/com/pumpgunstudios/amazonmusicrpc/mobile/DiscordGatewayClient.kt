@@ -213,7 +213,7 @@ class DiscordGatewayClient(
         val request = Request.Builder()
             .url("https://discord.com/api/v10/applications/${settings.applicationId}/external-assets")
             .header("Authorization", token)
-            .header("User-Agent", "AmazonMusicRPC-Android-Beta")
+            .header("User-Agent", "AmazonMusicRPC-Android")
             .post(json.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
         return withContext(Dispatchers.IO) {

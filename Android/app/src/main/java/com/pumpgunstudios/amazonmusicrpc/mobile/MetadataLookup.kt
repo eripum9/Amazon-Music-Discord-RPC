@@ -169,7 +169,7 @@ class MetadataLookup {
     private fun get(url: String): String? {
         val request = Request.Builder()
             .url(url)
-            .header("User-Agent", "AmazonMusicRPC-Android-Beta")
+            .header("User-Agent", "AmazonMusicRPC-Android")
             .build()
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return null

@@ -10,7 +10,18 @@ data class AppSettings(
     val applicationId: String = "1479925587697995857",
     val packageFilters: String = SettingsStore.DEFAULT_PACKAGE_FILTERS,
     val showPaused: Boolean = true,
-)
+    val developerToolsEnabled: Boolean = false,
+    val developerWarningDismissed: Boolean = false,
+) {
+    fun effectivePackageFilters(): String {
+        val filters = if (developerToolsEnabled) "$packageFilters,${SettingsStore.TEST_PACKAGE_FILTER}" else packageFilters
+        return filters.split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase(Locale.US) }
+            .joinToString(",")
+    }
+}
 
 data class TrackDiagnostics(
     val title: String,
@@ -26,11 +37,17 @@ class SettingsStore(context: Context) {
 
     fun load(): AppSettings {
         val storedFilters = prefs.getString("package_filters", DEFAULT_PACKAGE_FILTERS) ?: DEFAULT_PACKAGE_FILTERS
+        val developerToolsEnabled = prefs.getBoolean("developer_tools_enabled", false)
         return AppSettings(
             token = prefs.getString("token", "") ?: "",
             applicationId = prefs.getString("application_id", "1479925587697995857") ?: "1479925587697995857",
-            packageFilters = if (storedFilters == LEGACY_PACKAGE_FILTERS) DEFAULT_PACKAGE_FILTERS else storedFilters,
+            packageFilters = when (storedFilters) {
+                LEGACY_PACKAGE_FILTERS, LEGACY_TEST_PACKAGE_FILTERS -> DEFAULT_PACKAGE_FILTERS
+                else -> storedFilters
+            },
             showPaused = prefs.getBoolean("show_paused", true),
+            developerToolsEnabled = developerToolsEnabled,
+            developerWarningDismissed = prefs.getBoolean("developer_warning_dismissed", false),
         )
     }
 
@@ -40,6 +57,8 @@ class SettingsStore(context: Context) {
             .putString("application_id", settings.applicationId.trim())
             .putString("package_filters", settings.packageFilters.trim())
             .putBoolean("show_paused", settings.showPaused)
+            .putBoolean("developer_tools_enabled", settings.developerToolsEnabled)
+            .putBoolean("developer_warning_dismissed", settings.developerWarningDismissed)
             .apply()
     }
 
@@ -126,7 +145,9 @@ class SettingsStore(context: Context) {
 
     companion object {
         private const val LEGACY_PACKAGE_FILTERS = "com.amazon.mp3,com.amazon.music"
+        private const val LEGACY_TEST_PACKAGE_FILTERS = "com.amazon.mp3,com.amazon.music,com.pumpgunstudios.amazonmusicrpc.fakeamazon"
         private const val MAX_DIAGNOSTICS = 40
-        const val DEFAULT_PACKAGE_FILTERS = "com.amazon.mp3,com.amazon.music,com.pumpgunstudios.amazonmusicrpc.fakeamazon"
+        const val DEFAULT_PACKAGE_FILTERS = "com.amazon.mp3,com.amazon.music"
+        const val TEST_PACKAGE_FILTER = "com.pumpgunstudios.amazonmusicrpc.fakeamazon"
     }
 }

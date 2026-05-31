@@ -1,6 +1,6 @@
-# Android Beta
+# Android App
 
-This is the experimental Android build for Amazon Music RPC.
+This is the Android build for Amazon Music RPC.
 
 ## Method
 
@@ -15,7 +15,7 @@ The app reads Android media sessions through a notification listener service. En
 Default media package filters:
 
 ```text
-com.amazon.mp3,com.amazon.music,com.pumpgunstudios.amazonmusicrpc.fakeamazon
+com.amazon.mp3,com.amazon.music
 ```
 
 The foreground services are explicit-start only. If Android kills them under emulator memory pressure, Android should not restart fake playback or RPC on its own.
@@ -78,9 +78,9 @@ $adb="$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
 
 Install or update the companion app first so Android knows its signature-only test control permission.
 
-Open Fake Amazon Music once and allow notifications. Then open Amazon Music RPC, open notification access, enable Amazon Music RPC, leave the Discord token empty, and press Start RPC. The status should show metadata-only mode.
+Open Fake Amazon Music once and allow notifications. Then open Amazon Music RPC, open notification access, enable Developer tools from the app, leave the Discord token empty, and press Start RPC. The status should show local preview mode.
 
-The Amazon Music RPC app can control the companion test source from the Test metadata card:
+The Amazon Music RPC app can control the companion test source from the Developer tools card:
 
 - WOLF - Tyler, The Creator - Wolf
 - Rusty - Tyler, The Creator - Wolf
