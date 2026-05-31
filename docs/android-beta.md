@@ -1,8 +1,8 @@
 # Android Beta Status
 
-Android support is experimental and lives on the `beta/androidbuild` branch.
+Android support is experimental and lives in `Android/` on `master`.
 
-Windows releases from `master` are still the stable product. The Android beta is not included in the Windows installer and should not be treated as a finished release yet.
+Windows remains the stable product. The Android beta is not included in the Windows installer and should not be treated as a finished mobile release yet.
 
 ## Current Goal
 
@@ -19,11 +19,11 @@ Current beta focus:
 
 ## Where The Code Lives
 
-Branch:
+Repository path:
 
-https://github.com/eripum9/Amazon-Music-Discord-RPC/tree/beta/androidbuild
+https://github.com/eripum9/Amazon-Music-Discord-RPC/tree/master/Android
 
-Main folders on that branch:
+Main folders:
 
 - `Android/app/` for the Android RPC app
 - `Android/fakeamazon/` for the fake Amazon Music test app
@@ -34,7 +34,7 @@ The beta can be tested in Android Studio with an emulator. The fake Amazon app i
 
 ## Repeatable Emulator Test Path
 
-Build both debug APKs from the `beta/androidbuild` branch:
+Build both debug APKs from the repository root:
 
 ```powershell
 $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
@@ -60,7 +60,7 @@ Minimum emulator test:
 
 ## Beta Exit Criteria
 
-Android should stay on `beta/androidbuild` until:
+Android should stay marked beta until:
 
 - A second tester can follow the emulator test path without extra setup notes.
 - The fake Amazon app can test metadata, time bar, pause, seek, artwork, duration, and stop behavior.
@@ -70,7 +70,7 @@ Android should stay on `beta/androidbuild` until:
 
 The Android beta is expected to change quickly. Report Android issues with the Android beta issue template and include:
 
-- Branch or commit
+- Version, branch, or commit
 - Emulator or device model
 - Android API level
 - Whether the fake Amazon test app or real Amazon Music was used

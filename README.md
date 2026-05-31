@@ -139,7 +139,7 @@ No Python installation needed if using the Installer.
 ## Platform Status
 
 - Windows is the stable supported platform.
-- Android is experimental on the `beta/androidbuild` branch and tracked in [docs/android-beta.md](docs/android-beta.md).
+- Android beta source is included in `Android/` and tracked in [docs/android-beta.md](docs/android-beta.md).
 - Linux and macOS are research-only until Android has a usable beta. The platform feasibility notes are in [docs/platform-roadmap.md](docs/platform-roadmap.md).
 
 ## Building
@@ -176,6 +176,19 @@ You can also run the Windows build script:
 ```bat
 Windows\build.bat
 ```
+
+### Build Android beta APKs
+
+Android beta source, the companion test app, and host checks live in `Android/`.
+
+```powershell
+Android\host-check.ps1
+```
+
+The Android debug APKs are written to:
+
+- `Android/app/build/outputs/apk/debug/app-debug.apk`
+- `Android/fakeamazon/build/outputs/apk/debug/fakeamazon-debug.apk`
 
 ## Configuration
 

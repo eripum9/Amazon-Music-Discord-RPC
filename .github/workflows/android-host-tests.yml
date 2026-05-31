@@ -3,12 +3,14 @@ name: Android Host Tests
 on:
   push:
     branches:
+      - master
       - beta/androidbuild
     paths:
       - "Android/**"
       - ".github/workflows/android-host-tests.yml"
   pull_request:
     branches:
+      - master
       - beta/androidbuild
     paths:
       - "Android/**"

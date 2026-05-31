@@ -12,7 +12,7 @@ For bugs, include:
 
 - Amazon Music RPC version
 - Windows version
-- Install type: installer, source, or Android beta branch
+- Install type: installer, source, or Android beta APK
 - Amazon Music source: Microsoft Store, website installer, or Android test app
 - Whether enhanced metadata is enabled
 - Whether fallback metadata or notification enrichment is enabled
@@ -25,8 +25,8 @@ Do not post Last.fm session keys, ListenBrainz tokens, Discord tokens, config fi
 
 ## Branches
 
-- `master` is the Windows release branch.
-- `beta/androidbuild` is the Android beta branch.
+- `master` is the Windows release branch and contains the current Android beta source.
+- `beta/androidbuild` is available for Android experiments before they are merged.
 - `fix/*` branches are for focused issue fixes.
 - `beta/*` branches are for experimental work that should not affect stable Windows releases.
 - Linux and macOS work should not start until the platform roadmap criteria are met.
@@ -63,9 +63,9 @@ Windows\build.bat
 
 ## Android Beta Development
 
-Android work currently lives on `beta/androidbuild`. Keep Android-specific changes on that branch unless the branch is intentionally merged.
+Android beta work lives in `Android/`. Use `beta/androidbuild` for risky Android experiments before merging them back to `master`.
 
-Build from the Android branch:
+Build from the repository root:
 
 ```powershell
 $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'

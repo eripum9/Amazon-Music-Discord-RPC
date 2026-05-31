@@ -1,5 +1,5 @@
 name: Android beta issue
-description: Report a problem with the Android beta branch.
+description: Report a problem with the Android beta build.
 title: "[Android beta]: "
 labels:
   - android
@@ -8,12 +8,12 @@ body:
   - type: markdown
     attributes:
       value: |
-        Android work currently lives on the beta/androidbuild branch. Do not share Discord tokens, account details, or private screenshots.
+        Android beta source lives in Android/ on master. Do not share Discord tokens, account details, or private screenshots.
   - type: input
     id: branch_commit
     attributes:
       label: Branch or commit
-      description: Example: beta/androidbuild at 10be37d
+      description: Example: v3.3.4, master at 10be37d, or beta/androidbuild at 10be37d
     validations:
       required: true
   - type: dropdown

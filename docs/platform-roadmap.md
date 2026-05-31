@@ -1,13 +1,13 @@
 # Platform Roadmap
 
-Amazon Music RPC should expand carefully. Windows stays stable, Android stays isolated until it is usable, and Linux/macOS work should not start until the technical risks are written down and accepted.
+Amazon Music RPC should expand carefully. Windows stays stable, Android stays beta until it is usable, and Linux/macOS work should not start until the technical risks are written down and accepted.
 
 ## Current Platform Status
 
 | Platform | Status | Branch | Notes |
 | --- | --- | --- | --- |
 | Windows | Stable | `master` | Main supported release target. |
-| Android | Beta | `beta/androidbuild` | Active test target with a fake Amazon test app and emulator path. |
+| Android | Beta | `master` | Active test target in `Android/` with a fake Amazon test app and emulator path. |
 | Linux | Research only | none | No implementation until Android beta is usable. |
 | macOS | Research only | none | No implementation until Android beta is usable. |
 

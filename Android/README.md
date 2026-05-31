@@ -64,7 +64,7 @@ gradle -p Android hostCheck --no-daemon
 
 `hostCheck` builds both debug APKs and runs local JVM tests for metadata matching, lookup merge behavior, time bar math, Discord presence text, diagnostics redaction, and the fake Amazon track catalog. It does not start an emulator and does not need a phone.
 
-The same check runs in GitHub Actions on `beta/androidbuild` when Android files change.
+The same check runs in GitHub Actions when Android files change.
 
 ## Local Metadata Test
 
