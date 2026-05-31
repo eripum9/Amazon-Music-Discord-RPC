@@ -26,7 +26,7 @@ data class TrackInfo(
         get() = artworkUri?.startsWith("http://", true) == true || artworkUri?.startsWith("https://", true) == true
 
     val hasTimeBar: Boolean
-        get() = durationMs != null && durationMs > 0 && positionMs != null && positionMs >= 0
+        get() = PlaybackTimeline.hasTimeBar(durationMs, positionMs)
 
     fun withLookup(lookup: LookupResult): TrackInfo {
         val lookupArt = lookup.artworkUrl.takeIf { it.isNotBlank() }

@@ -171,7 +171,7 @@ class DiscordGatewayClient(
             .put("details", track.title.take(128).ifBlank { "Unknown Title" })
             .put("state", state.take(128))
             .put("application_id", settings.applicationId)
-            .put("assets", JSONObject().put("large_text", discordAssetText(album, track.title)))
+            .put("assets", JSONObject().put("large_text", DiscordPresenceFormat.assetText(album, track.title)))
             .put("instance", true)
         val artworkUri = track.artworkUri?.takeIf { track.hasDiscordArtwork }
         if (artworkUri != null) {
@@ -185,11 +185,9 @@ class DiscordGatewayClient(
                 .put("small_text", "Paused")
         }
         if ((playing || (paused && settings.showPaused)) && track.hasTimeBar) {
-            val position = track.positionMs ?: 0L
-            val duration = track.durationMs ?: 0L
-            val start = track.updatedAtMs - position
-            val end = start + duration
-            activity.put("timestamps", JSONObject().put("start", start).put("end", end))
+            DiscordPresenceFormat.timestamps(track)?.let { (start, end) ->
+                activity.put("timestamps", JSONObject().put("start", start).put("end", end))
+            }
         }
         return activity
     }
@@ -239,16 +237,6 @@ class DiscordGatewayClient(
         } catch (_: Exception) {
             null
         }
-    }
-
-    private fun discordAssetText(albumName: String?, title: String?): String {
-        val album = albumName.orEmpty().trim()
-        if (album.length >= 2) return album.take(128)
-        if (album.isNotEmpty()) return "Album: $album".take(128)
-        val track = title.orEmpty().trim()
-        if (track.length >= 2) return track.take(128)
-        if (track.isNotEmpty()) return "Track: $track".take(128)
-        return "Unknown Album"
     }
 
     companion object {

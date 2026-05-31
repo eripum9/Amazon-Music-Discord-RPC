@@ -45,6 +45,27 @@ Companion test APK:
 Android/fakeamazon/build/outputs/apk/debug/fakeamazon-debug.apk
 ```
 
+## Fast No-Emulator Test
+
+Run this before opening Android Studio or launching an emulator:
+
+```powershell
+Android\host-check.ps1
+```
+
+Or run Gradle directly:
+
+```powershell
+$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+$env:ANDROID_HOME="$env:LOCALAPPDATA\Android\Sdk"
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+gradle -p Android hostCheck --no-daemon
+```
+
+`hostCheck` builds both debug APKs and runs local JVM tests for metadata matching, lookup merge behavior, time bar math, Discord presence text, diagnostics redaction, and the fake Amazon track catalog. It does not start an emulator and does not need a phone.
+
+The same check runs in GitHub Actions on `beta/androidbuild` when Android files change.
+
 ## Local Metadata Test
 
 Install both debug APKs on the emulator:

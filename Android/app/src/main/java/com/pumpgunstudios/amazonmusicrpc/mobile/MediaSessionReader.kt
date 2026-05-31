@@ -6,9 +6,6 @@ import android.content.Context
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
-import android.media.session.PlaybackState
-import kotlin.math.max
-import kotlin.math.min
 
 class MediaSessionReader(private val context: Context) {
     private val manager = context.getSystemService(Service.MEDIA_SESSION_SERVICE) as MediaSessionManager
@@ -50,7 +47,16 @@ class MediaSessionReader(private val context: Context) {
         val notificationDuration = notificationArtwork?.durationMs?.takeIf { it > 0 }
         val duration = metadataDuration ?: notificationDuration
         val now = System.currentTimeMillis()
-        val statePosition = state?.accuratePositionMs(duration, now)
+        val statePosition = state?.let {
+            PlaybackTimeline.accuratePositionMs(
+                basePositionMs = it.position,
+                playbackState = it.state,
+                lastUpdateMs = it.lastPositionUpdateTime,
+                playbackSpeed = it.playbackSpeed,
+                durationMs = duration,
+                nowMs = now,
+            )
+        }
         val notificationPosition = notificationArtwork?.positionMs?.takeIf { it >= 0 }
         val position = statePosition ?: notificationPosition
         return TrackInfo(
@@ -79,14 +85,4 @@ class MediaSessionReader(private val context: Context) {
         )
     }
 
-    private fun PlaybackState.accuratePositionMs(durationMs: Long?, nowMs: Long): Long? {
-        val base = position.takeIf { it >= 0 } ?: return null
-        val adjusted = if (state == PlaybackState.STATE_PLAYING && lastPositionUpdateTime > 0) {
-            base + ((nowMs - lastPositionUpdateTime) * playbackSpeed).toLong()
-        } else {
-            base
-        }
-        val safe = max(0L, adjusted)
-        return if (durationMs != null) min(durationMs, safe) else safe
-    }
 }
