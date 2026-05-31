@@ -46,7 +46,13 @@ class DiscordGatewayClient(
 
     suspend fun sendPresence(track: TrackInfo?, settings: AppSettings) {
         connect()
-        ready.await()
+        val connected = withTimeoutOrNull(5000) {
+            ready.await()
+            true
+        } ?: false
+        if (!connected) {
+            throw IllegalStateException("Discord Gateway timed out")
+        }
         socket?.send(presencePayload(track, settings).toString())
     }
 
