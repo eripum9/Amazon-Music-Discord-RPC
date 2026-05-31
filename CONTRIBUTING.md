@@ -29,7 +29,7 @@ Do not post Last.fm session keys, ListenBrainz tokens, Discord tokens, config fi
 - `beta/androidbuild` is available for Android experiments before they are merged.
 - `fix/*` branches are for focused issue fixes.
 - `beta/*` branches are for experimental work that should not affect stable Windows releases.
-- Linux and macOS work should not start until the platform roadmap criteria are met.
+- Linux and macOS are out of scope unless Amazon releases official desktop apps for those platforms.
 
 ## Windows Development
 
@@ -86,4 +86,4 @@ Keep pull requests focused. A good pull request includes:
 
 For Windows releases, follow [docs/release-checklist.md](docs/release-checklist.md).
 
-For platform expansion, follow [docs/platform-roadmap.md](docs/platform-roadmap.md).
+For supported platform scope, follow [docs/platform-roadmap.md](docs/platform-roadmap.md).

@@ -140,7 +140,7 @@ No Python installation needed if using the Installer.
 
 - Windows is the stable supported platform.
 - Android beta source is included in `Android/` and tracked in [docs/android-beta.md](docs/android-beta.md).
-- Linux and macOS are research-only until Android has a usable beta. The platform feasibility notes are in [docs/platform-roadmap.md](docs/platform-roadmap.md).
+- Linux and macOS are out of scope because Amazon Music does not provide official desktop apps for those platforms. Supported platform scope is tracked in [docs/platform-roadmap.md](docs/platform-roadmap.md).
 
 ## Building
 

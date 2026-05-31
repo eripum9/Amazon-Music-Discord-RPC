@@ -46,11 +46,12 @@ def test_readme_keeps_landing_and_support_links():
     assert "CONTRIBUTING.md" in readme
 
 
-def test_platform_roadmap_keeps_android_before_linux_and_macos():
+def test_platform_roadmap_keeps_linux_and_macos_out_of_scope():
     roadmap = (ROOT / "docs/platform-roadmap.md").read_text(encoding="utf-8")
     android = (ROOT / "docs/android-beta.md").read_text(encoding="utf-8")
-    assert "Do not start Linux or macOS implementation work until Android" in roadmap
-    assert "research/linux-metadata-rpc" in roadmap
-    assert "research/macos-metadata-rpc" in roadmap
+    assert "Linux and macOS are out of scope" in roadmap
+    assert "official desktop apps" in roadmap
+    assert "research/linux-metadata-rpc" not in roadmap
+    assert "research/macos-metadata-rpc" not in roadmap
     assert "Repeatable Emulator Test Path" in android
     assert "Beta Exit Criteria" in android
