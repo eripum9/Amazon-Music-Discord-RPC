@@ -2,6 +2,7 @@
 
 import pylast
 import traceback
+import threading
 
 
 class LastFMScrobbler:
@@ -12,8 +13,12 @@ class LastFMScrobbler:
             session_key=session_key,
         )
         self._pending = []
+        self._lock = threading.Lock()
 
     def update_now_playing(self, title, artist, album=None, duration=None):
+        self._run_async("now playing", self._update_now_playing_sync, title, artist, album, duration, drop_if_busy=True)
+
+    def _update_now_playing_sync(self, title, artist, album=None, duration=None):
         try:
             self.network.update_now_playing(
                 artist=artist,
@@ -36,10 +41,13 @@ class LastFMScrobbler:
             "album": album or "",
             "duration": int(duration) if duration else None,
         }
+        self._run_async("scrobble", self._scrobble_sync, entry)
+
+    def _scrobble_sync(self, entry):
         try:
             self._flush_pending()
             self.network.scrobble(**entry)
-            print(f"[Last.fm] Scrobbled: {title} by {artist}")
+            print(f"[Last.fm] Scrobbled: {entry['title']} by {entry['artist']}")
         except (pylast.NetworkError, pylast.MalformedResponseError) as e:
             self._pending.append(entry)
             print(f"[Last.fm] Scrobble cached (network error, {len(self._pending)} pending): {e}")
@@ -63,6 +71,20 @@ class LastFMScrobbler:
             self._pending = self._pending[idx:]
         else:
             self._pending = []
+
+    def _run_async(self, label, func, *args, drop_if_busy=False):
+        def runner():
+            if drop_if_busy and not self._lock.acquire(blocking=False):
+                print(f"[Last.fm] Skipped {label}: previous request still running")
+                return
+            if not drop_if_busy:
+                self._lock.acquire()
+            try:
+                func(*args)
+            finally:
+                self._lock.release()
+
+        threading.Thread(target=runner, daemon=True).start()
 
 
 def get_auth_url(api_key, api_secret):

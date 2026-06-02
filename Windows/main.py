@@ -1107,6 +1107,37 @@ def start_rpc():
     if rpc_running:
         return
     rpc_running = True
+    config = current_config if isinstance(current_config, dict) else {}
+    client_id = config.get("discord_client_id") if config.get("use_custom_client_id") and config.get("discord_client_id") else DEFAULT_CLIENT_ID
+    amazon_devtools_enabled = bool(config.get("amazon_devtools_enabled"))
+    _write_diagnostics_state(
+        rpc_status="starting",
+        discord_status="unknown",
+        client_id=client_id,
+        track=None,
+        presence_visible=False,
+        album_art_url="",
+        album_name="",
+        track_link="",
+        notification_enabled=bool(config.get("notification_enrichment_enabled")),
+        notification=None,
+        amazon_devtools={
+            "enabled": amazon_devtools_enabled,
+            "status": "waiting" if amazon_devtools_enabled else "off",
+            "detail": "RPC is starting",
+        },
+        scrobbling={
+            "lastfm": "starting" if config.get("lastfm_enabled") else "disabled",
+            "listenbrainz": "starting" if config.get("listenbrainz_enabled") else "disabled",
+        },
+        privacy={
+            "private_session": bool(config.get("privacy_private_session")),
+            "blocked_keywords": config.get("privacy_blocked_keywords", ""),
+            "hidden": False,
+            "reason": "",
+        },
+        last_error="",
+    )
     rpc_thread = threading.Thread(target=rpc_loop, daemon=True)
     rpc_thread.start()
     update_tray_state()
