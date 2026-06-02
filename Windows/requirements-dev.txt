@@ -3,3 +3,5 @@ requests
 pypresence
 PySide6-Essentials
 cryptography
+pylast
+liblistenbrainz
