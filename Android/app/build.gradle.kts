@@ -12,8 +12,8 @@ android {
         applicationId = "com.pumpgunstudios.amazonmusicrpc.mobile"
         minSdk = 27
         targetSdk = 35
-        versionCode = 335
-        versionName = "3.3.5"
+        versionCode = 340
+        versionName = "3.4.0"
     }
 
     buildFeatures {

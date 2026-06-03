@@ -133,6 +133,8 @@ def _settings_import_config(payload, existing):
             continue
         merged[key] = value
     merged["amazon_music_link_region"] = normalize_amazon_music_link_region(merged.get("amazon_music_link_region"))
+    from amazon_devtools import validate_launcher_override
+    merged["amazon_music_launcher_override"] = validate_launcher_override(merged.get("amazon_music_launcher_override", ""))
     merged["custom_albums"] = _clean_custom_albums(merged.get("custom_albums", []))
     return merged
 
@@ -2085,14 +2087,14 @@ class _Api:
 
     def validate_lb_token(self, token):
         try:
-            import urllib.request
-            import json
-            req = urllib.request.Request(
+            import requests
+            resp = requests.get(
                 "https://api.listenbrainz.org/1/validate-token",
                 headers={"Authorization": f"Token {token}"},
+                timeout=10,
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
+            resp.raise_for_status()
+            data = resp.json()
             if data.get("valid"):
                 return {"valid": True, "user_name": data.get("user_name", "")}
             return {"valid": False, "error": "Invalid token. Please check and try again."}
@@ -2208,8 +2210,9 @@ class _Api:
             return {"ok": False, "error": str(e), "candidates": []}
 
     def set_amazon_launcher_override(self, value):
+        from amazon_devtools import validate_launcher_override
         config = load_config_for_update()
-        config["amazon_music_launcher_override"] = str(value or "").strip()
+        config["amazon_music_launcher_override"] = validate_launcher_override(value)
         save_config(config)
         if self._on_save:
             self._on_save(config)
@@ -2217,8 +2220,8 @@ class _Api:
 
     def test_amazon_launcher(self, value):
         try:
-            from amazon_devtools import launch_amazon_music_devtools
-            return launch_amazon_music_devtools(str(value or "").strip())
+            from amazon_devtools import launch_amazon_music_devtools, validate_launcher_override
+            return launch_amazon_music_devtools(validate_launcher_override(value))
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -2267,6 +2270,7 @@ class _Api:
         listenbrainz_token = data.get("listenbrainz_token", "").strip()
         if not listenbrainz_token:
             listenbrainz_token = existing.get("listenbrainz_token", "")
+        from amazon_devtools import validate_launcher_override
 
         config = {
             **existing,
@@ -2287,7 +2291,7 @@ class _Api:
             "notification_enrichment_enabled": bool(data.get("notification_enrichment_enabled")),
             "amazon_devtools_enabled": bool(data.get("amazon_devtools_enabled")),
             "amazon_devtools_auto_launch": bool(data.get("amazon_devtools_auto_launch", False)),
-            "amazon_music_launcher_override": data.get("amazon_music_launcher_override", "").strip(),
+            "amazon_music_launcher_override": validate_launcher_override(data.get("amazon_music_launcher_override", "")),
             "lastfm_enabled": bool(data.get("lastfm_enabled")),
             "listenbrainz_enabled": bool(data.get("listenbrainz_enabled")),
             "listenbrainz_token": listenbrainz_token,

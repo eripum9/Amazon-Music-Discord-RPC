@@ -85,10 +85,16 @@ def game_mode_matches_processes(configured, running_names):
     return False
 
 
+def _tasklist_executable():
+    windows_dir = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+    path = os.path.join(windows_dir, "System32", "tasklist.exe")
+    return path if os.path.exists(path) else "tasklist.exe"
+
+
 def running_process_names():
     try:
         completed = subprocess.run(
-            ["tasklist", "/FO", "CSV", "/NH"],
+            [_tasklist_executable(), "/FO", "CSV", "/NH"],
             capture_output=True,
             text=True,
             timeout=3,

@@ -91,7 +91,9 @@ class RpcForegroundService : Service() {
                 } catch (e: Exception) {
                     settingsStore.setStatus("Media read error: ${e.message ?: "unknown"}")
                     null
-                }?.let { metadataLookup.enrich(it) }
+                }?.let {
+                    if (currentSettings.externalLookupsEnabled) metadataLookup.enrich(it) else it
+                }
                 settingsStore.setTrackDiagnostics(track)
                 val key = track?.stableKey ?: "none"
                 val now = System.currentTimeMillis()
@@ -198,7 +200,8 @@ class RpcForegroundService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(getString(R.string.rpc_notification_title))
-            .setContentText(text)
+            .setContentText(getString(R.string.rpc_notification_text))
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .build()

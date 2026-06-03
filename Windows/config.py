@@ -1,11 +1,14 @@
 # MIT License - Copyright (c) 2026 eripum9
 
+import base64
+import ctypes
 import json
 import os
 import re
 import sys
 import tempfile
 import winreg
+from ctypes import wintypes
 
 APP_NAME = "AmazonMusicRPC"
 DEFAULT_CLIENT_ID = "1479925587697995857"
@@ -16,7 +19,7 @@ if not os.environ.get("APPDATA") or getattr(sys, "frozen", False) is False:
     CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
     CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
-APP_VERSION = "3.3.5"
+APP_VERSION = "3.4.0"
 AMAZON_MUSIC_LINK_REGIONS = (
     "com",
     "de",
@@ -86,6 +89,11 @@ def _read_saved_config():
         saved = json.load(f)
     return saved if isinstance(saved, dict) else {}
 
+
+def _secret_path():
+    return os.path.join(os.path.dirname(CONFIG_PATH), "secrets.dpapi.json")
+
+
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 REDACTION_TEXT = "[redacted]"
 SENSITIVE_CONFIG_KEYS = {
@@ -93,11 +101,156 @@ SENSITIVE_CONFIG_KEYS = {
     "lastfm_api_secret",
     "listenbrainz_token",
 }
+DPAPI_PREFIX = "dpapi:"
 SENSITIVE_TEXT_PATTERNS = [
     re.compile(r'("(?:lastfm_session_key|lastfm_api_secret|listenbrainz_token)"\s*:\s*")([^"]+)(")', re.IGNORECASE),
     re.compile(r"(\bToken\s+)([A-Za-z0-9._~+/=-]{6,})", re.IGNORECASE),
     re.compile(r"(\bAuthorization\s*:\s*Token\s+)([A-Za-z0-9._~+/=-]{6,})", re.IGNORECASE),
 ]
+
+
+class _DATA_BLOB(ctypes.Structure):
+    _fields_ = [
+        ("cbData", wintypes.DWORD),
+        ("pbData", ctypes.POINTER(ctypes.c_ubyte)),
+    ]
+
+
+def _dpapi_blob(data):
+    buffer = ctypes.create_string_buffer(data)
+    return _DATA_BLOB(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte))), buffer
+
+
+def _dpapi_available():
+    return os.name == "nt" and hasattr(ctypes, "windll")
+
+
+def _dpapi_protect_text(value):
+    text = str(value or "")
+    if not text or text.startswith(DPAPI_PREFIX) or not _dpapi_available():
+        return text
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    in_blob, buffer = _dpapi_blob(text.encode("utf-8"))
+    out_blob = _DATA_BLOB()
+    if not crypt32.CryptProtectData(ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        raw = ctypes.string_at(out_blob.pbData, out_blob.cbData)
+        return DPAPI_PREFIX + base64.b64encode(raw).decode("ascii")
+    finally:
+        kernel32.LocalFree(out_blob.pbData)
+
+
+def _dpapi_unprotect_text(value):
+    text = str(value or "")
+    if not text.startswith(DPAPI_PREFIX) or not _dpapi_available():
+        return text
+    try:
+        encrypted = base64.b64decode(text[len(DPAPI_PREFIX):])
+    except Exception:
+        return ""
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    in_blob, buffer = _dpapi_blob(encrypted)
+    out_blob = _DATA_BLOB()
+    if not crypt32.CryptUnprotectData(ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob)):
+        return ""
+    try:
+        raw = ctypes.string_at(out_blob.pbData, out_blob.cbData)
+        return raw.decode("utf-8")
+    finally:
+        kernel32.LocalFree(out_blob.pbData)
+
+
+def protect_sensitive_config(config):
+    protected = dict(config or {})
+    for key in SENSITIVE_CONFIG_KEYS:
+        if key in protected:
+            protected[key] = _dpapi_protect_text(protected.get(key))
+    return protected
+
+
+def unprotect_sensitive_config(config):
+    unprotected = dict(config or {})
+    for key in SENSITIVE_CONFIG_KEYS:
+        if key in unprotected:
+            unprotected[key] = _dpapi_unprotect_text(unprotected.get(key))
+    return unprotected
+
+
+def _atomic_write_json(path, payload):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=os.path.basename(path) + ".", suffix=".tmp", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _read_secret_config():
+    path = _secret_path()
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        return {}
+    return unprotect_sensitive_config(data)
+
+
+def _write_secret_config(secrets):
+    secrets = {key: value for key, value in (secrets or {}).items() if key in SENSITIVE_CONFIG_KEYS and str(value or "")}
+    path = _secret_path()
+    if secrets:
+        _atomic_write_json(path, protect_sensitive_config(secrets))
+    else:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
+def _public_config(config):
+    return {key: value for key, value in dict(config or {}).items() if key not in SENSITIVE_CONFIG_KEYS}
+
+
+def _config_secret_values(config):
+    return {key: (config or {}).get(key, "") for key in SENSITIVE_CONFIG_KEYS if key in (config or {})}
+
+
+def _load_public_and_secret_config():
+    saved = _read_saved_config()
+    secrets = _read_secret_config()
+    moved = _config_secret_values(saved)
+    if moved:
+        for key, value in moved.items():
+            if str(value or ""):
+                secrets[key] = _dpapi_unprotect_text(value)
+            else:
+                secrets.pop(key, None)
+        saved = _public_config(saved)
+        _write_secret_config(secrets)
+        _atomic_write_json(CONFIG_PATH, saved)
+    return {**saved, **secrets}
+
+
+def migrate_sensitive_config():
+    if not os.path.exists(CONFIG_PATH):
+        return False
+    saved = _read_saved_config()
+    if not any(key in saved for key in SENSITIVE_CONFIG_KEYS):
+        return False
+    _load_public_and_secret_config()
+    return True
 
 
 def _sensitive_values(config=None):
@@ -138,7 +291,7 @@ def redact_data(value, config=None):
 def load_config():
     if os.path.exists(CONFIG_PATH):
         try:
-            saved = _read_saved_config()
+            saved = _load_public_and_secret_config()
         except (OSError, json.JSONDecodeError, TypeError) as e:
             print(f"[Config] Could not read config, using defaults: {e}")
             saved = {}
@@ -150,25 +303,19 @@ def load_config():
 
 def load_config_for_update():
     if os.path.exists(CONFIG_PATH):
-        return _complete_config(_read_saved_config())
+        return _complete_config(_load_public_and_secret_config())
     return dict(DEFAULTS)
 
 
 def save_config(config):
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix="config.", suffix=".tmp", dir=CONFIG_DIR)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=4)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, CONFIG_PATH)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    secrets = _read_secret_config()
+    for key, value in _config_secret_values(config).items():
+        if str(value or ""):
+            secrets[key] = value
+        else:
+            secrets.pop(key, None)
+    _write_secret_config(secrets)
+    _atomic_write_json(CONFIG_PATH, _public_config(config))
 
 
 def get_exe_path():

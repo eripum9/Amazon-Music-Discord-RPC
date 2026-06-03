@@ -7,6 +7,7 @@ class AppSettingsTest {
     @Test
     fun defaultFiltersStayProductionOnly() {
         assertEquals("com.amazon.mp3,com.amazon.music", AppSettings().effectivePackageFilters())
+        assertEquals(false, AppSettings().externalLookupsEnabled)
     }
 
     @Test

@@ -100,10 +100,55 @@ def run_self_tests(log_dir, diagnostics_path):
         clean = redaction_audit(secrets, {"report": {"token": "[redacted]"}})
         leaked = redaction_audit(secrets, {"report": secrets["listenbrainz_token"]})
         review = token_storage_review(secrets)
-        ok = clean.get("ok") is True and leaked.get("ok") is False and "DPAPI" in review.get("future_hardening", [])
-        results.append(_result("Security trust audit", ok, "Token storage is reviewed and redaction leaks are detectable"))
+        ok = clean.get("ok") is True and leaked.get("ok") is False and review.get("at_rest_protection") == "DPAPI on Windows"
+        results.append(_result("Security trust audit", ok, "Token storage protection is reviewed and redaction leaks are detectable"))
     except Exception as e:
         results.append(_result("Security trust audit", False, str(e)))
+
+    try:
+        import config as config_module
+        old_dir = config_module.CONFIG_DIR
+        old_path = config_module.CONFIG_PATH
+        with tempfile.TemporaryDirectory(prefix="amrpc_dpapi_guard_", dir=CONFIG_DIR) as temp_dir:
+            config_module.CONFIG_DIR = temp_dir
+            config_module.CONFIG_PATH = os.path.join(temp_dir, "config.json")
+            config_module.save_config({**DEFAULTS, "listenbrainz_token": "plain-listenbrainz-token", "lastfm_session_key": "plain-lastfm-session"})
+            with open(config_module.CONFIG_PATH, "r", encoding="utf-8") as f:
+                stored = f.read()
+            with open(os.path.join(temp_dir, "secrets.dpapi.json"), "r", encoding="utf-8") as f:
+                secret_stored = f.read()
+            loaded = config_module.load_config_for_update()
+            legacy_payload = {**DEFAULTS, "listenbrainz_token": "legacy-listenbrainz-token", "lastfm_session_key": "legacy-lastfm-session"}
+            with open(config_module.CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(legacy_payload, f)
+            migrated = config_module.load_config_for_update()
+            with open(config_module.CONFIG_PATH, "r", encoding="utf-8") as f:
+                migrated_stored = json.load(f)
+        config_module.CONFIG_DIR = old_dir
+        config_module.CONFIG_PATH = old_path
+        ok = (
+            "plain-listenbrainz-token" not in stored
+            and "plain-lastfm-session" not in stored
+            and "listenbrainz_token" not in json.loads(stored)
+            and "lastfm_session_key" not in json.loads(stored)
+            and "plain-listenbrainz-token" not in secret_stored
+            and "plain-lastfm-session" not in secret_stored
+            and "dpapi:" in secret_stored
+            and loaded.get("listenbrainz_token") == "plain-listenbrainz-token"
+            and loaded.get("lastfm_session_key") == "plain-lastfm-session"
+            and migrated.get("listenbrainz_token") == "legacy-listenbrainz-token"
+            and migrated.get("lastfm_session_key") == "legacy-lastfm-session"
+            and "listenbrainz_token" not in migrated_stored
+            and "lastfm_session_key" not in migrated_stored
+        )
+        results.append(_result("Sensitive config at rest", ok, "Sensitive config values migrate out of config into DPAPI-wrapped secret storage"))
+    except Exception as e:
+        try:
+            config_module.CONFIG_DIR = old_dir
+            config_module.CONFIG_PATH = old_path
+        except Exception:
+            pass
+        results.append(_result("Sensitive config at rest", False, str(e)))
 
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -153,7 +198,7 @@ def run_self_tests(log_dir, diagnostics_path):
     try:
         import hashlib
         import inspect
-        from updater import _extract_sha256, verify_file_sha256, prompt_for_update, launch_installer
+        from updater import _extract_sha256, download_installer, verify_file_sha256, prompt_for_update, launch_installer
         fd, path = tempfile.mkstemp(prefix="amrpc_hash_", suffix=".bin", dir=log_dir)
         with os.fdopen(fd, "wb") as f:
             f.write(b"amazon music rpc installer test")
@@ -162,8 +207,13 @@ def run_self_tests(log_dir, diagnostics_path):
         extracted = _extract_sha256(body, "AmazonMusicRPC_Setup.exe")
         verified = verify_file_sha256(path, digest) == digest
         os.remove(path)
-        ok = extracted == digest and verified
-        results.append(_result("Updater SHA256 trust", ok, "Release hashes can be parsed and verified"))
+        missing_rejected = False
+        try:
+            download_installer("https://example.invalid/AmazonMusicRPC_Setup.exe", "")
+        except ValueError:
+            missing_rejected = True
+        ok = extracted == digest and verified and missing_rejected
+        results.append(_result("Updater SHA256 trust", ok, "Release hashes are required, parsed, and verified"))
     except Exception as e:
         results.append(_result("Updater SHA256 trust", False, str(e)))
 
@@ -178,7 +228,7 @@ def run_self_tests(log_dir, diagnostics_path):
 
     try:
         import inspect
-        from updater import _clean_launch_env, _ps_literal, prompt_for_update, launch_installer
+        from updater import _clean_launch_env, _ps_literal, prompt_for_update, launch_installer, download_installer
         prompt_source = inspect.getsource(prompt_for_update)
         launch_source = inspect.getsource(launch_installer)
         cleaned_env = _clean_launch_env({
@@ -193,11 +243,14 @@ def run_self_tests(log_dir, diagnostics_path):
             and "defer_until_exit" in prompt_source
             and "launch_installer" in prompt_source
             and "Get-Process -Id $pidToWait" in launch_source
+            and "Get-FileHash -LiteralPath $installer -Algorithm SHA256" in launch_source
             and "Start-Process -FilePath $installer" in launch_source
             and "env=launch_env" in launch_source
+            and "tempfile.mkdtemp" in inspect.getsource(download_installer)
+            and "automatic download is disabled" in prompt_source
             and cleaned_env == {"SAFE_KEY": "value"}
         )
-        results.append(_result("Updater installer handoff", ok, "Auto-updates can defer installer launch until the app exits without inherited PyInstaller temp state"))
+        results.append(_result("Updater installer handoff", ok, "Auto-updates use unique temp paths, deferred hash verification, and clean PyInstaller environment"))
     except Exception as e:
         results.append(_result("Updater installer handoff", False, str(e)))
 
@@ -651,12 +704,14 @@ def run_self_tests(log_dir, diagnostics_path):
             _attempt_failure,
             _build_aumid,
             _launcher_candidates,
+            _is_allowed_amazon_exe,
             _launch_aumid,
             _launch_exe,
             _powershell_executable,
             _powershell_json,
             _start_app_candidates,
             amazon_music_launcher_candidates,
+            validate_launcher_override,
         )
         existing_path = r"C:\Amazon Music\Amazon Music.exe"
         exists = lambda path: path == existing_path
@@ -673,6 +728,11 @@ def run_self_tests(log_dir, diagnostics_path):
         methods = [candidate.get("method") for candidate in candidates]
         values = [candidate.get("value") for candidate in candidates]
         missing_path_candidates = _start_app_candidates([{"Name": "Amazon Music", "AppID": r"C:\Missing\Amazon Music.exe"}], lambda path: False)
+        unsafe_override_rejected = False
+        try:
+            validate_launcher_override(r"C:\Windows\System32\calc.exe", lambda path: True)
+        except ValueError:
+            unsafe_override_rejected = True
         package_failure = _attempt_failure({"method": "auto-aumid", "value": "Missing.Package!App"}, 'Package was not found. 0x80073CF1')
         old_path = os.environ.get("PATH")
         os.environ["PATH"] = ""
@@ -692,10 +752,14 @@ def run_self_tests(log_dir, diagnostics_path):
             and candidates[-1].get("value") == APP_USER_MODEL_ID
             and isinstance(amazon_music_launcher_candidates("Override.Package!App"), list)
             and not missing_path_candidates
+            and _is_allowed_amazon_exe(existing_path, exists)
+            and validate_launcher_override(existing_path, exists) == existing_path
+            and unsafe_override_rejected
             and "package was not found" in package_failure.lower()
             and LAUNCH_FAILURE_HELP.startswith("Could not launch Amazon Music")
             and "--remote-debugging-port={port}" in inspect.getsource(_launch_aumid)
             and "--remote-debugging-port={port}" in inspect.getsource(_launch_exe)
+            and "Launcher path must point to an existing local Amazon Music .exe" in inspect.getsource(_launch_exe)
             and (os.path.isabs(powershell_path) or powershell_path.lower() == "powershell.exe")
             and ps_json and ps_json[0].get("AppID") == "Test.Package!App"
             and '["powershell"' not in inspect.getsource(_launch_aumid)
@@ -736,6 +800,7 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Amazon DevTools launcher", False, str(e)))
 
     try:
+        import inspect
         from amazon_status_overlay import AmazonStatusOverlay, OVERLAY_VERSION, build_overlay_payload
         private = build_overlay_payload(
             {"privacy_private_session": True},
@@ -754,7 +819,6 @@ def run_self_tests(log_dir, diagnostics_path):
             lambda: True,
             lambda enabled: None,
         )
-        overlay.bridge_url = "https://localhost:17680"
         script = overlay._script()
         ok = (
             private.get("statusLabel") == "Private"
@@ -765,8 +829,12 @@ def run_self_tests(log_dir, diagnostics_path):
             and "privacyBusy" in script
             and "data-busy" in script
             and "amrpc-toggle-track" in script
+            and "nextAction" in script
+            and "fetch(" not in script
+            and "setIgnoreCertificateErrors" not in inspect.getsource(__import__("amazon_status_overlay"))
+            and "setBypassCSP" not in inspect.getsource(__import__("amazon_status_overlay"))
         )
-        results.append(_result("Amazon status overlay", ok, "Overlay payload and injected privacy control are guarded"))
+        results.append(_result("Amazon status overlay", ok, "Overlay payload and injected privacy control avoid TLS/CSP bypass"))
     except Exception as e:
         results.append(_result("Amazon status overlay", False, str(e)))
 

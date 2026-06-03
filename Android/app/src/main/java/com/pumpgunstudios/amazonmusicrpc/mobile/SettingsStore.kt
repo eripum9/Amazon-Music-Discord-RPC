@@ -10,6 +10,7 @@ data class AppSettings(
     val applicationId: String = "1479925587697995857",
     val packageFilters: String = SettingsStore.DEFAULT_PACKAGE_FILTERS,
     val showPaused: Boolean = true,
+    val externalLookupsEnabled: Boolean = false,
     val developerToolsEnabled: Boolean = false,
     val developerWarningDismissed: Boolean = false,
 ) {
@@ -39,13 +40,14 @@ class SettingsStore(context: Context) {
         val storedFilters = prefs.getString("package_filters", DEFAULT_PACKAGE_FILTERS) ?: DEFAULT_PACKAGE_FILTERS
         val developerToolsEnabled = prefs.getBoolean("developer_tools_enabled", false)
         return AppSettings(
-            token = prefs.getString("token", "") ?: "",
+            token = SecureStringStore.unprotect(prefs.getString("token", "") ?: ""),
             applicationId = prefs.getString("application_id", "1479925587697995857") ?: "1479925587697995857",
             packageFilters = when (storedFilters) {
                 LEGACY_PACKAGE_FILTERS, LEGACY_TEST_PACKAGE_FILTERS -> DEFAULT_PACKAGE_FILTERS
                 else -> storedFilters
             },
             showPaused = prefs.getBoolean("show_paused", true),
+            externalLookupsEnabled = prefs.getBoolean("external_lookups_enabled", false),
             developerToolsEnabled = developerToolsEnabled,
             developerWarningDismissed = prefs.getBoolean("developer_warning_dismissed", false),
         )
@@ -53,10 +55,11 @@ class SettingsStore(context: Context) {
 
     fun save(settings: AppSettings) {
         prefs.edit()
-            .putString("token", settings.token.trim())
+            .putString("token", SecureStringStore.protect(settings.token.trim()))
             .putString("application_id", settings.applicationId.trim())
             .putString("package_filters", settings.packageFilters.trim())
             .putBoolean("show_paused", settings.showPaused)
+            .putBoolean("external_lookups_enabled", settings.externalLookupsEnabled)
             .putBoolean("developer_tools_enabled", settings.developerToolsEnabled)
             .putBoolean("developer_warning_dismissed", settings.developerWarningDismissed)
             .apply()

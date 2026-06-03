@@ -16,6 +16,7 @@ __pycache__/
 *.pyo
 
 config.json
+secrets.dpapi.json
 diagnostics.json
 diagnostics.json.tmp
 

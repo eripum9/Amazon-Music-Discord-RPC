@@ -14,10 +14,15 @@ class MediaSessionReader(private val context: Context) {
     fun read(packageFilters: String): TrackInfo? {
         val filters = packageFilters.split(",").map { it.trim() }.filter { it.isNotEmpty() }
         val sessions = manager.getActiveSessions(listenerComponent)
-        val controller = sessions.firstOrNull { controller ->
-            filters.isEmpty() || filters.any { filter -> controller.packageName.equals(filter, true) }
-        } ?: sessions.firstOrNull { controller ->
-            controller.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)?.isNotBlank() == true
+        val controller = if (filters.isEmpty()) {
+            sessions.firstOrNull { controller ->
+                controller.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)?.isNotBlank() == true
+            }
+        } else {
+            sessions.firstOrNull { controller ->
+                filters.any { filter -> controller.packageName.equals(filter, true) }
+                    && controller.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)?.isNotBlank() == true
+            }
         } ?: return null
         return controller.toTrackInfo()
     }

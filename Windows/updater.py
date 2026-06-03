@@ -113,6 +113,23 @@ def _clean_launch_env(base=None):
     return env
 
 
+def _powershell_executable():
+    windows_dir = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+    candidates = [
+        os.path.join(windows_dir, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+        os.path.join(windows_dir, "Sysnative", "WindowsPowerShell", "v1.0", "powershell.exe"),
+        os.path.join(windows_dir, "SysWOW64", "WindowsPowerShell", "v1.0", "powershell.exe"),
+        "powershell.exe",
+    ]
+    for candidate in candidates:
+        if os.path.isabs(candidate):
+            if os.path.exists(candidate):
+                return candidate
+        else:
+            return candidate
+    return "powershell.exe"
+
+
 def _release_url(data):
     if data.get("html_url"):
         return data.get("html_url")
@@ -147,7 +164,10 @@ def verify_file_sha256(path, expected_sha256):
     return actual
 
 
-def launch_installer(installer_path, wait_for_pid=None):
+def launch_installer(installer_path, expected_sha256, wait_for_pid=None):
+    expected_sha256 = _normalise_sha256(expected_sha256)
+    if not expected_sha256:
+        raise ValueError("Installer SHA256 is required before launch")
     launch_env = _clean_launch_env()
     if wait_for_pid:
         try:
@@ -157,6 +177,7 @@ def launch_installer(installer_path, wait_for_pid=None):
         script = f"""
 $installer = {_ps_literal(installer_path)}
 $workingDir = {_ps_literal(os.path.dirname(installer_path))}
+$expectedSha256 = {_ps_literal(expected_sha256)}
 $pidToWait = {pid}
 if ($pidToWait -gt 0) {{
     while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{
@@ -164,14 +185,23 @@ if ($pidToWait -gt 0) {{
     }}
 }}
 Get-ChildItem Env: | Where-Object {{ $_.Name -like '_PYI_*' -or $_.Name -like 'PYINSTALLER_*' -or $_.Name -eq '_MEIPASS2' -or $_.Value -like '*_MEI*' }} | ForEach-Object {{ Remove-Item -Path ('Env:' + $_.Name) -ErrorAction SilentlyContinue }}
+if (-not (Test-Path -LiteralPath $installer)) {{
+    exit 1
+}}
+$actualSha256 = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualSha256 -ne $expectedSha256) {{
+    Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+    exit 2
+}}
 Start-Process -FilePath $installer -WorkingDirectory $workingDir
 """
         subprocess.Popen(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-Command", script],
+            [_powershell_executable(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-Command", script],
             creationflags=0x08000000,
             env=launch_env,
         )
         return
+    verify_file_sha256(installer_path, expected_sha256)
     subprocess.Popen([installer_path], cwd=os.path.dirname(installer_path) or None, creationflags=0x08000000, env=launch_env)
 
 
@@ -209,8 +239,8 @@ def prompt_for_update(latest_ver, download_url, changelog="", release_url=None, 
     if expected_sha256:
         message += "\n\nThe installer SHA256 hash will be verified after download."
     else:
-        message += "\n\nNo SHA256 hash was found in the release notes. Review the release page before installing."
-    message += "\n\nOpen the release page and download the update?"
+        message += "\n\nNo SHA256 hash was found in the release notes. For safety, automatic download is disabled. Open the release page and review it manually."
+    message += "\n\nOpen the release page?"
     result = ctypes.windll.user32.MessageBoxW(
         0,
         message,
@@ -218,6 +248,9 @@ def prompt_for_update(latest_ver, download_url, changelog="", release_url=None, 
         MB_YESNO | (MB_ICONQUESTION if expected_sha256 else MB_ICONWARNING) | MB_TOPMOST,
     )
     if result != IDYES:
+        return None
+    if not expected_sha256:
+        webbrowser.open(release_url)
         return None
     try:
         webbrowser.open(release_url)
@@ -230,23 +263,25 @@ def prompt_for_update(latest_ver, download_url, changelog="", release_url=None, 
             MB_ICONERROR | MB_TOPMOST,
         )
         return None
-    verify_text = "SHA256 verified." if expected_sha256 else "No SHA256 hash was available in the release notes."
     run_result = ctypes.windll.user32.MessageBoxW(
         0,
-        f"Installer downloaded.\n\n{verify_text}\n\nRun the installer now?",
+        "Installer downloaded.\n\nSHA256 verified.\n\nRun the installer now?",
         "Amazon Music RPC — Run Installer",
-        MB_YESNO | (MB_ICONQUESTION if expected_sha256 else MB_ICONWARNING) | MB_TOPMOST,
+        MB_YESNO | MB_ICONQUESTION | MB_TOPMOST,
     )
     if run_result != IDYES:
         return None
-    launch_installer(installer_path, os.getpid() if defer_until_exit else None)
+    launch_installer(installer_path, expected_sha256, os.getpid() if defer_until_exit else None)
     return installer_path
 
 
 def download_installer(url, expected_sha256=""):
+    expected = _normalise_sha256(expected_sha256)
+    if not expected:
+        raise ValueError("Installer SHA256 is required before download")
     resp = requests.get(url, stream=True, timeout=60)
     resp.raise_for_status()
-    tmp_dir = tempfile.gettempdir()
+    tmp_dir = tempfile.mkdtemp(prefix="AmazonMusicRPC_Update_")
     installer_path = os.path.join(tmp_dir, "AmazonMusicRPC_Setup.exe")
     digest = hashlib.sha256()
     with open(installer_path, "wb") as f:
@@ -254,8 +289,7 @@ def download_installer(url, expected_sha256=""):
             if chunk:
                 f.write(chunk)
                 digest.update(chunk)
-    expected = _normalise_sha256(expected_sha256)
-    if expected and digest.hexdigest().lower() != expected:
+    if digest.hexdigest().lower() != expected:
         try:
             os.remove(installer_path)
         except OSError:

@@ -40,10 +40,11 @@ def redaction_audit(config, payloads):
 
 def token_storage_review(config):
     return {
-        "storage": "local-config",
+        "storage": "local-secret-file-dpapi",
         "present_keys": [key for key, _ in sensitive_config_values(config)],
         "redaction_required": True,
-        "future_hardening": ["Windows Credential Manager", "DPAPI"],
+        "at_rest_protection": "DPAPI on Windows",
+        "future_hardening": ["Windows Credential Manager"],
     }
 
 

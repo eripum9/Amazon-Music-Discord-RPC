@@ -11,8 +11,8 @@ import struct
 import subprocess
 import sys
 import time
-import urllib.request
 from urllib.parse import quote, urlparse, urlunparse
+import requests
 from config import load_config, normalize_amazon_music_link_region
 from launcher_diagnostics import format_launcher_failure, launcher_attempt_failure, launcher_candidate_label
 
@@ -174,6 +174,30 @@ def _looks_like_path(value):
     )
 
 
+def _is_local_absolute_path(value):
+    text = _clean(value)
+    return bool(os.path.isabs(text) and not text.startswith(("\\\\", "//")))
+
+
+def _is_allowed_amazon_exe(path, exists_fn=os.path.exists):
+    text = _clean(path)
+    if not text or not _is_local_absolute_path(text) or not text.lower().endswith(".exe"):
+        return False
+    if not exists_fn(text):
+        return False
+    compact = re.sub(r"[\s_\-.]+", "", text.lower())
+    return "amazonmusic" in compact or "amazonmobilellcamazonmusic" in compact
+
+
+def validate_launcher_override(value, exists_fn=os.path.exists):
+    text = _clean(value)
+    if not text:
+        return ""
+    if _looks_like_path(text) and not _is_allowed_amazon_exe(text, exists_fn):
+        raise ValueError("Executable launcher overrides must point to an existing local Amazon Music .exe.")
+    return text
+
+
 def _launcher_candidate(kind, value, method, source):
     text = _clean(value)
     if not text:
@@ -186,7 +210,7 @@ def _launcher_candidate_from_value(value, aumid_method, exe_method, source, exis
     if not text:
         return None
     if _looks_like_path(text):
-        return _launcher_candidate("exe", text, exe_method, source) if exists_fn(text) else None
+        return _launcher_candidate("exe", text, exe_method, source) if _is_allowed_amazon_exe(text, exists_fn) else None
     return _launcher_candidate("aumid", text, aumid_method, source)
 
 
@@ -348,8 +372,8 @@ Add-Type -TypeDefinition $code
 
 
 def _launch_exe(path, port):
-    if not os.path.exists(path):
-        return {"ok": False, "error": "Launcher path does not exist"}
+    if not _is_allowed_amazon_exe(path):
+        return {"ok": False, "error": "Launcher path must point to an existing local Amazon Music .exe"}
     try:
         proc = subprocess.Popen(
             [path, f"--remote-debugging-port={port}"],
@@ -511,8 +535,9 @@ def _http_json(path, timeout=1.5, port=None):
     selected_port = port or get_devtools_port(False)
     if not selected_port:
         raise ConnectionError("No enhanced metadata port selected")
-    with urllib.request.urlopen(f"http://127.0.0.1:{selected_port}{path}", timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8", errors="replace"))
+    response = requests.get(f"http://127.0.0.1:{selected_port}{path}", timeout=timeout)
+    response.raise_for_status()
+    return response.json()
 
 
 def _is_amazon_music_target(target):
@@ -590,7 +615,7 @@ class _CdpSocket:
             response += self._socket.recv(4096)
         if b" 101 " not in response.split(b"\r\n", 1)[0]:
             raise ConnectionError("DevTools websocket handshake failed")
-        accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()).decode("ascii")
+        accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii"), usedforsecurity=False).digest()).decode("ascii")
         if accept.encode("ascii") not in response:
             raise ConnectionError("DevTools websocket accept key did not match")
 

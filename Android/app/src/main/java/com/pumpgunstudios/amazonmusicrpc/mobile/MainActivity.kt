@@ -544,6 +544,13 @@ private fun SettingsCard(
                 }
                 Switch(checked = settings.showPaused, onCheckedChange = { onSettingsChange(settings.copy(showPaused = it)) })
             }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Internet metadata lookup", style = MaterialTheme.typography.titleSmall)
+                    Text("Uses Deezer, iTunes, and MusicBrainz only when media sessions miss artwork or duration.", style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(checked = settings.externalLookupsEnabled, onCheckedChange = { onSettingsChange(settings.copy(externalLookupsEnabled = it)) })
+            }
             Button(modifier = Modifier.fillMaxWidth(), onClick = onSave) {
                 Text("Save settings")
             }

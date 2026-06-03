@@ -32,6 +32,6 @@ Every release description should include:
 
 - Do not paste config files, diagnostics ZIPs, or logs into release notes.
 - Confirm diagnostics exports use redacted config and logs.
-- Confirm no Last.fm session key, Last.fm API secret, or ListenBrainz token appears in release artifacts.
+- Confirm no Last.fm session key, ListenBrainz token, Discord token, or private config value appears in release notes, diagnostics, screenshots, or logs.
 - Keep the latest installer attached to the release.
 - Keep code signing and signed tags on the future hardening list until they are available.

@@ -5,7 +5,8 @@ import json
 import io
 import tkinter as tk
 from tkinter import font as tkfont
-from urllib.request import urlopen, Request
+from urllib.parse import urlparse
+import requests
 
 BG = "#202020"
 CARD_BG = "#2d2d2d"
@@ -20,8 +21,12 @@ _photo_refs = []
 
 def _load_thumbnail(url, size=50):
     try:
-        req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        raw = urlopen(req, timeout=5).read()
+        parsed = urlparse(str(url or ""))
+        if parsed.scheme.lower() not in {"http", "https"}:
+            return None
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+        resp.raise_for_status()
+        raw = resp.content
         from PIL import Image, ImageTk
         img = Image.open(io.BytesIO(raw))
         img = img.resize((size, size), Image.LANCZOS)

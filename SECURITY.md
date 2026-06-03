@@ -45,14 +45,14 @@ Amazon Music RPC can send:
 - Song title, artist, album, playback time, and artwork URL to Discord through local Discord IPC for Rich Presence
 - Scrobbles to Last.fm if Last.fm is enabled
 - Scrobbles to ListenBrainz if ListenBrainz is enabled
-- Track lookup requests to Deezer or iTunes when fallback matching or artwork lookup needs them
+- Track lookup requests to Deezer, iTunes, or MusicBrainz when fallback matching or artwork lookup is enabled and needs them
 - Release check requests to GitHub when update checks run
 
 The app does not upload raw logs or config files automatically.
 
 ## Tokens And Secrets
 
-Last.fm session keys and ListenBrainz tokens are currently stored in the app config file when those features are enabled. Diagnostics and log views redact known token values, Settings exports omit tokens unless explicitly requested, and Settings includes a clear-token action, but `%APPDATA%\AmazonMusicRPC\config.json` should still be treated as private.
+Last.fm session keys and ListenBrainz tokens are stored locally when those features are enabled. On Windows, sensitive config values are migrated out of `%APPDATA%\AmazonMusicRPC\config.json` and written to a separate DPAPI-wrapped local secret file. On Android, the Discord token is wrapped with an Android Keystore key before it is written to app preferences. Diagnostics and log views redact known token values, Settings exports omit tokens unless explicitly requested, and Settings includes a clear-token action. Local app data should still be treated as private because a running app needs decrypted values in memory.
 
 Do not paste config files, diagnostics, or logs publicly unless you have checked that tokens and private data are removed.
 
@@ -78,7 +78,7 @@ Private session mode clears Discord Rich Presence and can stop scrobbling while 
 
 ## Updates
 
-The updater checks GitHub releases and can download the latest installer. It opens the GitHub release page before running the installer and verifies the installer SHA256 when a hash is present in the release notes.
+The updater checks GitHub releases and can download the latest installer. It opens the GitHub release page before running the installer, requires a SHA256 hash in the release notes for automatic download, downloads to a unique temporary directory, and verifies the installer before launching it. If no hash is available, automatic install is disabled and the app only opens the release page.
 
 Each release should include a SHA256 line for `AmazonMusicRPC_Setup.exe`, a clear changelog, and an enhanced metadata compatibility note. Signed release tags and code-signed Windows installers are still planned hardening steps.
 

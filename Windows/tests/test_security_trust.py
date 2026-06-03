@@ -13,10 +13,10 @@ def test_redaction_audit_detects_token_leaks_and_tracks_storage():
     assert clean["ok"] is True
     assert leaked["ok"] is False
     assert leaked["leaks"] == [{"key": "listenbrainz_token", "location": "report"}]
-    assert review["storage"] == "local-config"
+    assert review["storage"] == "local-secret-file-dpapi"
     assert review["redaction_required"] is True
     assert "listenbrainz_token" in review["present_keys"]
-    assert "DPAPI" in review["future_hardening"]
+    assert review["at_rest_protection"] == "DPAPI on Windows"
 
 
 def test_release_notes_trust_check_requires_installer_hash_changelog_and_compatibility():

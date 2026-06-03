@@ -6,9 +6,26 @@ def _ps_literal(value):
     return "'" + str(value or "").replace("'", "''") + "'"
 
 
+def _powershell_executable():
+    windows_dir = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+    candidates = [
+        os.path.join(windows_dir, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+        os.path.join(windows_dir, "Sysnative", "WindowsPowerShell", "v1.0", "powershell.exe"),
+        os.path.join(windows_dir, "SysWOW64", "WindowsPowerShell", "v1.0", "powershell.exe"),
+        "powershell.exe",
+    ]
+    for candidate in candidates:
+        if os.path.isabs(candidate):
+            if os.path.exists(candidate):
+                return candidate
+        else:
+            return candidate
+    return "powershell.exe"
+
+
 def _run_dialog(script):
     completed = subprocess.run(
-        ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
+        [_powershell_executable(), "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
