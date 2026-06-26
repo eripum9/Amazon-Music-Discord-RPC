@@ -65,6 +65,7 @@ def run_self_tests(log_dir, diagnostics_path):
             DEFAULTS.get("amazon_devtools_enabled") is False
             and DEFAULTS.get("amazon_devtools_auto_launch") is False
             and DEFAULTS.get("enhanced_metadata_prompt_seen") is False
+            and DEFAULTS.get("setup_wizard_seen") is False
             and DEFAULTS.get("notification_enrichment_enabled") is False
             and DEFAULTS.get("amazon_music_link_region") == "com"
             and normalize_amazon_music_link_region("de") == "de"
@@ -1013,6 +1014,9 @@ def run_self_tests(log_dir, diagnostics_path):
             and "sourceStrip" in html
             and "renderSourceSummary" in script
             and "renderWizard" in script
+            and "complete_setup_wizard" in script
+            and "setup_wizard_seen" in script
+            and "Run Setup Wizard" in html
             and "wizardNext" in script
             and "wizardBack" in script
             and "closeMetadataWarning" in script

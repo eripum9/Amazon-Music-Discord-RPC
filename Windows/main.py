@@ -1583,6 +1583,7 @@ def main():
         not current_config.get("start_minimized", True)
         or not config_exists
         or not current_config.get("enhanced_metadata_prompt_seen", False)
+        or not current_config.get("setup_wizard_seen", False)
     )
     if should_open_settings:
         open_settings()

@@ -863,7 +863,8 @@ function setDevActionStatus(text) {
 
 async function resetIntroFlag() {
   await pywebview.api.set_config_flag('intro_seen', false);
-  setDevActionStatus('Intro will show next time Settings opens.');
+  await pywebview.api.set_config_flag('setup_wizard_seen', false);
+  setDevActionStatus('Setup wizard will show next time Settings opens.');
 }
 
 async function resetTestsWarning() {
@@ -978,6 +979,7 @@ class _Api:
     def set_config_flag(self, key, value):
         allowed = {
             "intro_seen",
+            "setup_wizard_seen",
             "diagnostics_tests_warning_dismissed",
             "privacy_private_session",
         }

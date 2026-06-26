@@ -139,6 +139,46 @@ def _settings_import_config(payload, existing):
     return merged
 
 
+def _settings_config_from_payload(data, existing):
+    if not isinstance(data, dict):
+        raise ValueError("Settings payload is invalid.")
+    missing = sorted(key for key in _REQUIRED_SETTINGS_KEYS if key not in data)
+    if missing:
+        raise ValueError(f"Settings payload is incomplete: {', '.join(missing)}")
+
+    use_custom = data.get("use_custom", False)
+    client_id = data.get("client_id", "").strip() if use_custom else DEFAULT_CLIENT_ID
+    listenbrainz_token = data.get("listenbrainz_token", "").strip()
+    if not listenbrainz_token:
+        listenbrainz_token = existing.get("listenbrainz_token", "")
+    from amazon_devtools import validate_launcher_override
+
+    return {
+        **existing,
+        "discord_client_id": client_id,
+        "use_custom_client_id": use_custom,
+        "start_on_startup": bool(data.get("start_on_startup")),
+        "start_minimized": bool(data.get("start_minimized")),
+        "show_paused": bool(data.get("show_paused", True)),
+        "privacy_private_session": bool(data.get("privacy_private_session")),
+        "privacy_disable_scrobbling": bool(data.get("privacy_disable_scrobbling", True)),
+        "privacy_blocked_keywords": data.get("privacy_blocked_keywords", "").strip(),
+        "game_mode_enabled": bool(data.get("game_mode_enabled")),
+        "game_mode_processes": data.get("game_mode_processes", "").strip(),
+        "custom_albums": _clean_custom_albums(data.get("custom_albums", [])),
+        "song_link_enabled": bool(data.get("song_link_enabled")),
+        "song_link_provider": data.get("song_link_provider") if data.get("song_link_provider") in ("amazon", "deezer") else "amazon",
+        "amazon_music_link_region": normalize_amazon_music_link_region(data.get("amazon_music_link_region")),
+        "notification_enrichment_enabled": bool(data.get("notification_enrichment_enabled")),
+        "amazon_devtools_enabled": bool(data.get("amazon_devtools_enabled")),
+        "amazon_devtools_auto_launch": bool(data.get("amazon_devtools_auto_launch", False)),
+        "amazon_music_launcher_override": validate_launcher_override(data.get("amazon_music_launcher_override", "")),
+        "lastfm_enabled": bool(data.get("lastfm_enabled")),
+        "listenbrainz_enabled": bool(data.get("listenbrainz_enabled")),
+        "listenbrainz_token": listenbrainz_token,
+    }
+
+
 def _settings_payload():
     cfg = load_config()
     try:
@@ -168,6 +208,8 @@ def _settings_payload():
         "lastfm_username",
         "listenbrainz_enabled",
         "intro_seen",
+        "setup_wizard_seen",
+        "setup_wizard_version",
         "enhanced_metadata_prompt_seen",
     ]
     payload = {key: cfg.get(key) for key in keys}
@@ -653,11 +695,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
   .intro-overlay.visible { display: flex; }
   .intro-card {
-    width: min(420px, 100%);
+    width: min(500px, 100%);
     background: #2d2d2d;
     border: 1px solid #464646;
     border-radius: 10px;
-    padding: 28px;
+    padding: 24px;
     animation: introRise 0.36s ease-out;
     box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
   }
@@ -689,7 +731,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     z-index: 1;
   }
   .intro-title {
-    font-size: 24px;
+    font-size: 22px;
     color: #fff;
     font-weight: 650;
     line-height: 1.15;
@@ -700,6 +742,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     font-size: 13px;
     line-height: 1.5;
     margin-bottom: 18px;
+  }
+  .intro-eyebrow {
+    color: #43b581;
+    font-size: 11px;
+    font-weight: 750;
+    text-transform: uppercase;
+    letter-spacing: 0;
+    margin-bottom: 8px;
   }
   .intro-list {
     display: grid;
@@ -746,10 +796,77 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     padding: 10px;
     cursor: pointer;
   }
+  .wizard-choice button strong,
+  .wizard-choice button span {
+    display: block;
+  }
+  .wizard-choice button strong {
+    color: #fff;
+    font-size: 12px;
+    font-weight: 650;
+  }
+  .wizard-choice button span {
+    color: #999;
+    font-size: 10px;
+    margin-top: 3px;
+  }
   .wizard-choice button.selected {
     border-color: #43b581;
     background: #243224;
     color: #fff;
+  }
+  .wizard-choice.three {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .wizard-panel {
+    background: #262626;
+    border: 1px solid #3d3d3d;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 16px;
+  }
+  .wizard-panel .row {
+    padding: 0;
+    margin-bottom: 10px;
+  }
+  .wizard-panel .row:last-child {
+    margin-bottom: 0;
+  }
+  .wizard-panel input,
+  .wizard-panel select {
+    margin-top: 8px;
+  }
+  .wizard-mini {
+    color: #999;
+    font-size: 11px;
+    line-height: 1.4;
+    margin-top: 8px;
+  }
+  .wizard-status {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .wizard-status-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 10px;
+    background: #262626;
+    border: 1px solid #3d3d3d;
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: #ddd;
+    font-size: 12px;
+  }
+  .wizard-status-row strong {
+    color: #fff;
+    font-size: 12px;
+  }
+  .wizard-status-row span {
+    color: #999;
+    font-size: 11px;
+    text-align: right;
   }
   .modal-overlay {
     position: fixed;
@@ -1185,6 +1302,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 <button class="update-btn" id="updateBtn" onclick="checkForUpdates()">↑ Check for Updates</button>
 <button class="update-btn" id="diagBtn" onclick="pywebview.api.open_diagnostics()">Open Diagnostics</button>
+<button class="update-btn" type="button" onclick="openSetupWizard()">Run Setup Wizard</button>
 <button class="update-btn" onclick="pywebview.api.open_url('https://github.com/eripum9/Amazon-Music-Discord-RPC/issues')">Report Issue</button>
 <div class="update-status" id="updateStatus"></div>
 
@@ -1298,6 +1416,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     if (target.closest('#enhancedMetadataPrompt')) {
       return false;
     }
+    if (target.closest('#introOverlay')) {
+      return false;
+    }
     if (target.id === 'includeTokens') {
       return false;
     }
@@ -1380,31 +1501,162 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   function wizardSteps() {
     return [
       {
+        eyebrow: 'Step 1 of 8',
         title: 'Amazon Music RPC',
-        copy: 'A Discord Rich Presence for Amazon Music. This quick setup checks the important parts before the app keeps running in the tray.',
-        items: ['Discord presence shows song, artist, album art, and timer.', 'Privacy controls can hide activity whenever you need them.', 'Diagnostics helps confirm which metadata source is active.']
+        copy: 'Set up the important options once, then the app can keep running quietly from the tray.',
+        items: ['Spotify-style Discord Rich Presence for Amazon Music on Windows.', 'Shows song, artist, album art, timer, and pause state.', 'You can change everything later from Settings.']
       },
       {
-        title: 'Enhanced metadata',
-        copy: 'Enhanced metadata is recommended because it gives the app richer local playback details from Amazon Music.',
-        choice: true
+        eyebrow: 'Step 2 of 8',
+        title: 'Discord Presence',
+        copy: 'Choose how the app should appear on Discord.',
+        kind: 'discord'
       },
       {
-        title: 'Amazon Music check',
-        copy: 'Launch Amazon Music with metadata enabled now, or continue and do it later from the tray or this settings page.',
-        action: 'launch'
+        eyebrow: 'Step 3 of 8',
+        title: 'Amazon Metadata',
+        copy: 'Enhanced metadata is recommended. It gives the app more accurate track info, artwork, pause state, and timing by launching Amazon Music with a local metadata connection.',
+        kind: 'metadata'
       },
       {
-        title: 'Discord status',
-        copy: 'When Discord and Amazon Music are open, the source indicator shows where the current track data is coming from.',
-        status: true
+        eyebrow: 'Step 4 of 8',
+        title: 'Privacy Controls',
+        copy: 'Private session hides Discord presence. Keyword filters can hide matching tracks, artists, or albums.',
+        kind: 'privacy'
       },
       {
-        title: 'Privacy and scrobbling',
-        copy: 'Private session hides Discord presence. Last.fm and ListenBrainz are optional and only send data when you enable them.',
-        items: ['Private session can be toggled from Settings or inside Amazon Music.', 'Keyword filters hide matching tracks, artists, or albums.', 'Scrobbling tokens stay on this device.']
+        eyebrow: 'Step 5 of 8',
+        title: 'Listen Button',
+        copy: 'Choose the button Discord should show on your presence.',
+        kind: 'links'
+      },
+      {
+        eyebrow: 'Step 6 of 8',
+        title: 'Scrobbling',
+        copy: 'Last.fm and ListenBrainz are optional. Tokens are stored on this device and protected by Windows DPAPI when available.',
+        kind: 'scrobbling'
+      },
+      {
+        eyebrow: 'Step 7 of 8',
+        title: 'Startup and Updates',
+        copy: 'Choose how the app should behave when Windows starts.',
+        kind: 'startup'
+      },
+      {
+        eyebrow: 'Step 8 of 8',
+        title: 'Ready',
+        copy: 'Review the current source status, then finish setup.',
+        kind: 'finish'
       }
     ];
+  }
+
+  function wizardChoice(label, selected, action, detail) {
+    return `<button type="button" class="${selected ? 'selected' : ''}" onclick="${action}">
+      <strong>${escapeHtml(label)}</strong>
+      ${detail ? `<span>${escapeHtml(detail)}</span>` : ''}
+    </button>`;
+  }
+
+  function wizardToggleButton(id, label, detail) {
+    const enabled = !!document.getElementById(id).checked;
+    return wizardChoice(label, enabled, `setWizardToggle('${id}', ${enabled ? 'false' : 'true'})`, detail);
+  }
+
+  function wizardPanelForStep(step) {
+    const regions = ['com', 'de', 'co.uk', 'fr', 'it', 'es', 'co.jp', 'ca', 'com.au', 'com.br', 'com.mx'];
+    if (step.kind === 'discord') {
+      const paused = !!document.getElementById('showPaused').checked;
+      const custom = document.getElementById('idMode').value === 'custom';
+      return `<div class="wizard-panel">
+        <div class="wizard-choice">
+          ${wizardChoice('Default app ID', !custom, "setWizardSelect('idMode', 'default')", 'Recommended')}
+          ${wizardChoice('Custom app ID', custom, "setWizardSelect('idMode', 'custom')", 'Advanced')}
+        </div>
+        <div class="wizard-choice">
+          ${wizardChoice('Show paused', paused, "setWizardToggle('showPaused', true)", 'Keep presence visible')}
+          ${wizardChoice('Hide paused', !paused, "setWizardToggle('showPaused', false)", 'Only active playback')}
+        </div>
+        <div class="wizard-mini">Discord must be open on this PC for Rich Presence to appear.</div>
+      </div>`;
+    }
+    if (step.kind === 'metadata') {
+      const autoLaunch = !!document.getElementById('amazonDevtoolsAutoLaunch').checked;
+      return `<div class="wizard-panel">
+        <div class="wizard-choice">
+          ${wizardChoice('Enhanced metadata', wizardMetadataChoice, 'setWizardMetadata(true)', 'Recommended')}
+          ${wizardChoice('Fallback mode', !wizardMetadataChoice, 'setWizardMetadata(false)', 'SMTC and notifications')}
+        </div>
+        <div class="wizard-choice">
+          ${wizardChoice('Auto-restart on', autoLaunch, "setWizardToggle('amazonDevtoolsAutoLaunch', true)", 'Repair metadata when Amazon is already open')}
+          ${wizardChoice('Auto-restart off', !autoLaunch, "setWizardToggle('amazonDevtoolsAutoLaunch', false)", 'Manual launch only')}
+        </div>
+        <button class="update-btn" type="button" onclick="launchAmazonDevtools()">Launch Amazon Music Now</button>
+        <div class="wizard-mini">Enhanced metadata currently works with the Microsoft Store Amazon Music app.</div>
+      </div>`;
+    }
+    if (step.kind === 'privacy') {
+      const keywords = document.getElementById('privacyBlockedKeywords').value;
+      return `<div class="wizard-panel">
+        <div class="wizard-choice">
+          ${wizardToggleButton('privacyPrivateSession', 'Private session', 'Hide Discord presence')}
+          ${wizardToggleButton('privacyDisableScrobbling', 'Pause scrobbling in private', 'Recommended')}
+        </div>
+        <label class="row-label">Blocked keywords</label>
+        <input type="text" value="${escapeHtml(keywords)}" placeholder="Example: podcast, audiobook" oninput="setWizardText('privacyBlockedKeywords', this.value, false)">
+        <div class="wizard-mini">Separate keywords with commas. Matching songs, artists, or albums stay private.</div>
+      </div>`;
+    }
+    if (step.kind === 'links') {
+      const enabled = !!document.getElementById('songLinkEnabled').checked;
+      const provider = document.getElementById('songLinkProvider').value;
+      const region = document.getElementById('amazonMusicLinkRegion').value;
+      return `<div class="wizard-panel">
+        <div class="wizard-choice">
+          ${wizardChoice('Button on', enabled, "setWizardToggle('songLinkEnabled', true)", 'Show listen button')}
+          ${wizardChoice('Button off', !enabled, "setWizardToggle('songLinkEnabled', false)", 'Presence only')}
+        </div>
+        <div class="wizard-choice">
+          ${wizardChoice('Amazon Music', provider === 'amazon', "setWizardSelect('songLinkProvider', 'amazon')", 'Default')}
+          ${wizardChoice('Deezer', provider === 'deezer', "setWizardSelect('songLinkProvider', 'deezer')", 'Fallback lookup')}
+        </div>
+        <label class="row-label">Amazon Music region</label>
+        <select onchange="setWizardSelect('amazonMusicLinkRegion', this.value)">
+          ${regions.map((item) => `<option value="${item}" ${region === item ? 'selected' : ''}>amazon.${item}</option>`).join('')}
+        </select>
+      </div>`;
+    }
+    if (step.kind === 'scrobbling') {
+      return `<div class="wizard-panel">
+        <div class="wizard-choice">
+          ${wizardToggleButton('lastfmEnabled', 'Last.fm', 'Enable scrobbling')}
+          ${wizardToggleButton('lbEnabled', 'ListenBrainz', 'Enable scrobbling')}
+        </div>
+        <div class="wizard-mini">Authenticate Last.fm or paste your ListenBrainz token from the full settings page after setup.</div>
+      </div>`;
+    }
+    if (step.kind === 'startup') {
+      return `<div class="wizard-panel">
+        <div class="wizard-choice">
+          ${wizardToggleButton('startOnStartup', 'Start with Windows', 'Tray app starts automatically')}
+          ${wizardToggleButton('startMinimized', 'Start minimized', 'Recommended for tray use')}
+        </div>
+        <div class="wizard-choice">
+          ${wizardToggleButton('notifEnrichEnabled', 'Notifications fallback', 'Use Amazon Music notifications')}
+          ${wizardToggleButton('gameModeEnabled', 'Game Mode', 'Suppress wrong-song picker')}
+        </div>
+      </div>`;
+    }
+    if (step.kind === 'finish') {
+      const summary = latestConfig.source_summary || {};
+      return `<div class="wizard-status">
+        <div class="wizard-status-row"><strong>Metadata source</strong><span>${escapeHtml(summary.label || 'Waiting')}</span></div>
+        <div class="wizard-status-row"><strong>Source detail</strong><span>${escapeHtml(summary.detail || 'Waiting for Amazon Music')}</span></div>
+        <div class="wizard-status-row"><strong>Enhanced metadata</strong><span>${document.getElementById('amazonDevtoolsEnabled').checked ? 'Enabled' : 'Fallback mode'}</span></div>
+        <div class="wizard-status-row"><strong>Privacy</strong><span>${document.getElementById('privacyPrivateSession').checked ? 'Private session' : 'Standard'}</span></div>
+      </div>`;
+    }
+    return '';
   }
 
   function renderWizard() {
@@ -1413,47 +1665,79 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     const progress = document.getElementById('wizardProgress');
     progress.innerHTML = steps.map((_, index) => `<span class="wizard-dot ${index <= wizardStep ? 'active' : ''}"></span>`).join('');
     let body = '<div class="intro-mark"><img src="data:image/png;base64,{icon_b64}" alt="icon"></div>';
+    if (step.eyebrow) {
+      body += `<div class="intro-eyebrow">${escapeHtml(step.eyebrow)}</div>`;
+    }
     body += `<div class="intro-title">${escapeHtml(step.title)}</div>`;
     body += `<div class="intro-copy">${escapeHtml(step.copy)}</div>`;
     if (step.items) {
       body += '<div class="intro-list">' + step.items.map((item) => `<div class="intro-item">${escapeHtml(item)}</div>`).join('') + '</div>';
     }
-    if (step.choice) {
-      body += `<div class="wizard-choice">
-        <button type="button" class="${wizardMetadataChoice ? 'selected' : ''}" onclick="setWizardMetadata(true)">Enhanced metadata</button>
-        <button type="button" class="${!wizardMetadataChoice ? 'selected' : ''}" onclick="setWizardMetadata(false)">Fallback mode</button>
-      </div>`;
-    }
-    if (step.action) {
-      body += '<button class="update-btn" type="button" onclick="launchAmazonDevtools()">Launch Amazon Music Now</button>';
-    }
-    if (step.status) {
-      const summary = latestConfig.source_summary || {};
-      body += `<div class="intro-list"><div class="intro-item">${escapeHtml(summary.label || 'Waiting')} · ${escapeHtml(summary.detail || 'Waiting for Amazon Music')}</div></div>`;
-    }
+    body += wizardPanelForStep(step);
     document.getElementById('wizardBody').innerHTML = body;
     document.getElementById('wizardBack').style.visibility = wizardStep === 0 ? 'hidden' : 'visible';
     document.getElementById('wizardNext').textContent = wizardStep === steps.length - 1 ? 'Finish' : 'Next';
   }
 
-  async function setWizardMetadata(enabled) {
+  function setWizardMetadata(enabled) {
     wizardMetadataChoice = !!enabled;
     document.getElementById('amazonDevtoolsEnabled').checked = !!enabled;
     document.getElementById('amazonDevtoolsAutoLaunch').checked = !!enabled;
     renderWizard();
-    if (!apiReady()) {
+  }
+
+  function setWizardToggle(id, enabled) {
+    const el = document.getElementById(id);
+    if (!el) {
       return;
     }
-    try {
-      const result = await pywebview.api.set_enhanced_metadata_prompt(!!enabled, !!enabled);
-      if (result && result.config) {
-        applyConfig(result.config);
-        document.getElementById('introOverlay').classList.add('visible');
-        renderWizard();
-      }
-    } catch (e) {
-      showSettingsStatus('\u2717 Could not save enhanced metadata choice.', 'update-error');
+    el.checked = !!enabled;
+    if (id === 'lastfmEnabled') {
+      onLastfmToggle();
     }
+    if (id === 'lbEnabled') {
+      onLbToggle();
+    }
+    if (id === 'notifEnrichEnabled') {
+      onNotifEnrichToggle();
+    }
+    if (id === 'amazonDevtoolsEnabled') {
+      wizardMetadataChoice = !!enabled;
+    }
+    renderWizard();
+  }
+
+  function setWizardSelect(id, value) {
+    const el = document.getElementById(id);
+    if (!el) {
+      return;
+    }
+    el.value = value;
+    if (id === 'idMode') {
+      onModeChange();
+    }
+    if (id === 'songLinkProvider') {
+      onSongLinkProviderChange();
+    }
+    renderWizard();
+  }
+
+  function setWizardText(id, value, rerender) {
+    const el = document.getElementById(id);
+    if (!el) {
+      return;
+    }
+    el.value = value;
+    if (rerender !== false) {
+      renderWizard();
+    }
+  }
+
+  function openSetupWizard() {
+    wizardStep = 0;
+    wizardMetadataChoice = !!document.getElementById('amazonDevtoolsEnabled').checked;
+    document.getElementById('introOverlay').classList.add('visible');
+    renderWizard();
   }
 
   function wizardBack() {
@@ -1581,7 +1865,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
 
   function maybeShowEnhancedMetadataPrompt(cfg) {
-    if (!apiReady() || enhancedMetadataPromptVisible || !cfg || cfg.enhanced_metadata_prompt_seen || !cfg.intro_seen) {
+    if (!apiReady() || enhancedMetadataPromptVisible || !cfg || cfg.enhanced_metadata_prompt_seen || !cfg.intro_seen || !cfg.setup_wizard_seen) {
       return;
     }
     const enabled = !!cfg.amazon_devtools_enabled;
@@ -1776,7 +2060,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     applyingConfig = true;
     cfg = cfg || {};
     latestConfig = cfg;
-    wizardMetadataChoice = !!cfg.amazon_devtools_enabled;
+    const firstWizardRun = !cfg.setup_wizard_seen && !cfg.setup_wizard_version;
+    wizardMetadataChoice = firstWizardRun ? true : !!cfg.amazon_devtools_enabled;
     renderSourceSummary(cfg.source_summary || {});
     if (cfg.use_custom_client_id) {
       document.getElementById('idMode').value = 'custom';
@@ -1801,8 +2086,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     document.getElementById('amazonMusicLinkRegion').value = amazonRegions.includes(cfg.amazon_music_link_region) ? cfg.amazon_music_link_region : 'com';
     onSongLinkProviderChange();
     document.getElementById('notifEnrichEnabled').checked = !!cfg.notification_enrichment_enabled;
-    document.getElementById('amazonDevtoolsEnabled').checked = !!cfg.amazon_devtools_enabled;
-    document.getElementById('amazonDevtoolsAutoLaunch').checked = !!cfg.amazon_devtools_auto_launch;
+    document.getElementById('amazonDevtoolsEnabled').checked = firstWizardRun ? true : !!cfg.amazon_devtools_enabled;
+    document.getElementById('amazonDevtoolsAutoLaunch').checked = firstWizardRun ? true : !!cfg.amazon_devtools_auto_launch;
     document.getElementById('amazonLauncherOverride').value = cfg.amazon_music_launcher_override || '';
     amazonLauncherInstalled = !!cfg.amazon_devtools_launcher_installed;
     renderAmazonLauncherButton();
@@ -1847,7 +2132,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         lastLbValidationKey = '';
       }
     }
-    if (!cfg.intro_seen) {
+    if (!cfg.intro_seen || !cfg.setup_wizard_seen) {
       document.getElementById('introOverlay').classList.add('visible');
       renderWizard();
     } else {
@@ -1888,12 +2173,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
 
   async function finishIntro() {
+    if (!validateSettings(true)) {
+      return;
+    }
     try {
-      const result = await pywebview.api.dismiss_intro();
+      const result = await pywebview.api.complete_setup_wizard(collectSettingsData());
       if (result && result.config) {
         applyConfig(result.config);
       } else {
         latestConfig.intro_seen = true;
+        latestConfig.setup_wizard_seen = true;
         document.getElementById('introOverlay').classList.remove('visible');
         maybeShowEnhancedMetadataPrompt(latestConfig);
       }
@@ -2071,8 +2360,22 @@ class _Api:
     def dismiss_intro(self):
         config = load_config_for_update()
         config["intro_seen"] = True
+        config["setup_wizard_seen"] = True
+        config["setup_wizard_version"] = APP_VERSION
         config["enhanced_metadata_prompt_seen"] = True
         save_config(config)
+        return {"ok": True, "config": _settings_payload()}
+
+    def complete_setup_wizard(self, data):
+        config = _settings_config_from_payload(data, load_config_for_update())
+        config["intro_seen"] = True
+        config["setup_wizard_seen"] = True
+        config["setup_wizard_version"] = APP_VERSION
+        config["enhanced_metadata_prompt_seen"] = True
+        save_config(config)
+        set_startup(config["start_on_startup"], config["start_minimized"])
+        if self._on_save:
+            self._on_save(config)
         return {"ok": True, "config": _settings_payload()}
 
     def set_enhanced_metadata_prompt(self, enabled, auto_restart=False):
@@ -2257,45 +2560,7 @@ class _Api:
             return {"ok": False, "error": str(e)}
 
     def save_settings(self, data):
-        if not isinstance(data, dict):
-            raise ValueError("Settings payload is invalid.")
-        missing = sorted(key for key in _REQUIRED_SETTINGS_KEYS if key not in data)
-        if missing:
-            raise ValueError(f"Settings payload is incomplete: {', '.join(missing)}")
-
-        use_custom = data.get("use_custom", False)
-        client_id = data.get("client_id", "").strip() if use_custom else DEFAULT_CLIENT_ID
-
-        existing = load_config_for_update()
-        listenbrainz_token = data.get("listenbrainz_token", "").strip()
-        if not listenbrainz_token:
-            listenbrainz_token = existing.get("listenbrainz_token", "")
-        from amazon_devtools import validate_launcher_override
-
-        config = {
-            **existing,
-            "discord_client_id": client_id,
-            "use_custom_client_id": use_custom,
-            "start_on_startup": bool(data.get("start_on_startup")),
-            "start_minimized": bool(data.get("start_minimized")),
-            "show_paused": bool(data.get("show_paused", True)),
-            "privacy_private_session": bool(data.get("privacy_private_session")),
-            "privacy_disable_scrobbling": bool(data.get("privacy_disable_scrobbling", True)),
-            "privacy_blocked_keywords": data.get("privacy_blocked_keywords", "").strip(),
-            "game_mode_enabled": bool(data.get("game_mode_enabled")),
-            "game_mode_processes": data.get("game_mode_processes", "").strip(),
-            "custom_albums": _clean_custom_albums(data.get("custom_albums", [])),
-            "song_link_enabled": bool(data.get("song_link_enabled")),
-            "song_link_provider": data.get("song_link_provider") if data.get("song_link_provider") in ("amazon", "deezer") else "amazon",
-            "amazon_music_link_region": normalize_amazon_music_link_region(data.get("amazon_music_link_region")),
-            "notification_enrichment_enabled": bool(data.get("notification_enrichment_enabled")),
-            "amazon_devtools_enabled": bool(data.get("amazon_devtools_enabled")),
-            "amazon_devtools_auto_launch": bool(data.get("amazon_devtools_auto_launch", False)),
-            "amazon_music_launcher_override": validate_launcher_override(data.get("amazon_music_launcher_override", "")),
-            "lastfm_enabled": bool(data.get("lastfm_enabled")),
-            "listenbrainz_enabled": bool(data.get("listenbrainz_enabled")),
-            "listenbrainz_token": listenbrainz_token,
-        }
+        config = _settings_config_from_payload(data, load_config_for_update())
         save_config(config)
         set_startup(config["start_on_startup"], config["start_minimized"])
 

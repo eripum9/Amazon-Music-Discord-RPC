@@ -12,8 +12,8 @@ android {
         applicationId = "com.pumpgunstudios.amazonmusicrpc.fakeamazon"
         minSdk = 27
         targetSdk = 35
-        versionCode = 340
-        versionName = "3.4.0-test"
+        versionCode = 400
+        versionName = "4.0.0-test"
     }
 
     buildFeatures {

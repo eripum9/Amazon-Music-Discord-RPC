@@ -19,7 +19,7 @@ if not os.environ.get("APPDATA") or getattr(sys, "frozen", False) is False:
     CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
     CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
-APP_VERSION = "3.4.0"
+APP_VERSION = "4.0.0"
 AMAZON_MUSIC_LINK_REGIONS = (
     "com",
     "de",
@@ -62,6 +62,8 @@ DEFAULTS = {
     "game_mode_enabled": False,
     "game_mode_processes": "",
     "intro_seen": False,
+    "setup_wizard_seen": False,
+    "setup_wizard_version": "",
     "enhanced_metadata_prompt_seen": False,
     "diagnostics_tests_warning_dismissed": False,
     "settings_window_width": 460,
@@ -81,6 +83,9 @@ def _complete_config(saved):
     if saved and "enhanced_metadata_prompt_seen" not in saved and "amazon_devtools_enabled" not in saved:
         config["amazon_devtools_enabled"] = True
         config["amazon_devtools_auto_launch"] = True
+    if saved and "setup_wizard_seen" not in saved:
+        config["setup_wizard_seen"] = True
+        config["setup_wizard_version"] = config.get("setup_wizard_version") or APP_VERSION
     return config
 
 

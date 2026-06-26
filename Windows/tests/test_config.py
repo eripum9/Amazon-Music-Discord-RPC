@@ -9,6 +9,7 @@ def test_enhanced_metadata_defaults_and_region_normalisation():
     assert config.DEFAULTS["amazon_devtools_enabled"] is False
     assert config.DEFAULTS["amazon_devtools_auto_launch"] is False
     assert config.DEFAULTS["enhanced_metadata_prompt_seen"] is False
+    assert config.DEFAULTS["setup_wizard_seen"] is False
     assert config.DEFAULTS["notification_enrichment_enabled"] is False
     assert config.DEFAULTS["amazon_music_link_region"] == "com"
     assert config.normalize_amazon_music_link_region("de") == "de"
@@ -21,8 +22,10 @@ def test_existing_user_enhanced_metadata_migration():
     fresh = config._complete_config({})
     assert migrated["amazon_devtools_enabled"] is True
     assert migrated["amazon_devtools_auto_launch"] is True
+    assert migrated["setup_wizard_seen"] is True
     assert fresh["amazon_devtools_enabled"] is False
     assert fresh["amazon_devtools_auto_launch"] is False
+    assert fresh["setup_wizard_seen"] is False
 
 
 def test_config_save_is_atomic_and_update_reads_stay_strict(tmp_path, monkeypatch):
