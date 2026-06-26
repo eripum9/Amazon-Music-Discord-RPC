@@ -1019,6 +1019,9 @@ def run_self_tests(log_dir, diagnostics_path):
             and "Run Setup Wizard" in html
             and "wizardNext" in script
             and "wizardBack" in script
+            and "setupWizardManualOpen" in script
+            and "isSetupWizardVisible" in script
+            and "isSetupWizardVisible())" in script
             and "closeMetadataWarning" in script
             and "acceptMetadataWarning" in script
             and "window.confirm" not in script

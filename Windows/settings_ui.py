@@ -1320,6 +1320,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   let enhancedMetadataPromptVisible = false;
   let wizardStep = 0;
   let wizardMetadataChoice = !!BOOTSTRAP_CONFIG.amazon_devtools_enabled;
+  let setupWizardManualOpen = false;
   let launcherCandidatesLoaded = false;
 
   function showSettingsStatus(text, kind) {
@@ -1455,7 +1456,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
 
   async function syncExternalConfig() {
-    if (!apiReady() || applyingConfig || autoSaveTimer || userIsTyping()) {
+    if (!apiReady() || applyingConfig || autoSaveTimer || userIsTyping() || isSetupWizardVisible()) {
       return;
     }
     try {
@@ -1496,6 +1497,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     strip.className = 'source-strip ' + (summary.state || 'muted');
     document.getElementById('sourceTitle').textContent = summary.label || 'Waiting';
     document.getElementById('sourceDetail').textContent = summary.detail || 'Waiting for Amazon Music';
+  }
+
+  function isSetupWizardVisible() {
+    const overlay = document.getElementById('introOverlay');
+    return !!(overlay && overlay.classList.contains('visible'));
   }
 
   function wizardSteps() {
@@ -1734,6 +1740,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
 
   function openSetupWizard() {
+    setupWizardManualOpen = true;
     wizardStep = 0;
     wizardMetadataChoice = !!document.getElementById('amazonDevtoolsEnabled').checked;
     document.getElementById('introOverlay').classList.add('visible');
@@ -2132,7 +2139,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         lastLbValidationKey = '';
       }
     }
-    if (!cfg.intro_seen || !cfg.setup_wizard_seen) {
+    if (!cfg.intro_seen || !cfg.setup_wizard_seen || setupWizardManualOpen) {
       document.getElementById('introOverlay').classList.add('visible');
       renderWizard();
     } else {
@@ -2178,6 +2185,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
     try {
       const result = await pywebview.api.complete_setup_wizard(collectSettingsData());
+      setupWizardManualOpen = false;
       if (result && result.config) {
         applyConfig(result.config);
       } else {
@@ -2187,6 +2195,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         maybeShowEnhancedMetadataPrompt(latestConfig);
       }
     } catch (e) {
+      setupWizardManualOpen = true;
       showSettingsStatus('\u2717 Could not save intro state yet. Try again after Settings finishes loading.', 'update-error');
     }
   }
