@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 def base_track_for_devtools():
     return {
         "title": "",

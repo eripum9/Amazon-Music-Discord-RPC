@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 def clean_text(value):
     return " ".join(str(value or "").split())
 

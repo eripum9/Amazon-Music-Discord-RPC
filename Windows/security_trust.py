@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 import json
 
 from config import SENSITIVE_CONFIG_KEYS

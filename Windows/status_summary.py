@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 def metadata_source_summary(state, config):
     state = state if isinstance(state, dict) else {}
     config = config if isinstance(config, dict) else {}
