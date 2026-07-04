@@ -432,6 +432,145 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Qt tray drawer", False, str(e)))
 
     try:
+        import amazify_compat
+        old_appdata = os.environ.get("APPDATA")
+        old_localappdata = os.environ.get("LOCALAPPDATA")
+        with tempfile.TemporaryDirectory(prefix="amrpc_amazify_", dir=CONFIG_DIR) as temp_dir:
+            appdata = os.path.join(temp_dir, "Roaming")
+            localappdata = os.path.join(temp_dir, "Local")
+            install_dir = os.path.join(localappdata, "Programs", "Amazify")
+            os.makedirs(install_dir, exist_ok=True)
+            os.makedirs(os.path.join(appdata, "Amazify", "logs"), exist_ok=True)
+            open(os.path.join(install_dir, "amazify.exe"), "w", encoding="utf-8").close()
+            os.environ["APPDATA"] = appdata
+            os.environ["LOCALAPPDATA"] = localappdata
+            with open(os.path.join(appdata, "Amazify", "devtools_state.json"), "w", encoding="utf-8") as f:
+                json.dump({"last_port": 52341}, f)
+            with open(os.path.join(appdata, "Amazify", "logs", "amazify.log"), "w", encoding="utf-8") as f:
+                f.write("Amazify started with DevTools port: 52342")
+            result = amazify_compat.ensure_amazify_compat("9.9.9")
+            root = os.path.join(appdata, "Amazify", "plugins", amazify_compat.AMAZIFY_PLUGIN_ID)
+            with open(os.path.join(root, "manifest.json"), "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            with open(os.path.join(root, "plugin.js"), "r", encoding="utf-8") as f:
+                script = f.read()
+            with open(os.path.join(root, "style.css"), "r", encoding="utf-8") as f:
+                style = f.read()
+            with open(os.path.join(appdata, "Amazify", "plugins_state.json"), "r", encoding="utf-8") as f:
+                state = json.load(f)
+            ports = amazify_compat.recent_amazify_devtools_ports()
+            icon_exists = os.path.exists(os.path.join(root, "icon.png"))
+        if old_appdata is None:
+            os.environ.pop("APPDATA", None)
+        else:
+            os.environ["APPDATA"] = old_appdata
+        if old_localappdata is None:
+            os.environ.pop("LOCALAPPDATA", None)
+        else:
+            os.environ["LOCALAPPDATA"] = old_localappdata
+        ok = (
+            result.get("ok") is True
+            and manifest.get("id") == amazify_compat.AMAZIFY_PLUGIN_ID
+            and manifest.get("version") == "9.9.9"
+            and manifest.get("assets", {}).get("icon") == "icon.png"
+            and icon_exists
+            and state.get("enabled", {}).get(amazify_compat.AMAZIFY_PLUGIN_ID) is True
+            and "Amazify.ui.addHeaderAction" in script
+            and "source.assetUrl(\"icon\")" in script
+            and "__amrpcAmazifyBridge" in script
+            and "receiveState" in script
+            and "waitingForPush" in script
+            and "amrpc-status-label" in script
+            and "Amazify integration" in script
+            and "height: 36px" in style
+            and "min-width: 98px" in style
+            and f"RPC_PORT = {amazify_compat.AMAZIFY_RPC_BRIDGE_PORT}" in script
+            and 52341 in ports
+            and 52342 in ports
+        )
+        results.append(_result("Amazify compatibility plugin", ok, "Amazify install detection, plugin installation, and port history are stable"))
+    except Exception as e:
+        try:
+            if old_appdata is None:
+                os.environ.pop("APPDATA", None)
+            else:
+                os.environ["APPDATA"] = old_appdata
+            if old_localappdata is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = old_localappdata
+        except Exception:
+            pass
+        results.append(_result("Amazify compatibility plugin", False, str(e)))
+
+    try:
+        import socket
+        import urllib.request
+        from amazify_rpc_bridge import ALLOWED_COMMANDS, AmazifyRpcBridge
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        commands = []
+        bridge = AmazifyRpcBridge(lambda: {"snapshot": {"rpc": "On", "title": "Rusty"}}, lambda command: commands.append(command), port=port)
+        started = bridge.start()
+        try:
+            health = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2).read().decode("utf-8"))
+            state = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/state", timeout=2).read().decode("utf-8"))
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/command",
+                data=json.dumps({"command": "private"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            command_result = json.loads(urllib.request.urlopen(request, timeout=2).read().decode("utf-8"))
+        finally:
+            bridge.stop()
+        ok = (
+            started
+            and health.get("app") == "AmazonMusicRPC"
+            and state.get("snapshot", {}).get("title") == "Rusty"
+            and command_result.get("command") == "private"
+            and commands == ["private"]
+            and "quit" not in ALLOWED_COMMANDS
+        )
+        results.append(_result("Amazify RPC bridge", ok, "Fixed bridge health, state, and command routing are stable"))
+    except Exception as e:
+        results.append(_result("Amazify RPC bridge", False, str(e)))
+
+    try:
+        import inspect
+        import amazify_compat
+        import amazify_rpc_bridge
+        import main
+        spec_path = os.path.join(os.path.dirname(__file__), "AmazonMusicRPC.spec")
+        with open(spec_path, "r", encoding="utf-8") as f:
+            spec = f.read()
+        source = inspect.getsource(main) + inspect.getsource(amazify_compat) + inspect.getsource(amazify_rpc_bridge)
+        devtools_source = inspect.getsource(__import__("amazon_devtools").get_devtools_track_sync)
+        main_loop_source = inspect.getsource(main.rpc_loop)
+        ok = (
+            "ensure_amazify_compat" in source
+            and "start_amazify_rpc_bridge" in source
+            and "push_rpc_state_to_amazify" in source
+            and "_push_amazify_plugin_state" in source
+            and "AMAZIFY_RPC_BRIDGE_PORT = 14797" in source
+            and "plugin_enabled" in inspect.getsource(main._amazify_metadata_owner)
+            and "devtools_port" in inspect.getsource(main._amazify_metadata_owner)
+            and "_amazify_metadata_owner(force=True)" in inspect.getsource(main._sync_status_overlay)
+            and "port=amazify_port" in main_loop_source
+            and "method=\"amazify\"" in main_loop_source
+            and "elif amazify_port and devtools.get(\"status\") == \"unavailable\"" in main_loop_source
+            and "def get_devtools_track_sync(link_region=None, port=None, method=\"\")" in devtools_source
+            and "cache_key = f\"{port}|" in devtools_source
+            and "'amazify_compat'" in spec
+            and "'amazify_rpc_bridge'" in spec
+            and "AmazifyNativeCommand" not in inspect.getsource(amazify_compat)
+        )
+        results.append(_result("Amazify compatibility source", ok, "RPC uses a narrow fixed bridge, packaged plugin, and active Amazify metadata handoff"))
+    except Exception as e:
+        results.append(_result("Amazify compatibility source", False, str(e)))
+
+    try:
         import inspect
         from album_art import search_tracks
         params = inspect.signature(search_tracks).parameters
@@ -841,8 +980,9 @@ def run_self_tests(log_dir, diagnostics_path):
 
     try:
         import diagnostics_ui
-        cards = diagnostics_ui._build_cards({}, load_config(), {"value": "Unavailable", "state": "bad"})
-        ok = len(cards) == 9 and any(card.get("label") == "Source" for card in cards)
+        cards = diagnostics_ui._build_cards({"amazify": {"installed": True, "plugin_enabled": True, "rpc_bridge_port": 14797}}, load_config(), {"value": "Unavailable", "state": "bad"})
+        amazify = next((card for card in cards if card.get("label") == "Amazify"), {})
+        ok = len(cards) == 10 and any(card.get("label") == "Source" for card in cards) and amazify.get("value") == "Ready" and "14797" in amazify.get("detail", "")
         results.append(_result("Diagnostics cards", ok, f"{len(cards)} cards"))
     except Exception as e:
         results.append(_result("Diagnostics cards", False, str(e)))

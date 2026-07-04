@@ -17,6 +17,8 @@ from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, la
 from amazon_status_overlay import AmazonStatusOverlay
 from discord_rpc import DiscordRPC
 from config import load_config, load_config_for_update, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION, redact_data
+from amazify_compat import amazify_compat_state, ensure_amazify_compat, push_rpc_state_to_amazify
+from amazify_rpc_bridge import start_amazify_rpc_bridge
 from metadata_pipeline import apply_art_result, apply_devtools_source, base_track_for_devtools, diagnostics_track_link, link_buttons, merge_notification_metadata, should_lookup_deezer_button
 from rpc_state import GameModeState, ResolvedTrackStore, TrackTimingState, configured_game_mode_processes, devtools_no_track_state, duration_value, game_mode_matches_processes, hidden_privacy_track, normalise_process_name, normalised_text, privacy_keywords, privacy_match, running_process_names, same_track_field, track_info_payload, track_position
 from status_summary import metadata_source_summary
@@ -52,6 +54,7 @@ current_config = {}
 settings_proc = None
 diagnostics_proc = None
 status_overlay = None
+amazify_bridge = None
 _picker_lock = threading.Lock()
 _picker_pending_key = None
 _resolved_store = ResolvedTrackStore()
@@ -69,6 +72,8 @@ _game_mode_process_cache = _game_mode_state.process_cache
 _game_mode_suppressed_keys = _game_mode_state.suppressed_keys
 _last_tray_state = {}
 _last_tray_signature = ""
+_amazify_compat_cache = {"expires": 0, "value": {}}
+_amazify_push_cache = {"signature": "", "at": 0}
 
 RPC_CONFIG_KEYS = {
     "discord_client_id",
@@ -116,8 +121,81 @@ def _write_diagnostics_state(**state):
         os.replace(tmp_path, DIAGNOSTICS_PATH)
         _last_tray_state = payload
         update_tray_state(payload)
+        _push_amazify_plugin_state()
     except Exception:
         pass
+
+
+def _amazify_compat_snapshot(force=False):
+    now = time.time()
+    if not force and now < _amazify_compat_cache.get("expires", 0):
+        return _amazify_compat_cache.get("value") or {}
+    try:
+        value = amazify_compat_state(APP_VERSION)
+    except Exception as e:
+        value = {"installed": False, "running": False, "error": str(e)}
+    _amazify_compat_cache["value"] = value
+    _amazify_compat_cache["expires"] = now + 15
+    return value
+
+
+def _amazify_metadata_owner(force=False):
+    compat = _amazify_compat_snapshot(force)
+    if compat.get("plugin_enabled") and compat.get("devtools_port"):
+        return compat
+    return {}
+
+
+def _amazify_bridge_payload():
+    state = _last_tray_state if isinstance(_last_tray_state, dict) else _read_diagnostics_state()
+    return {
+        "snapshot": _tray_menu_snapshot(state),
+        "compat": _amazify_compat_snapshot(),
+    }
+
+
+def _push_amazify_plugin_state():
+    compat = _amazify_metadata_owner()
+    port = compat.get("devtools_port") if compat else 0
+    if not port:
+        return
+    payload = _amazify_bridge_payload()
+    signature = json.dumps(payload.get("snapshot", {}), sort_keys=True) + "|" + str(port)
+    now = time.time()
+    if signature == _amazify_push_cache.get("signature") and now - _amazify_push_cache.get("at", 0) < 2:
+        return
+    _amazify_push_cache["signature"] = signature
+    _amazify_push_cache["at"] = now
+
+    def _push():
+        push_rpc_state_to_amazify(port, {"ok": True, "app": "AmazonMusicRPC", "version": APP_VERSION, **payload})
+
+    threading.Thread(target=_push, daemon=True).start()
+
+
+def _start_amazify_compat():
+    global amazify_bridge
+    amazify_bridge = start_amazify_rpc_bridge(_amazify_bridge_payload, _handle_tray_command)
+    if amazify_bridge:
+        print(f"[Amazify] RPC bridge listening on 127.0.0.1:{amazify_bridge.port}.")
+    else:
+        print("[Amazify] RPC bridge port is already in use.")
+
+    def _install():
+        result = ensure_amazify_compat(APP_VERSION)
+        _amazify_compat_cache["value"] = result
+        _amazify_compat_cache["expires"] = time.time() + 15
+        if result.get("installed"):
+            state = "enabled" if result.get("plugin_enabled") else "installed"
+            print(f"[Amazify] Compatibility plugin {state}.")
+        else:
+            print("[Amazify] Not installed; compatibility plugin skipped.")
+        try:
+            _sync_status_overlay(current_config)
+        except Exception:
+            pass
+
+    threading.Thread(target=_install, daemon=True).start()
 
 
 def _read_diagnostics_state():
@@ -190,6 +268,11 @@ def _sync_status_overlay(config=None):
     global status_overlay
     config = config or load_config()
     if config.get("amazon_devtools_enabled"):
+        if _amazify_metadata_owner(force=True):
+            if status_overlay is not None:
+                status_overlay.stop()
+                status_overlay = None
+            return
         if status_overlay is None:
             status_overlay = AmazonStatusOverlay(
                 ICON_PATH,
@@ -649,6 +732,7 @@ def rpc_loop():
             notification_enabled=notification_enrichment_enabled,
             notification=_current_notif_data,
             amazon_devtools=_current_amazon_devtools,
+            amazify=_amazify_compat_snapshot(),
             scrobbling=scrobbling_state,
             privacy={
                 "private_session": bool(config.get("privacy_private_session")),
@@ -670,8 +754,16 @@ def rpc_loop():
             amazon_running_hint = None
             if amazon_devtools_enabled:
                 try:
-                    devtools = get_devtools_track_sync(amazon_music_link_region)
+                    amazify_metadata = _amazify_metadata_owner(force=True)
+                    amazify_port = amazify_metadata.get("devtools_port") if amazify_metadata else None
+                    devtools = get_devtools_track_sync(
+                        amazon_music_link_region,
+                        port=amazify_port,
+                        method="amazify" if amazify_port else "",
+                    )
                     _current_amazon_devtools = {"enabled": True, **devtools}
+                    if amazify_port:
+                        _current_amazon_devtools["owner"] = "amazify"
                     if devtools.get("status") == "found":
                         devtools_unavailable_since = None
                         devtools_restart_attempted = False
@@ -686,6 +778,17 @@ def rpc_loop():
                         if devtools_changed and amazon_metadata_key != last_amazon_metadata_key:
                             last_amazon_metadata_key = amazon_metadata_key
                             print(f"[Amazon] Metadata: '{track.get('title', '')}' by '{track.get('artist', '')}'")
+                    elif amazify_port and devtools.get("status") == "unavailable":
+                        devtools_unavailable_since = None
+                        devtools_restart_attempted = False
+                        _current_amazon_devtools = {
+                            "enabled": True,
+                            **devtools,
+                            "status": "waiting",
+                            "detail": "Amazify is connected; waiting for Amazon Music metadata",
+                            "source": "amazon_devtools",
+                            "owner": "amazify",
+                        }
                     elif devtools.get("status") == "unavailable" and amazon_devtools_auto_launch:
                         now = time.time()
                         amazon_running_hint = amazon_music_is_running()
@@ -1429,8 +1532,11 @@ def _tray_icon_title(snapshot):
 
 
 def on_quit(icon, item):
-    global rpc_running, settings_proc, diagnostics_proc, status_overlay
+    global rpc_running, settings_proc, diagnostics_proc, status_overlay, amazify_bridge
     rpc_running = False
+    if amazify_bridge is not None:
+        amazify_bridge.stop()
+        amazify_bridge = None
     if status_overlay is not None:
         status_overlay.stop()
         status_overlay = None
@@ -1571,6 +1677,7 @@ def main():
         "quit": lambda: on_quit(tray_icon, None),
     }
     tray_icon = QtTrayController(ICON_PATH, tray_callbacks)
+    _start_amazify_compat()
 
     start_rpc()
     _sync_status_overlay(current_config)

@@ -37,6 +37,8 @@ a = Analysis(
         'notification_reader',
         'amazon_devtools',
         'amazon_status_overlay',
+        'amazify_compat',
+        'amazify_rpc_bridge',
         'winsdk.windows.ui.notifications',
         'winsdk.windows.ui.notifications.management',
     ],

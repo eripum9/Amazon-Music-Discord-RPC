@@ -123,6 +123,46 @@ def _scrobble_label(status):
     }.get(status, "Unknown")
 
 
+def _amazify_state(state):
+    compat = state.get("amazify") if isinstance(state.get("amazify"), dict) else {}
+    if compat:
+        return compat
+    try:
+        from amazify_compat import amazify_compat_state
+        return amazify_compat_state(APP_VERSION)
+    except Exception as e:
+        return {"installed": False, "error": str(e)}
+
+
+def _amazify_card(state):
+    compat = _amazify_state(state)
+    if compat.get("error"):
+        return {"label": "Amazify", "value": "Error", "detail": compat.get("error"), "state": "bad"}
+    if not compat.get("installed"):
+        return {"label": "Amazify", "value": "Not installed", "detail": "Shared in-app UI disabled", "state": "muted"}
+    parts = []
+    if compat.get("plugin_enabled"):
+        parts.append("plugin enabled")
+    elif compat.get("plugin_installed"):
+        parts.append("plugin installed")
+    else:
+        parts.append("plugin missing")
+    bridge_port = compat.get("rpc_bridge_port")
+    if bridge_port:
+        parts.append(f"bridge {bridge_port}")
+    devtools_port = compat.get("devtools_port")
+    if devtools_port:
+        parts.append(f"DevTools {devtools_port}")
+    if compat.get("running"):
+        parts.append("running")
+    if compat.get("plugin_enabled") and compat.get("devtools_port"):
+        return {"label": "Amazify", "value": "Connected", "detail": " · ".join(parts), "state": "good"}
+    if compat.get("plugin_enabled"):
+        parts.append("waiting for Amazify")
+        return {"label": "Amazify", "value": "Ready", "detail": " · ".join(parts), "state": "muted"}
+    return {"label": "Amazify", "value": "Needs setup", "detail": " · ".join(parts), "state": "warn"}
+
+
 def _report_system_info():
     return {
         "app_version": APP_VERSION,
@@ -256,6 +296,8 @@ def _build_cards(state, config, access):
         cards.append({"label": "Amazon Metadata", "value": value, "detail": detail, "state": card_state})
     else:
         cards.append({"label": "Amazon Metadata", "value": "Off", "detail": "Enhanced metadata disabled", "state": "muted"})
+
+    cards.append(_amazify_card(state))
 
     privacy = state.get("privacy") or {}
     if privacy.get("hidden"):

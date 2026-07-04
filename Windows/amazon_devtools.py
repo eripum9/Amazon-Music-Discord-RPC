@@ -771,8 +771,20 @@ _TRANSPORT_EXPRESSION = r"""
 """
 
 
-def get_devtools_track_sync(link_region=None):
-    port = get_devtools_port(True)
+def _selected_devtools_port(port=None):
+    if port is None:
+        return get_devtools_port(True)
+    try:
+        selected = int(port)
+    except (TypeError, ValueError):
+        return get_devtools_port(True)
+    if 0 < selected < 65536:
+        return selected
+    return get_devtools_port(True)
+
+
+def get_devtools_track_sync(link_region=None, port=None, method=""):
+    port = _selected_devtools_port(port)
     unexpected_warning = ""
     if port != COMMON_DEVTOOLS_PORT and _is_local_port_open(COMMON_DEVTOOLS_PORT):
         unexpected_warning = f"Common DevTools port {COMMON_DEVTOOLS_PORT} is reachable and ignored"
@@ -784,10 +796,12 @@ def get_devtools_track_sync(link_region=None):
             "source": "amazon_devtools",
             "port": port,
         }
+        if method:
+            payload["method"] = method
         if unexpected_warning:
             payload["warning"] = unexpected_warning
         return payload
-    cache_key = f"{target.get('id')}|{normalize_amazon_music_link_region(link_region)}"
+    cache_key = f"{port}|{target.get('id')}|{normalize_amazon_music_link_region(link_region)}"
     now = time.time()
     if _CACHE["key"] == cache_key and now < _CACHE["expires"]:
         return _CACHE["value"]
@@ -803,13 +817,17 @@ def get_devtools_track_sync(link_region=None):
         result = response.get("result", {}).get("result", {}).get("value")
         track = _normalise_track_payload(result, link_region)
         track["port"] = port
-        if _LAST_LAUNCH.get("port") == port:
+        if method:
+            track["method"] = method
+        elif _LAST_LAUNCH.get("port") == port:
             track["method"] = _LAST_LAUNCH.get("method", "")
             track["launcher"] = _LAST_LAUNCH.get("launcher", "")
         if unexpected_warning:
             track["warning"] = unexpected_warning
     except Exception as e:
         track = {"status": "error", "detail": str(e), "source": "amazon_devtools", "port": port}
+        if method:
+            track["method"] = method
         if unexpected_warning:
             track["warning"] = unexpected_warning
     finally:
