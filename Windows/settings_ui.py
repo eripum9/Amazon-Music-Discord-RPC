@@ -67,6 +67,13 @@ def _save_window_size(width, height):
     save_config(config)
 
 
+def _frozen_child_env():
+    env = dict(os.environ)
+    if getattr(sys, 'frozen', False):
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
 def _split_aliases(value):
     if isinstance(value, list):
         items = value
@@ -2487,7 +2494,7 @@ class _Api:
                 cmd = [sys.executable, '--diagnostics']
             else:
                 cmd = [sys.executable, os.path.join(_BUNDLE_DIR, "diagnostics_ui.py")]
-            _Api._diagnostics_proc = subprocess.Popen(cmd, creationflags=0x08000000)
+            _Api._diagnostics_proc = subprocess.Popen(cmd, creationflags=0x08000000, env=_frozen_child_env())
             return {"ok": True}
         except Exception as e:
             return {"ok": False, "error": str(e)}

@@ -370,10 +370,12 @@ def _prompt_wrong_song_async(raw_key, title, artist, config, force=False):
 
             if getattr(sys, 'frozen', False):
                 cmd = [sys.executable, '--picker', tmp.name]
+                env = _frozen_child_env()
             else:
                 cmd = [sys.executable, os.path.join(SCRIPT_DIR, "track_picker.py"), tmp.name]
+                env = None
 
-            subprocess.run(cmd, timeout=60)
+            subprocess.run(cmd, timeout=60, env=env)
 
             with open(tmp.name, "r", encoding="utf-8") as f:
                 response = json.load(f)
@@ -417,6 +419,13 @@ def _signal_primary_launch_amazon():
     except Exception:
         pass
     return False
+
+
+def _frozen_child_env(base_env=None):
+    env = dict(base_env or os.environ)
+    if getattr(sys, 'frozen', False):
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
 
 
 def _rotated_log_path(index):
@@ -492,10 +501,12 @@ def _run_picker_async(request_data, raw_key, callback):
 
             if getattr(sys, 'frozen', False):
                 cmd = [sys.executable, '--picker', tmp.name]
+                env = _frozen_child_env()
             else:
                 cmd = [sys.executable, os.path.join(SCRIPT_DIR, "track_picker.py"), tmp.name]
+                env = None
 
-            subprocess.run(cmd, timeout=120)
+            subprocess.run(cmd, timeout=120, env=env)
 
             with open(tmp.name, "r", encoding="utf-8") as f:
                 response = json.load(f)
@@ -1299,7 +1310,7 @@ def open_settings(icon=None, item=None):
     global current_config, settings_proc
     if settings_proc and settings_proc.poll() is None:
         return
-    env = devtools_environment()
+    env = _frozen_child_env(devtools_environment())
     if getattr(sys, 'frozen', False):
         settings_proc = subprocess.Popen([sys.executable, '--settings'], creationflags=0x08000000, env=env)
     else:
@@ -1346,12 +1357,14 @@ def open_diagnostics(icon=None, item=None):
     global diagnostics_proc
     if diagnostics_proc and diagnostics_proc.poll() is None:
         return
+    env = _frozen_child_env()
     if getattr(sys, 'frozen', False):
-        diagnostics_proc = subprocess.Popen([sys.executable, '--diagnostics'], creationflags=0x08000000)
+        diagnostics_proc = subprocess.Popen([sys.executable, '--diagnostics'], creationflags=0x08000000, env=env)
     else:
         diagnostics_proc = subprocess.Popen(
             [sys.executable, os.path.join(SCRIPT_DIR, 'diagnostics_ui.py')],
-            creationflags=0x08000000
+            creationflags=0x08000000,
+            env=env,
         )
 
 

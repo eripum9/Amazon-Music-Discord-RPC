@@ -60,6 +60,41 @@ def run_self_tests(log_dir, diagnostics_path):
             pass
         results.append(_result("Config update guard", False, str(e)))
 
+    old_frozen = None
+    try:
+        import settings_ui
+        old_frozen = getattr(settings_ui.sys, "frozen", None)
+        settings_ui.sys.frozen = True
+        env = settings_ui._frozen_child_env()
+        if old_frozen is None:
+            delattr(settings_ui.sys, "frozen")
+        else:
+            settings_ui.sys.frozen = old_frozen
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "main.py"), "r", encoding="utf-8") as f:
+            main_source = f.read()
+        with open(os.path.join(here, "settings_ui.py"), "r", encoding="utf-8") as f:
+            settings_source = f.read()
+        ok = (
+            env.get("PYINSTALLER_RESET_ENVIRONMENT") == "1"
+            and "_frozen_child_env(devtools_environment())" in main_source
+            and "subprocess.run(cmd, timeout=60, env=env)" in main_source
+            and "subprocess.run(cmd, timeout=120, env=env)" in main_source
+            and "Popen([sys.executable, '--diagnostics'], creationflags=0x08000000, env=env)" in main_source
+            and "subprocess.Popen(cmd, creationflags=0x08000000, env=_frozen_child_env())" in settings_source
+        )
+        results.append(_result("Frozen subprocess isolation", ok, "Packaged self-launched windows reset the PyInstaller extraction environment"))
+    except Exception as e:
+        try:
+            if "settings_ui" in locals():
+                if old_frozen is None and hasattr(settings_ui.sys, "frozen"):
+                    delattr(settings_ui.sys, "frozen")
+                elif old_frozen is not None:
+                    settings_ui.sys.frozen = old_frozen
+        except Exception:
+            pass
+        results.append(_result("Frozen subprocess isolation", False, str(e)))
+
     try:
         ok = (
             DEFAULTS.get("amazon_devtools_enabled") is False
