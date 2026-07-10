@@ -7,7 +7,7 @@ import json
 import subprocess
 from datetime import datetime
 import webview
-from config import load_config, load_config_for_update, save_config, is_startup_enabled, set_startup, DEFAULT_CLIENT_ID, APP_VERSION, normalize_amazon_music_link_region, DEFAULTS, CONFIG_DIR, SENSITIVE_CONFIG_KEYS, redact_data
+from config import load_config, load_config_for_update, save_config, is_startup_enabled, set_startup, DEFAULT_CLIENT_ID, APP_VERSION, normalize_amazon_music_link_region, normalize_discord_status_display, DEFAULTS, CONFIG_DIR, SENSITIVE_CONFIG_KEYS, redact_data
 from status_summary import metadata_source_summary
 
 if getattr(sys, 'frozen', False):
@@ -20,6 +20,7 @@ DIAGNOSTICS_PATH = os.path.join(CONFIG_DIR, "diagnostics.json")
 _REQUIRED_SETTINGS_KEYS = {
     "use_custom",
     "client_id",
+    "discord_status_display",
     "start_on_startup",
     "start_minimized",
     "show_paused",
@@ -140,6 +141,7 @@ def _settings_import_config(payload, existing):
             continue
         merged[key] = value
     merged["amazon_music_link_region"] = normalize_amazon_music_link_region(merged.get("amazon_music_link_region"))
+    merged["discord_status_display"] = normalize_discord_status_display(merged.get("discord_status_display"))
     from amazon_devtools import validate_launcher_override
     merged["amazon_music_launcher_override"] = validate_launcher_override(merged.get("amazon_music_launcher_override", ""))
     merged["custom_albums"] = _clean_custom_albums(merged.get("custom_albums", []))
@@ -164,6 +166,7 @@ def _settings_config_from_payload(data, existing):
         **existing,
         "discord_client_id": client_id,
         "use_custom_client_id": use_custom,
+        "discord_status_display": normalize_discord_status_display(data.get("discord_status_display")),
         "start_on_startup": bool(data.get("start_on_startup")),
         "start_minimized": bool(data.get("start_minimized")),
         "show_paused": bool(data.get("show_paused", True)),
@@ -195,6 +198,7 @@ def _settings_payload():
     keys = [
         "discord_client_id",
         "use_custom_client_id",
+        "discord_status_display",
         "custom_albums",
         "start_on_startup",
         "start_minimized",
@@ -1182,6 +1186,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <div class="toggle-knob"></div>
     </label>
   </div>
+  <div class="separator"></div>
+
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Discord status display</span>
+      <div class="row-desc">Choose what follows “Listening to” on your Discord profile</div>
+    </div>
+    <select id="discordStatusDisplay" aria-label="Discord status display">
+      <option value="artist">Artist</option>
+      <option value="album">Album</option>
+      <option value="track">Track</option>
+      <option value="application">Amazon Music</option>
+    </select>
+  </div>
 </div>
 
 <div class="card">
@@ -1351,6 +1369,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     return {
       use_custom: mode === 'custom',
       client_id: document.getElementById('clientId').value.trim(),
+      discord_status_display: document.getElementById('discordStatusDisplay').value,
       start_on_startup: document.getElementById('startOnStartup').checked,
       start_minimized: document.getElementById('startMinimized').checked,
       show_paused: document.getElementById('showPaused').checked,
@@ -2085,6 +2104,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       document.getElementById('customIdGroup').classList.remove('visible');
     }
     document.getElementById('clientId').value = cfg.discord_client_id || '';
+    const discordStatusModes = ['application', 'artist', 'album', 'track'];
+    document.getElementById('discordStatusDisplay').value = discordStatusModes.includes(cfg.discord_status_display) ? cfg.discord_status_display : 'artist';
     document.getElementById('startOnStartup').checked = !!cfg.start_on_startup;
     document.getElementById('startMinimized').checked = !!cfg.start_minimized;
     document.getElementById('showPaused').checked = cfg.show_paused !== false;

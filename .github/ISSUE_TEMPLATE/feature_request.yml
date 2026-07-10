@@ -32,7 +32,6 @@ body:
         - Settings UI
         - Diagnostics or logs
         - Installer or updater
-        - Android beta
         - Documentation
         - Other
     validations:

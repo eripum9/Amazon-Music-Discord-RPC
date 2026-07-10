@@ -6,6 +6,44 @@ import traceback
 from pypresence import Presence
 from pypresence.types import ActivityType
 
+STATUS_DISPLAY_TYPES = {
+    "application": 0,
+    "artist": 1,
+    "album": 1,
+    "track": 2,
+}
+
+
+def _discord_activity_text(value, fallback, one_character_label):
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    if len(text) == 1:
+        return f"{one_character_label}: {text}"[:128]
+    return text[:128]
+
+
+def _discord_activity_fields(title, artist, album_name, status_display):
+    mode = str(status_display or "").strip().lower()
+    if mode not in STATUS_DISPLAY_TYPES:
+        mode = "artist"
+
+    title_text = _discord_activity_text(title, "Unknown Title", "Track")
+    artist_text = _discord_activity_text(artist, "Unknown Artist", "Artist")
+    album = str(album_name or "").strip()
+
+    if mode == "album":
+        state = _discord_activity_text(album, artist_text, "Album") if album else artist_text
+        details = _discord_activity_text(f"{title_text} by {artist_text}", title_text, "Track")
+    elif mode == "artist":
+        details = title_text
+        state = artist_text
+    else:
+        details = title_text
+        state = _discord_activity_text(f"by {artist_text}", "Unknown Artist", "Artist")
+
+    return details, state, STATUS_DISPLAY_TYPES[mode]
+
 
 def _discord_asset_text(album_name, title):
     album = str(album_name or "").strip()
@@ -73,11 +111,12 @@ class DiscordRPC:
             self.connect()
         return self.connected
 
-    def update(self, title, artist, album_art_url=None, album_name=None, start_ts=None, duration=0, buttons=None, small_image=None, small_text=None):
+    def update(self, title, artist, album_art_url=None, album_name=None, start_ts=None, duration=0, buttons=None, small_image=None, small_text=None, status_display="artist"):
         if not self._ensure_connected():
             return
 
-        track_key = f"{title}|{artist}"
+        details, state, status_display_type = _discord_activity_fields(title, artist, album_name, status_display)
+        track_key = f"{title}|{artist}|{status_display_type}|{state}"
         button_signature = _button_signature(buttons)
         if self._last_button_signature is not None and button_signature != self._last_button_signature:
             try:
@@ -88,8 +127,9 @@ class DiscordRPC:
 
         activity = {
             "type": ActivityType.LISTENING.value,
-            "details": title[:128] if title else "Unknown Title",
-            "state": f"by {artist}" if artist else "Unknown Artist",
+            "details": details,
+            "state": state,
+            "status_display_type": status_display_type,
             "assets": {
                 "large_text": _discord_asset_text(album_name, title),
             },
