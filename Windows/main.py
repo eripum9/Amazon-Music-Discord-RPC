@@ -16,7 +16,7 @@ from album_art import get_album_art, search_tracks, find_custom_album_art
 from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, launch_amazon_music_devtools, restart_amazon_music_devtools, amazon_music_is_running, devtools_environment, amazon_music_search_link
 from amazon_status_overlay import AmazonStatusOverlay
 from discord_rpc import DiscordRPC
-from config import load_config, load_config_for_update, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION, redact_data
+from config import load_config, load_config_for_update, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION, normalize_discord_status_display, redact_data
 from amazify_compat import amazify_compat_state, ensure_amazify_compat, push_rpc_state_to_amazify
 from amazify_rpc_bridge import start_amazify_rpc_bridge
 from metadata_pipeline import apply_art_result, apply_devtools_source, base_track_for_devtools, diagnostics_track_link, link_buttons, merge_notification_metadata, should_lookup_deezer_button
@@ -78,6 +78,7 @@ _amazify_push_cache = {"signature": "", "at": 0}
 RPC_CONFIG_KEYS = {
     "discord_client_id",
     "use_custom_client_id",
+    "discord_status_display",
     "track_mappings",
     "custom_albums",
     "song_link_enabled",
@@ -641,6 +642,7 @@ def rpc_loop():
     if song_link_provider not in {"amazon", "deezer"}:
         song_link_provider = "amazon"
     amazon_music_link_region = config.get("amazon_music_link_region", "com")
+    discord_status_display = normalize_discord_status_display(config.get("discord_status_display"))
     show_paused = config.get("show_paused", True)
     notification_enrichment_enabled = config.get("notification_enrichment_enabled", False)
     amazon_devtools_enabled = config.get("amazon_devtools_enabled", False)
@@ -949,6 +951,7 @@ def rpc_loop():
                         buttons=buttons,
                         small_image="https://raw.githubusercontent.com/eripum9/Amazon-Music-Discord-RPC/master/Images/pause_icon.png",
                         small_text="Paused",
+                        status_display=discord_status_display,
                     )
                     presence_visible = True
                     paused_track = dict(track)
@@ -1158,6 +1161,7 @@ def rpc_loop():
                     start_ts=last_start_ts,
                     duration=track["duration"] or last_deezer_duration,
                     buttons=buttons,
+                    status_display=discord_status_display,
                 )
                 presence_visible = True
                 _update_state(track=state_track, presence=True)

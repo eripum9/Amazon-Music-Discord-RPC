@@ -12,9 +12,13 @@ def test_enhanced_metadata_defaults_and_region_normalisation():
     assert config.DEFAULTS["setup_wizard_seen"] is False
     assert config.DEFAULTS["notification_enrichment_enabled"] is False
     assert config.DEFAULTS["amazon_music_link_region"] == "com"
+    assert config.DEFAULTS["discord_status_display"] == "artist"
     assert config.normalize_amazon_music_link_region("de") == "de"
     assert config.normalize_amazon_music_link_region(".com") == "com"
     assert config.normalize_amazon_music_link_region("bad") == "com"
+    assert config.normalize_discord_status_display("album") == "album"
+    assert config.normalize_discord_status_display("TRACK") == "track"
+    assert config.normalize_discord_status_display("bad") == "artist"
 
 
 def test_existing_user_enhanced_metadata_migration():

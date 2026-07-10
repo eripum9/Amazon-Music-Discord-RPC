@@ -7,9 +7,10 @@ Show your Amazon Music songs, album art, pause state, and live timer on Discord.
 ![Windows](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-yellow)
 
-[Download for Windows](https://github.com/eripum9/Amazon-Music-Discord-RPC/releases/latest) · [View Demo](https://eripum9.github.io/Amazon-Music-Discord-RPC/#demo) · [Troubleshooting](https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/troubleshooting/) · [Privacy & Security](https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/privacy/) · [Android Beta](docs/android-beta.md)
+[Download for Windows](https://github.com/eripum9/Amazon-Music-Discord-RPC/releases/latest) · [View Demo](https://eripum9.github.io/Amazon-Music-Discord-RPC/#demo) · [Troubleshooting](https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/troubleshooting/) · [Privacy & Security](https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/privacy/)
 
 - ✅ Shows current song, artist, album art, and timer on Discord
+- ✅ Lets you display the artist, album, track, or app name after Discord's “Listening to” label
 - ✅ Works with Amazon Music for Windows
 - ✅ Includes Last.fm and ListenBrainz scrobbling
 - ✅ Privacy mode and keyword filters
@@ -139,12 +140,12 @@ No Python installation needed if using the Installer.
 ## Platform Status
 
 - Windows is the stable supported platform.
-- Android beta source is included in `Android/` and tracked in [docs/android-beta.md](docs/android-beta.md).
+- Android support has been discontinued because the mobile integration was too unstable to support responsibly.
 - Linux and macOS are out of scope because Amazon Music does not provide official desktop apps for those platforms. Supported platform scope is tracked in [docs/platform-roadmap.md](docs/platform-roadmap.md).
 
 ## Building
 
-Windows app source, dependencies, icons, and packaging files live in `Windows/` so the root can stay shared for docs and future platform work.
+Windows app source, dependencies, icons, and packaging files live in `Windows/`.
 
 ### Build the executable
 
@@ -177,31 +178,19 @@ You can also run the Windows build script:
 Windows\build.bat
 ```
 
-### Build Android beta APKs
-
-Android beta source, the companion test app, and host checks live in `Android/`.
-
-```powershell
-Android\host-check.ps1
-```
-
-The Android debug APKs are written to:
-
-- `Android/app/build/outputs/apk/debug/app-debug.apk`
-- `Android/fakeamazon/build/outputs/apk/debug/fakeamazon-debug.apk`
-
 ## Configuration
 
 Settings are stored in `%APPDATA%\AmazonMusicRPC\config.json` (or the `Windows/` directory when running from source).
 
 Right-click the tray icon and select **Settings** to open the configuration window.
 
+Under **Startup & Presence**, the **Discord status display** setting controls what follows Discord's "Listening to" label. Choose Artist (the default), Album, Track, or Amazon Music. Album mode falls back to the artist when album metadata is unavailable.
+
 ## Support And Contributions
 
 - Use the [troubleshooting guide](https://eripum9.github.io/Amazon-Music-Discord-RPC/wiki/troubleshooting/) for common setup issues.
-- Use GitHub issues for bugs, enhanced metadata problems, Android beta reports, and feature requests.
+- Use GitHub issues for bugs, enhanced metadata problems, and feature requests.
 - Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
-- Android beta status is tracked in [docs/android-beta.md](docs/android-beta.md).
 
 ## Credits
 
@@ -216,4 +205,3 @@ Right-click the tray icon and select **Settings** to open the configuration wind
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-

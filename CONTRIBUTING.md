@@ -12,8 +12,8 @@ For bugs, include:
 
 - Amazon Music RPC version
 - Windows version
-- Install type: installer, source, or Android beta APK
-- Amazon Music source: Microsoft Store, website installer, or Android test app
+- Install type: installer or source
+- Amazon Music source: Microsoft Store or website installer
 - Whether enhanced metadata is enabled
 - Whether fallback metadata or notification enrichment is enabled
 - Exact steps to reproduce
@@ -25,11 +25,10 @@ Do not post Last.fm session keys, ListenBrainz tokens, Discord tokens, config fi
 
 ## Branches
 
-- `master` is the Windows release branch and contains the current Android beta source.
-- `beta/androidbuild` is available for Android experiments before they are merged.
+- `master` is the Windows release branch.
 - `fix/*` branches are for focused issue fixes.
 - `beta/*` branches are for experimental work that should not affect stable Windows releases.
-- Linux and macOS are out of scope unless Amazon releases official desktop apps for those platforms.
+- Android support is discontinued. Linux and macOS are out of scope unless Amazon releases official desktop apps for those platforms.
 
 ## Windows Development
 
@@ -61,19 +60,6 @@ Build:
 Windows\build.bat
 ```
 
-## Android Beta Development
-
-Android beta work lives in `Android/`. Use `beta/androidbuild` for risky Android experiments before merging them back to `master`.
-
-Build from the repository root:
-
-```powershell
-$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
-$env:ANDROID_HOME="$env:LOCALAPPDATA\Android\Sdk"
-$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
-gradle -p Android assembleDebug --no-daemon
-```
-
 ## Pull Requests
 
 Keep pull requests focused. A good pull request includes:
@@ -82,7 +68,7 @@ Keep pull requests focused. A good pull request includes:
 - The behavior change
 - Screenshots for UI changes
 - Test output
-- Any compatibility notes for enhanced metadata, fallback mode, or Android beta behavior
+- Any compatibility notes for enhanced metadata or fallback mode
 
 For Windows releases, follow [docs/release-checklist.md](docs/release-checklist.md).
 

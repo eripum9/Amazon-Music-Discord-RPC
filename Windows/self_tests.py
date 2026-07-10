@@ -353,8 +353,10 @@ def run_self_tests(log_dir, diagnostics_path):
             and _button_signature([{"label": "A", "url": "1"}]) != _button_signature([{"label": "A", "url": "2"}])
             and call_order == ["update", "clear", "update", "clear", "update"]
             and last_payload.get("buttons") == []
+            and last_payload.get("status_display_type") == 1
+            and last_payload.get("state") == "Artist"
         )
-        results.append(_result("Discord presence payload", ok, "One-letter asset text and button URL refresh behavior are guarded"))
+        results.append(_result("Discord presence payload", ok, "Status display, one-letter text, and button URL refresh behavior are guarded"))
     except Exception as e:
         results.append(_result("Discord presence payload", False, str(e)))
 
@@ -1159,6 +1161,9 @@ def run_self_tests(log_dir, diagnostics_path):
             and "Amazon Music region" in html
             and "onSongLinkProviderChange" in script
             and "Show listen button" in html
+            and "discord_status_display" in script
+            and "discordStatusDisplay" in script
+            and "Discord status display" in html
             and "amazon_music_launcher_override" in script
             and "amazonLauncherOverride" in script
             and "Advanced Amazon Music launcher" in html

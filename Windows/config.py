@@ -33,10 +33,12 @@ AMAZON_MUSIC_LINK_REGIONS = (
     "com.br",
     "com.mx",
 )
+DISCORD_STATUS_DISPLAY_MODES = ("application", "artist", "album", "track")
 
 DEFAULTS = {
     "discord_client_id": DEFAULT_CLIENT_ID,
     "use_custom_client_id": False,
+    "discord_status_display": "artist",
     "start_on_startup": False,
     "start_minimized": True,
     "track_mappings": {},
@@ -78,8 +80,14 @@ def normalize_amazon_music_link_region(value):
     return text if text in AMAZON_MUSIC_LINK_REGIONS else "com"
 
 
+def normalize_discord_status_display(value):
+    text = str(value or "").strip().lower()
+    return text if text in DISCORD_STATUS_DISPLAY_MODES else "artist"
+
+
 def _complete_config(saved):
     config = {**DEFAULTS, **saved}
+    config["discord_status_display"] = normalize_discord_status_display(config.get("discord_status_display"))
     if saved and "enhanced_metadata_prompt_seen" not in saved and "amazon_devtools_enabled" not in saved:
         config["amazon_devtools_enabled"] = True
         config["amazon_devtools_auto_launch"] = True

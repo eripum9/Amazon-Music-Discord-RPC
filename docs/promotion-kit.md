@@ -28,7 +28,7 @@ Bug reports and feature requests: https://github.com/eripum9/Amazon-Music-Discor
 - Amazon Music on Discord now supports album art, pause state, and privacy mode.
 - I made a Windows installer for my open-source Amazon Music Discord status app.
 - Amazon Music Discord presence now has stronger privacy controls and safer update verification.
-- I started an Android beta for Amazon Music Discord presence and need testers.
+- Amazon Music Discord presence can now show the artist, album, track, or app name in the Listening status.
 
 ## Support Link To Use
 

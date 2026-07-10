@@ -43,3 +43,39 @@ def test_button_url_changes_clear_presence(monkeypatch):
     assert _button_signature([{"label": "A", "url": "1"}]) != _button_signature([{"label": "A", "url": "2"}])
     assert [call[0] for call in fake.calls] == ["update", "clear", "update", "clear", "update"]
     assert fake.calls[-1][1]["args"]["activity"]["buttons"] == []
+
+
+def _activity_for(status_display, title="Song", artist="Artist", album_name="Album"):
+    fake = FakePresence()
+    rpc = make_rpc(fake)
+    rpc.update(title, artist, album_name=album_name, status_display=status_display)
+    return fake.calls[-1][1]["args"]["activity"]
+
+
+def test_status_display_modes_select_expected_discord_field():
+    application = _activity_for("application")
+    artist = _activity_for("artist")
+    album = _activity_for("album")
+    track = _activity_for("track")
+
+    assert application["status_display_type"] == 0
+    assert application["state"] == "by Artist"
+    assert artist["status_display_type"] == 1
+    assert artist["state"] == "Artist"
+    assert album["status_display_type"] == 1
+    assert album["state"] == "Album"
+    assert album["details"] == "Song by Artist"
+    assert track["status_display_type"] == 2
+    assert track["details"] == "Song"
+
+
+def test_status_fields_are_valid_and_album_falls_back_to_artist():
+    activity = _activity_for("album", title="A", artist="B" * 200, album_name="")
+    assert activity["details"].startswith("Track: A by ")
+    assert 2 <= len(activity["details"]) <= 128
+    assert 2 <= len(activity["state"]) <= 128
+    assert activity["state"] == ("B" * 128)
+
+    invalid = _activity_for("not-a-mode")
+    assert invalid["status_display_type"] == 1
+    assert invalid["state"] == "Artist"
