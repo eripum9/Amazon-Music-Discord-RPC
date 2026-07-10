@@ -3,8 +3,6 @@
 import json
 
 from config import SENSITIVE_CONFIG_KEYS
-from updater import SHA256_RE
-
 INSTALLER_NAME = "AmazonMusicRPC_Setup.exe"
 RELEASE_COMPATIBILITY_TERMS = (
     "compatibility",
@@ -50,16 +48,12 @@ def token_storage_review(config):
     }
 
 
-def release_notes_trust_errors(notes_text, installer_sha256="", installer_name=INSTALLER_NAME):
+def release_notes_trust_errors(notes_text, installer_name=INSTALLER_NAME):
     text = str(notes_text or "")
     lowered = text.lower()
     errors = []
     if installer_name.lower() not in lowered:
         errors.append("Release notes do not mention AmazonMusicRPC_Setup.exe")
-    if not SHA256_RE.search(text):
-        errors.append("Release notes do not contain a SHA256 hash")
-    if installer_sha256 and installer_sha256.lower() not in lowered:
-        errors.append("Release notes do not contain the installer SHA256")
     if not any(term in lowered for term in RELEASE_COMPATIBILITY_TERMS):
         errors.append("Release notes do not include a compatibility note")
     if not _has_changelog_bullet(text):

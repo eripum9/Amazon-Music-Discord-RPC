@@ -234,7 +234,7 @@ def run_self_tests(log_dir, diagnostics_path):
     try:
         import hashlib
         import inspect
-        from updater import _extract_sha256, download_installer, verify_file_sha256, prompt_for_update, launch_installer
+        from updater import _checksum_asset, _extract_sha256, download_installer, verify_file_sha256, prompt_for_update, launch_installer
         fd, path = tempfile.mkstemp(prefix="amrpc_hash_", suffix=".bin", dir=log_dir)
         with os.fdopen(fd, "wb") as f:
             f.write(b"amazon music rpc installer test")
@@ -248,17 +248,24 @@ def run_self_tests(log_dir, diagnostics_path):
             download_installer("https://example.invalid/AmazonMusicRPC_Setup.exe", "")
         except ValueError:
             missing_rejected = True
-        ok = extracted == digest and verified and missing_rejected
-        results.append(_result("Updater SHA256 trust", ok, "Release hashes are required, parsed, and verified"))
+        assets = {
+            "assets": [
+                {"name": "AmazonMusicRPC_Setup.exe"},
+                {"name": "AmazonMusicRPC_Setup.exe.sha256", "browser_download_url": "https://example.invalid/hash"},
+            ]
+        }
+        checksum_asset = _checksum_asset(assets, assets["assets"][0])
+        ok = extracted == digest and verified and missing_rejected and checksum_asset.get("name") == "AmazonMusicRPC_Setup.exe.sha256"
+        results.append(_result("Updater SHA256 trust", ok, "Checksum assets and legacy release hashes are parsed and verified"))
     except Exception as e:
         results.append(_result("Updater SHA256 trust", False, str(e)))
 
     try:
         from security_trust import release_notes_trust_errors
         digest = "a" * 64
-        body = f"## What's New\n\n- Fixed enhanced metadata compatibility for Microsoft Store users.\n\n## Installation\n\nAmazonMusicRPC_Setup.exe SHA256: {digest}\n\nFallback mode remains available."
-        ok = release_notes_trust_errors(body, digest) == []
-        results.append(_result("Release checklist trust", ok, "Release notes require installer, SHA256, changelog, and compatibility text"))
+        body = "## What's New\n\n- Fixed enhanced metadata compatibility for Microsoft Store users.\n\n## Installation\n\nDownload AmazonMusicRPC_Setup.exe and its checksum sidecar.\n\nFallback mode remains available."
+        ok = release_notes_trust_errors(body) == []
+        results.append(_result("Release checklist trust", ok, "Release notes require the installer, changelog, and compatibility text"))
     except Exception as e:
         results.append(_result("Release checklist trust", False, str(e)))
 

@@ -12,7 +12,7 @@ if str(WINDOWS_DIR) not in sys.path:
 
 from config import APP_VERSION
 from security_trust import release_notes_trust_errors
-from updater import file_sha256
+from updater import _extract_sha256, file_sha256
 
 VERSION_RE = re.compile(r'#define\s+MyAppVersion\s+"([^"]+)"')
 
@@ -27,6 +27,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--installer", default=str(WINDOWS_DIR / "installer_output" / "AmazonMusicRPC_Setup.exe"))
     parser.add_argument("--release-notes", default="")
+    parser.add_argument("--checksum", default="")
     parser.add_argument("--allow-missing-installer", action="store_true")
     args = parser.parse_args()
 
@@ -35,6 +36,7 @@ def main():
         "app_version": APP_VERSION,
         "installer_version": installer_version(),
         "installer": str(Path(args.installer)),
+        "checksum": "",
         "sha256": "",
     }
 
@@ -44,6 +46,16 @@ def main():
     installer = Path(args.installer)
     if installer.exists():
         smoke["sha256"] = file_sha256(installer)
+        checksum = Path(args.checksum) if args.checksum else Path(str(installer) + ".sha256")
+        smoke["checksum"] = str(checksum)
+        if not checksum.exists():
+            errors.append(f"Checksum file not found: {checksum}")
+        else:
+            declared_sha256 = _extract_sha256(checksum.read_text(encoding="utf-8"), installer.name)
+            if not declared_sha256:
+                errors.append(f"Checksum file does not contain a SHA256 hash: {checksum}")
+            elif declared_sha256 != smoke["sha256"]:
+                errors.append(f"Checksum mismatch: expected {smoke['sha256']}, found {declared_sha256}")
     elif not args.allow_missing_installer:
         errors.append(f"Installer not found: {installer}")
 
@@ -52,7 +64,7 @@ def main():
         if not notes.exists():
             errors.append(f"Release notes not found: {notes}")
         else:
-            errors.extend(release_notes_trust_errors(notes.read_text(encoding="utf-8"), smoke["sha256"]))
+            errors.extend(release_notes_trust_errors(notes.read_text(encoding="utf-8")))
 
     print(json.dumps(smoke, indent=2))
     if errors:

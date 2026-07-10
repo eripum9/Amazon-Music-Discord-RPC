@@ -5,9 +5,11 @@ Use this before publishing a GitHub release.
 ## Required Artifacts
 
 - `Windows/installer_output/AmazonMusicRPC_Setup.exe`
-- SHA256 hash for `AmazonMusicRPC_Setup.exe`
+- `Windows/installer_output/AmazonMusicRPC_Setup.exe.sha256`
 - Release notes with a clear changelog
 - Compatibility note for enhanced metadata and fallback mode
+
+Always upload `AmazonMusicRPC_Setup.exe` and its newly generated `AmazonMusicRPC_Setup.exe.sha256` together. Never reuse a checksum from an earlier build or publish the installer without its matching sidecar.
 
 ## Local Verification
 
@@ -22,7 +24,6 @@ git diff --check
 
 Every release description should include:
 
-- `AmazonMusicRPC_Setup.exe SHA256: <hash>`
 - New user-facing features
 - Fixes for existing behavior
 - Microsoft Store enhanced metadata compatibility note
@@ -34,4 +35,5 @@ Every release description should include:
 - Confirm diagnostics exports use redacted config and logs.
 - Confirm no Last.fm session key, ListenBrainz token, Discord token, or private config value appears in release notes, diagnostics, screenshots, or logs.
 - Keep the latest installer attached to the release.
+- Confirm `AmazonMusicRPC_Setup.exe.sha256` is attached beside the installer and matches the uploaded installer. v4.0.1 is the final transition release that also includes the hash in its description.
 - Keep code signing and signed tags on the future hardening list until they are available.

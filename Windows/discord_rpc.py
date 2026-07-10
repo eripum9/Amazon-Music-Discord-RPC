@@ -29,18 +29,23 @@ def _discord_activity_fields(title, artist, album_name, status_display):
         mode = "artist"
 
     title_text = _discord_activity_text(title, "Unknown Title", "Track")
-    artist_text = _discord_activity_text(artist, "Unknown Artist", "Artist")
+    raw_artist = str(artist or "").strip()
+    artist_known = raw_artist.casefold() not in {"", "unknown", "unknown artist", "n/a", "none"}
+    artist_text = _discord_activity_text(raw_artist if artist_known else "", "Unknown Artist", "Artist")
     album = str(album_name or "").strip()
+
+    if not artist_known:
+        mode = "application"
 
     if mode == "album":
         state = _discord_activity_text(album, artist_text, "Album") if album else artist_text
-        details = _discord_activity_text(f"{title_text} by {artist_text}", title_text, "Track")
+        details = _discord_activity_text(f"{title_text} by {raw_artist}", title_text, "Track")
     elif mode == "artist":
         details = title_text
         state = artist_text
     else:
         details = title_text
-        state = _discord_activity_text(f"by {artist_text}", "Unknown Artist", "Artist")
+        state = _discord_activity_text(f"by {raw_artist}" if artist_known else "", "Unknown Artist", "Artist")
 
     return details, state, STATUS_DISPLAY_TYPES[mode]
 

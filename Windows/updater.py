@@ -146,6 +146,29 @@ def _setup_asset(data):
     return {}
 
 
+def _checksum_asset(data, installer_asset):
+    installer_name = str((installer_asset or {}).get("name", "") or "")
+    if not installer_name:
+        return {}
+    expected_name = f"{installer_name}.sha256".lower()
+    for asset in data.get("assets", []):
+        if str(asset.get("name", "")).lower() == expected_name:
+            return asset
+    return {}
+
+
+def _download_checksum_asset(asset, installer_name):
+    url = str((asset or {}).get("browser_download_url", "") or "")
+    if not url:
+        return ""
+    resp = requests.get(url, timeout=10)
+    resp.raise_for_status()
+    text = str(resp.text or "")
+    if len(text.encode("utf-8")) > 65536:
+        return ""
+    return _extract_sha256(text, installer_name)
+
+
 def file_sha256(path):
     digest = hashlib.sha256()
     with open(path, "rb") as f:
@@ -217,7 +240,16 @@ def check_for_update():
             asset = _setup_asset(data)
             download_url = asset.get("browser_download_url")
             body = data.get("body", "")
-            return True, latest_tag.lstrip("v"), download_url, _format_changelog(body), _release_url(data), _extract_sha256(body, asset.get("name", ""))
+            expected_sha256 = ""
+            checksum_asset = _checksum_asset(data, asset)
+            if checksum_asset:
+                try:
+                    expected_sha256 = _download_checksum_asset(checksum_asset, asset.get("name", ""))
+                except Exception:
+                    expected_sha256 = ""
+            if not expected_sha256:
+                expected_sha256 = _extract_sha256(body, asset.get("name", ""))
+            return True, latest_tag.lstrip("v"), download_url, _format_changelog(body), _release_url(data), expected_sha256
     except Exception:
         pass
     return False, None, None, "", RELEASES_PAGE, ""
@@ -239,7 +271,7 @@ def prompt_for_update(latest_ver, download_url, changelog="", release_url=None, 
     if expected_sha256:
         message += "\n\nThe installer SHA256 hash will be verified after download."
     else:
-        message += "\n\nNo SHA256 hash was found in the release notes. For safety, automatic download is disabled. Open the release page and review it manually."
+        message += "\n\nNo SHA256 hash was found in the release assets or release notes. For safety, automatic download is disabled. Open the release page and review it manually."
     message += "\n\nOpen the release page?"
     result = ctypes.windll.user32.MessageBoxW(
         0,

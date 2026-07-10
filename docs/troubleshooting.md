@@ -39,7 +39,7 @@ Notification fallback reads Windows notifications locally and only uses Amazon M
 
 ## Updater Or Installer Warnings
 
-Windows SmartScreen can warn because the installer is unsigned. Use the GitHub release page and SHA256 hash in the release notes to verify the installer.
+Windows SmartScreen can warn because the installer is unsigned. Use the GitHub release page and the `AmazonMusicRPC_Setup.exe.sha256` release asset to verify the installer.
 
 Manual PowerShell check:
 
@@ -47,4 +47,4 @@ Manual PowerShell check:
 Get-FileHash .\AmazonMusicRPC_Setup.exe -Algorithm SHA256
 ```
 
-Compare the result with the SHA256 value on the GitHub release page.
+Compare the result with the value in `AmazonMusicRPC_Setup.exe.sha256` on the GitHub release page.

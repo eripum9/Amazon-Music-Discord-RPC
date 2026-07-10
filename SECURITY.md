@@ -78,9 +78,9 @@ Private session mode clears Discord Rich Presence and can stop scrobbling while 
 
 ## Updates
 
-The updater checks GitHub releases and can download the latest installer. It opens the GitHub release page before running the installer, requires a SHA256 hash in the release notes for automatic download, downloads to a unique temporary directory, and verifies the installer before launching it. If no hash is available, automatic install is disabled and the app only opens the release page.
+The updater checks GitHub releases and can download the latest installer. It opens the GitHub release page before running the installer, requires an `AmazonMusicRPC_Setup.exe.sha256` release asset or a legacy SHA256 hash in the release notes, downloads to a unique temporary directory, and verifies the installer before launching it. If no hash is available, automatic install is disabled and the app only opens the release page.
 
-Each release should include a SHA256 line for `AmazonMusicRPC_Setup.exe`, a clear changelog, and an enhanced metadata compatibility note. Signed release tags and code-signed Windows installers are still planned hardening steps.
+Each release should include `AmazonMusicRPC_Setup.exe.sha256`, a clear changelog, and an enhanced metadata compatibility note. Signed release tags and code-signed Windows installers are still planned hardening steps.
 
 ## Uninstall
 

@@ -33,3 +33,67 @@ def test_updater_cleans_pyinstaller_environment():
     )
     assert cleaned == {"SAFE_KEY": "value"}
     assert updater._ps_literal("a'b") == "'a''b'"
+
+
+def test_update_prefers_installer_checksum_asset(monkeypatch):
+    digest = "a" * 64
+    notes_digest = "b" * 64
+    release_url = updater.RELEASES_URL
+    checksum_url = "https://example.test/AmazonMusicRPC_Setup.exe.sha256"
+    release = {
+        "tag_name": "v4.0.2",
+        "html_url": "https://example.test/release",
+        "body": f"AmazonMusicRPC_Setup.exe SHA256: {notes_digest}",
+        "assets": [
+            {"name": "AmazonMusicRPC_Setup.exe", "browser_download_url": "https://example.test/setup.exe"},
+            {"name": "AmazonMusicRPC_Setup.exe.sha256", "browser_download_url": checksum_url},
+        ],
+    }
+
+    class FakeResponse:
+        def __init__(self, data=None, text=""):
+            self._data = data
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._data
+
+    def fake_get(url, **kwargs):
+        if url == release_url:
+            return FakeResponse(data=release)
+        if url == checksum_url:
+            return FakeResponse(text=f"{digest}  AmazonMusicRPC_Setup.exe\n")
+        raise AssertionError(url)
+
+    monkeypatch.setattr(updater.requests, "get", fake_get)
+    monkeypatch.setattr(updater, "APP_VERSION", "4.0.1")
+    result = updater.check_for_update()
+    assert result[0] is True
+    assert result[-1] == digest
+
+
+def test_update_falls_back_to_release_notes_hash(monkeypatch):
+    digest = "c" * 64
+    release = {
+        "tag_name": "v4.0.2",
+        "body": f"AmazonMusicRPC_Setup.exe SHA256: {digest}",
+        "assets": [
+            {"name": "AmazonMusicRPC_Setup.exe", "browser_download_url": "https://example.test/setup.exe"},
+        ],
+    }
+
+    class FakeResponse:
+        text = ""
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return release
+
+    monkeypatch.setattr(updater.requests, "get", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(updater, "APP_VERSION", "4.0.1")
+    assert updater.check_for_update()[-1] == digest

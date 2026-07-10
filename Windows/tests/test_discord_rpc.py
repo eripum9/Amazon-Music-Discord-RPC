@@ -79,3 +79,21 @@ def test_status_fields_are_valid_and_album_falls_back_to_artist():
     invalid = _activity_for("not-a-mode")
     assert invalid["status_display_type"] == 1
     assert invalid["state"] == "Artist"
+
+
+def test_unknown_artist_falls_back_to_amazon_music_status():
+    for artist in ("", "Unknown", "Unknown Artist", "N/A", "None"):
+        for mode in ("artist", "album", "track", "application"):
+            activity = _activity_for(mode, artist=artist)
+            assert activity["status_display_type"] == 0
+            assert activity["state"] == "Unknown Artist"
+
+
+def test_one_character_artist_does_not_leak_helper_label_into_byline():
+    application = _activity_for("application", artist="A")
+    album = _activity_for("album", artist="A")
+    track = _activity_for("track", artist="A")
+
+    assert application["state"] == "by A"
+    assert album["details"] == "Song by A"
+    assert track["state"] == "by A"
