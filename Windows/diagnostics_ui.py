@@ -332,6 +332,43 @@ def _build_cards(state, config, access):
         bad = any(s == "error" for s in enabled)
         cards.append({"label": "Scrobbling", "value": "Needs attention", "detail": f"Last.fm {_scrobble_label(lastfm)}, ListenBrainz {_scrobble_label(listenbrainz)}", "state": "bad" if bad else "warn"})
 
+    from network_audit import network_summary
+    from security_trust import token_storage_review
+    enabled_network = [
+        label
+        for key, label in (
+            ("automatic_update_checks", "Updates"),
+            ("deezer_lookup_enabled", "Deezer"),
+            ("itunes_lookup_enabled", "iTunes"),
+        )
+        if config.get(key, True)
+    ]
+    network = network_summary()
+    latest = network.get("latest") or {}
+    if latest:
+        detail = f"{latest.get('service', 'Network')} · {latest.get('operation', 'request')} · {latest.get('status', 'unknown')}"
+        network_state = "bad" if latest.get("status") == "error" else "good"
+    else:
+        detail = "No outbound request history yet"
+        network_state = "muted"
+    cards.append({"label": "Network", "value": f"{len(enabled_network)} enabled" if enabled_network else "Optional traffic off", "detail": detail, "state": network_state})
+
+    storage = token_storage_review(config)
+    fallback_keys = storage.get("dpapi_fallback_keys") or []
+    if storage.get("credential_manager_available") and not fallback_keys:
+        storage_value = "Credential Manager"
+        storage_detail = "Sensitive values are stored outside config.json"
+        storage_state = "good"
+    elif fallback_keys:
+        storage_value = "DPAPI fallback"
+        storage_detail = f"{len(fallback_keys)} value(s) retained in protected fallback storage"
+        storage_state = "warn"
+    else:
+        storage_value = "Unavailable"
+        storage_detail = "Windows secure credential storage is unavailable"
+        storage_state = "bad"
+    cards.append({"label": "Secret Storage", "value": storage_value, "detail": storage_detail, "state": storage_state})
+
     return cards
 
 

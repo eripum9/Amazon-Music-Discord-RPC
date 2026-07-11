@@ -11,6 +11,9 @@ def test_contribution_and_issue_templates_exist():
         ".github/ISSUE_TEMPLATE/feature_request.yml",
         ".github/ISSUE_TEMPLATE/enhanced_metadata.yml",
         "docs/platform-roadmap.md",
+        "docs/architecture.md",
+        "docs/threat-model.md",
+        "docs/network-endpoints.md",
     ]
     missing = [path for path in required if not (ROOT / path).exists()]
     assert missing == []
@@ -42,6 +45,25 @@ def test_readme_keeps_landing_and_support_links():
     assert "Android support has been discontinued" in readme
     assert "docs/platform-roadmap.md" in readme
     assert "CONTRIBUTING.md" in readme
+    assert "Network controls" in readme
+    assert "docs/architecture.md" in readme
+    assert "docs/threat-model.md" in readme
+    assert "docs/network-endpoints.md" in readme
+
+
+def test_trust_documents_cover_v5_boundaries():
+    security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    privacy = (ROOT / "docs/privacy.md").read_text(encoding="utf-8")
+    architecture = (ROOT / "docs/architecture.md").read_text(encoding="utf-8")
+    threat_model = (ROOT / "docs/threat-model.md").read_text(encoding="utf-8")
+    endpoints = (ROOT / "docs/network-endpoints.md").read_text(encoding="utf-8")
+    assert "private vulnerability reporting" in security
+    assert "Windows Credential Manager" in privacy
+    assert "TaskSupervisor" in architecture
+    assert "Amazify localhost bridge" in threat_model
+    assert "api.deezer.com" in endpoints
+    assert "itunes.apple.com" in endpoints
+    assert "api.github.com" in endpoints
 
 
 def test_platform_roadmap_keeps_linux_and_macos_out_of_scope():

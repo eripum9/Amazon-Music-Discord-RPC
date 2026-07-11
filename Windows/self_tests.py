@@ -1090,7 +1090,7 @@ def run_self_tests(log_dir, diagnostics_path):
         import diagnostics_ui
         cards = diagnostics_ui._build_cards({"amazify": {"installed": True, "plugin_enabled": True, "rpc_bridge_port": 14797}}, load_config(), {"value": "Unavailable", "state": "bad"})
         amazify = next((card for card in cards if card.get("label") == "Amazify"), {})
-        ok = len(cards) == 10 and any(card.get("label") == "Source" for card in cards) and amazify.get("value") == "Ready" and "14797" in amazify.get("detail", "")
+        ok = len(cards) == 12 and any(card.get("label") == "Source" for card in cards) and any(card.get("label") == "Network" for card in cards) and any(card.get("label") == "Secret Storage" for card in cards) and amazify.get("value") == "Ready" and "14797" in amazify.get("detail", "")
         results.append(_result("Diagnostics cards", ok, f"{len(cards)} cards"))
     except Exception as e:
         results.append(_result("Diagnostics cards", False, str(e)))

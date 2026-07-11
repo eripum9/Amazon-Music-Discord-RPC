@@ -48,3 +48,18 @@ Get-FileHash .\AmazonMusicRPC_Setup.exe -Algorithm SHA256
 ```
 
 Compare the result with the value in `AmazonMusicRPC_Setup.exe.sha256` on the GitHub release page.
+
+## Network Requests Are Disabled Or Failing
+
+- Open Settings and review **Network & Updates**.
+- Automatic update checks, Deezer lookup, and iTunes artwork fallback can be controlled independently.
+- Open Diagnostics and review the **Network** card for the latest redacted request result.
+- A disabled artwork provider can reduce artwork or duration matching without affecting local Amazon metadata.
+- Corporate proxies, DNS filters, and firewalls can block optional services. The full endpoint list is in [network-endpoints.md](network-endpoints.md).
+
+## Secret Storage Shows A Warning
+
+- **Credential Manager** means sensitive values have been migrated out of `config.json`.
+- **DPAPI fallback** means Windows Credential Manager was unavailable and the app retained an encrypted per-user fallback.
+- Use **Clear Scrobbling Tokens** before exporting data or transferring the profile to another PC.
+- Never paste the contents of the app data directory into a public issue.
