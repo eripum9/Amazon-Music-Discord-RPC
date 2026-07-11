@@ -118,7 +118,7 @@ Get-FileHash .\AmazonMusicRPC_Setup.exe -Algorithm SHA256
 
 Compare the output with the value in `AmazonMusicRPC_Setup.exe.sha256` on the GitHub release page. If a release does not include a checksum, review the release page before installing.
 
-Maintainer release steps are tracked in [docs/release-checklist.md](docs/release-checklist.md).
+Official installers are created only by the manually triggered **Build Draft Release** GitHub Actions workflow from the current `master` commit. The workflow runs tests, audits dependencies, builds from a hash-locked environment, creates provenance attestations, and leaves the release as a draft for maintainer review. Maintainer steps are documented in [docs/release-process.md](docs/release-process.md) and [docs/release-checklist.md](docs/release-checklist.md).
 
 ### From Source
 
@@ -147,10 +147,12 @@ No Python installation needed if using the Installer.
 
 Windows app source, dependencies, icons, and packaging files live in `Windows/`.
 
+The commands below create local development builds. They are not official release artifacts. Official releases must use the manual GitHub Actions workflow described in [docs/release-process.md](docs/release-process.md).
+
 ### Build the executable
 
 ```bash
-pip install pyinstaller
+pip install -r Windows/requirements-build.txt
 pyinstaller Windows/AmazonMusicRPC.spec --noconfirm --workpath Windows/build --distpath Windows/dist
 ```
 

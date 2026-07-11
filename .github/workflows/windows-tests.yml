@@ -6,6 +6,7 @@ on:
       - master
       - "fix/**"
       - "beta/**"
+      - "rewrite/**"
   pull_request:
     branches:
       - master
@@ -31,6 +32,10 @@ jobs:
         run: python -m py_compile Windows/main.py Windows/amazon_devtools.py Windows/media_reader.py Windows/discord_rpc.py Windows/config.py Windows/updater.py Windows/status_summary.py Windows/qt_tray_ui.py Windows/rpc_state.py Windows/metadata_pipeline.py Windows/launcher_diagnostics.py Windows/security_trust.py Windows/self_tests.py Windows/release_smoke.py
       - name: Pytest
         run: python -m pytest Windows/tests
+      - name: Built-in self-tests
+        run: python Windows/run_self_tests.py
+      - name: Ruff safety checks
+        run: python -m ruff check Windows --select E9,F63,F7,F82
       - name: Release smoke
         run: python Windows/release_smoke.py --allow-missing-installer
       - name: Whitespace

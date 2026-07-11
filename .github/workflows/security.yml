@@ -1,0 +1,74 @@
+name: Security
+
+on:
+  push:
+    branches:
+      - master
+      - "rewrite/**"
+      - "fix/**"
+  pull_request:
+    branches:
+      - master
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.14"
+      - name: Install audit tools
+        run: python -m pip install pip-audit==2.10.1 ruff==0.15.21
+      - name: Audit runtime dependencies
+        run: python -m pip_audit -r Windows/requirements.txt --strict
+      - name: Audit build dependencies
+        run: python -m pip_audit -r Windows/requirements-build.txt --strict
+      - name: Ruff safety checks
+        run: python -m ruff check Windows --select E9,F63,F7,F82
+
+  codeql:
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - python
+          - actions
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+      - uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294
+        with:
+          fail-on-severity: moderate

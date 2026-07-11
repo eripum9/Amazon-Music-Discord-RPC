@@ -1,6 +1,15 @@
 # Release Checklist
 
-Use this before publishing a GitHub release.
+Use this to review and publish a release draft created by the **Build Draft Release** workflow. Do not upload a locally built installer as an official release.
+
+## Create The Draft
+
+- Merge the intended release commit into `master`.
+- Confirm `Windows/config.py` and `Windows/installer.iss` contain the same version.
+- Open **Actions > Build Draft Release > Run workflow** on `master`.
+- Enter the version without the `v` prefix and a one-sentence summary.
+- Wait for every workflow step to pass.
+- Do not publish a draft created from a superseded `master` commit.
 
 ## Required Artifacts
 
@@ -11,14 +20,20 @@ Use this before publishing a GitHub release.
 
 Always upload `AmazonMusicRPC_Setup.exe` and its newly generated `AmazonMusicRPC_Setup.exe.sha256` together. Never reuse a checksum from an earlier build or publish the installer without its matching sidecar.
 
-## Local Verification
+## Workflow Verification
 
-```powershell
-python -m py_compile Windows\main.py Windows\amazon_devtools.py Windows\media_reader.py Windows\discord_rpc.py Windows\config.py Windows\updater.py Windows\status_summary.py Windows\qt_tray_ui.py Windows\rpc_state.py Windows\metadata_pipeline.py Windows\launcher_diagnostics.py Windows\security_trust.py Windows\self_tests.py Windows\release_smoke.py
-python -m pytest Windows\tests
-python Windows\release_smoke.py --installer Windows\installer_output\AmazonMusicRPC_Setup.exe --release-notes release-notes.md
-git diff --check
-```
+Confirm the workflow completed all of these checks:
+
+- Version and current `master` validation
+- Hash-locked dependency installation
+- Python compilation, pytest, built-in self-tests, and Ruff safety checks
+- Dependency vulnerability audit
+- Clean PyInstaller and Inno Setup builds with UPX and stripping disabled
+- Packaged Settings and Diagnostics smoke tests
+- Silent installer and uninstaller smoke test
+- Microsoft Defender scan, or an explicit unavailable result
+- CycloneDX SBOM, build manifest, and security report upload
+- GitHub provenance attestations for the installer and checksum
 
 ## Release Notes Requirements
 
@@ -36,4 +51,9 @@ Every release description should include:
 - Confirm no Last.fm session key, ListenBrainz token, Discord token, or private config value appears in release notes, diagnostics, screenshots, or logs.
 - Keep the latest installer attached to the release.
 - Confirm `AmazonMusicRPC_Setup.exe.sha256` is attached beside the installer and matches the uploaded installer. v4.0.1 is the final transition release that also includes the hash in its description.
-- Keep code signing and signed tags on the future hardening list until they are available.
+- Confirm the release contains only the installer and checksum as public release assets.
+- Download the Actions `release-evidence-vX.Y.Z` artifact and review the SBOM, build manifest, and security report.
+- Verify the attestation with `gh attestation verify AmazonMusicRPC_Setup.exe -R eripum9/Amazon-Music-Discord-RPC`.
+- Confirm the release notes accurately state whether the installer is signed.
+- Test the downloaded installer on a clean or disposable Windows environment before publishing.
+- Publish the existing draft; do not rebuild or replace assets after approval.

@@ -1,7 +1,5 @@
-pytest==9.0.3
-requests==2.34.2
-pypresence==4.6.1
-PySide6-Essentials==6.11.1
-cryptography==48.0.0
-pylast==7.0.2
-liblistenbrainz==0.7.0
+-r requirements.txt
+pytest==9.1.1
+pip-audit==2.10.1
+ruff==0.15.21
+pyright==1.1.411

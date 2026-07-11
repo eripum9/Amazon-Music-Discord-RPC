@@ -80,7 +80,9 @@ Private session mode clears Discord Rich Presence and can stop scrobbling while 
 
 The updater checks GitHub releases and can download the latest installer. It opens the GitHub release page before running the installer, requires an `AmazonMusicRPC_Setup.exe.sha256` release asset or a legacy SHA256 hash in the release notes, downloads to a unique temporary directory, and verifies the installer before launching it. If no hash is available, automatic install is disabled and the app only opens the release page.
 
-Each release should include `AmazonMusicRPC_Setup.exe.sha256`, a clear changelog, and an enhanced metadata compatibility note. Signed release tags and code-signed Windows installers are still planned hardening steps.
+Official release drafts are built only from the current `master` commit by a manually triggered GitHub Actions workflow. The workflow installs hash-locked dependencies, runs tests and dependency auditing, creates an SBOM and build evidence, scans the installer with Microsoft Defender when available, and generates GitHub artifact attestations. Each release includes `AmazonMusicRPC_Setup.exe`, its matching `AmazonMusicRPC_Setup.exe.sha256`, a clear changelog, and an enhanced metadata compatibility note.
+
+Windows code signing is applied when the repository signing certificate is configured. Unsigned drafts are explicitly labeled as unsigned and must be reviewed before publication.
 
 ## Uninstall
 

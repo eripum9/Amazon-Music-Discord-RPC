@@ -1,0 +1,4 @@
+-r requirements-dev.txt
+PyInstaller==6.21.0
+cyclonedx-bom==7.3.0
+pip-tools==7.5.3
