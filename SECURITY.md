@@ -52,7 +52,7 @@ The app does not upload raw logs or config files automatically.
 
 ## Tokens And Secrets
 
-Last.fm session keys and ListenBrainz tokens are stored locally when those features are enabled. Sensitive config values are migrated out of `%APPDATA%\AmazonMusicRPC\config.json` and written to a separate DPAPI-wrapped local secret file. Diagnostics and log views redact known token values, Settings exports omit tokens unless explicitly requested, and Settings includes a clear-token action. Local app data should still be treated as private because a running app needs decrypted values in memory.
+Last.fm session keys and ListenBrainz tokens are stored locally when those features are enabled. Sensitive config values are migrated out of `%APPDATA%\AmazonMusicRPC\config.json` into Windows Credential Manager. Migration verifies each stored value before removing its previous copy. If Credential Manager is unavailable, a DPAPI-wrapped local secret file remains as fallback. Diagnostics and log views redact known token values, Settings exports omit tokens unless explicitly requested, and Settings includes a clear-token action. Local app data should still be treated as private because a running app needs decrypted values in memory.
 
 Do not paste config files, diagnostics, or logs publicly unless you have checked that tokens and private data are removed.
 

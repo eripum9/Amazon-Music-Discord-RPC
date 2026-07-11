@@ -26,6 +26,8 @@ a = Analysis(
         'metadata_pipeline',
         'launcher_diagnostics',
         'security_trust',
+        'credential_store',
+        'network_audit',
         'qt_tray_ui',
         'windows_file_dialog',
         'self_tests',

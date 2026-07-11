@@ -186,12 +186,16 @@ def _report_launcher_candidates(config):
 def _write_diagnostics_report(path, include_tests=True):
     config = load_config()
     state = _read_state()
+    from network_audit import network_summary
+    from security_trust import token_storage_review
     report = {
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "system": _report_system_info(),
         "source_summary": metadata_source_summary(state, config),
         "notification_access": _notification_access(),
         "launcher_candidates": _report_launcher_candidates(config),
+        "network": network_summary(),
+        "secret_storage": token_storage_review(config),
     }
     if include_tests:
         try:
@@ -964,6 +968,8 @@ class _Api:
         state = redact_data(_read_state(), config)
         access = _notification_access()
         track = state.get("track") or {}
+        from network_audit import network_summary
+        from security_trust import token_storage_review
         return {
             "cards": _build_cards(state, config, access),
             "track": track,
@@ -973,6 +979,8 @@ class _Api:
             "config_path": CONFIG_PATH,
             "state_path": DIAGNOSTICS_PATH,
             "app_version": APP_VERSION,
+            "network": network_summary(),
+            "secret_storage": token_storage_review(config),
         }
 
     def get_log(self, label="console.log", offset=0):

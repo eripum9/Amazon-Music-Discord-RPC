@@ -27,7 +27,7 @@ def _powershell_executable():
 
 def _run_dialog(script):
     completed = subprocess.run(
-        [_powershell_executable(), "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
+        [_powershell_executable(), "-NoProfile", "-STA", "-Command", script],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

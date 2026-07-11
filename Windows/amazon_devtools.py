@@ -33,8 +33,10 @@ _TIME_RE = re.compile(r"^-?\d{1,2}:\d{2}(?::\d{2})?$")
 _ASIN_RE = re.compile(r"^[A-Z0-9]{10}$", re.IGNORECASE)
 _MUSIC_HOST_RE = re.compile(r"^music\.amazon\.[a-z.]+$", re.IGNORECASE)
 _AMAZON_WEBAPP_HOST_RE = re.compile(r"^(?:music|www)\.amazon\.[a-z.]+$", re.IGNORECASE)
+_DEVTOOLS_PAGE_PATH_RE = re.compile(r"^/devtools/page/([A-Za-z0-9._:-]+)$")
 _DEVTOOLS_PORT = None
 _LAST_LAUNCH = {}
+_PORT_OWNER_CACHE = {"port": 0, "expires": 0.0, "value": None}
 
 
 def _valid_devtools_port(value):
@@ -66,6 +68,22 @@ def _pick_devtools_port():
             except OSError:
                 pass
     raise RuntimeError("Could not find a free local metadata port")
+
+
+def _reserve_devtools_port(port=None):
+    ports = [int(port)] if port else list(range(DEVTOOLS_PORT_MIN, DEVTOOLS_PORT_MAX + 1))
+    if not port:
+        random.shuffle(ports)
+    for candidate in ports:
+        if not _valid_devtools_port(candidate):
+            continue
+        reservation = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            reservation.bind(("127.0.0.1", candidate))
+            return candidate, reservation
+        except OSError:
+            reservation.close()
+    raise RuntimeError("Could not reserve a free local metadata port")
 
 
 def set_devtools_port(port):
@@ -128,7 +146,7 @@ def _powershell_executable():
 
 def _run_powershell(script, timeout=8):
     return subprocess.run(
-        [_powershell_executable(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+        [_powershell_executable(), "-NoProfile", "-Command", script],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -405,9 +423,9 @@ def _format_launcher_failure(attempts):
     return format_launcher_failure(attempts, LAUNCH_FAILURE_HELP)
 
 
-def _remember_launch(method, launcher, port):
+def _remember_launch(method, launcher, port, pid="", owner=None):
     _LAST_LAUNCH.clear()
-    _LAST_LAUNCH.update({"method": method, "launcher": launcher, "port": port})
+    _LAST_LAUNCH.update({"method": method, "launcher": launcher, "port": port, "pid": str(pid or ""), "owner": owner or {}})
 
 
 def _clean_label(value):
@@ -537,6 +555,8 @@ def _http_json(path, timeout=1.5, port=None):
         raise ConnectionError("No enhanced metadata port selected")
     response = requests.get(f"http://127.0.0.1:{selected_port}{path}", timeout=timeout)
     response.raise_for_status()
+    if len(getattr(response, "content", b"") or b"") > 1024 * 1024:
+        raise ValueError("Enhanced metadata response exceeded 1 MiB")
     return response.json()
 
 
@@ -554,6 +574,87 @@ def _is_amazon_music_target(target):
     return host.startswith("music.amazon.") and title == "amazon music"
 
 
+def _valid_target_websocket(target, port):
+    if not isinstance(target, dict):
+        return False
+    try:
+        selected_port = int(port)
+    except (TypeError, ValueError):
+        return False
+    parsed = urlparse(_clean(target.get("webSocketDebuggerUrl")))
+    try:
+        parsed_port = parsed.port
+    except ValueError:
+        return False
+    match = _DEVTOOLS_PAGE_PATH_RE.fullmatch(parsed.path or "")
+    return bool(
+        parsed.scheme == "ws"
+        and (parsed.hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}
+        and parsed_port == selected_port
+        and not parsed.username
+        and not parsed.password
+        and not parsed.query
+        and not parsed.fragment
+        and match
+        and match.group(1) == _clean(target.get("id"))
+    )
+
+
+def _port_owner_entries(port):
+    script = f"""
+$items = @()
+try {{
+    Get-NetTCPConnection -State Listen -LocalPort {int(port)} -ErrorAction Stop | ForEach-Object {{
+        $owner = $_.OwningProcess
+        $current = $owner
+        $names = @()
+        $paths = @()
+        $pids = @()
+        for ($depth = 0; $depth -lt 6 -and $current -gt 0; $depth++) {{
+            $process = Get-CimInstance Win32_Process -Filter "ProcessId=$current" -ErrorAction SilentlyContinue
+            if (-not $process) {{ break }}
+            $pids += $process.ProcessId
+            $names += $process.Name
+            $paths += $process.ExecutablePath
+            if ($process.ParentProcessId -eq $current) {{ break }}
+            $current = $process.ParentProcessId
+        }}
+        $items += [PSCustomObject]@{{
+            Pid = $owner
+            Pids = ($pids -join ',')
+            Names = ($names -join ' ')
+            Paths = ($paths -join ' ')
+        }}
+    }}
+}} catch {{}}
+$items | ConvertTo-Json -Compress
+"""
+    return _powershell_json(script, timeout=4)
+
+
+def _amazon_owner_entry(entry, launched_pid=""):
+    pids = {item for item in _clean(entry.get("Pids") or entry.get("Pid")).split(",") if item}
+    if launched_pid and _clean(launched_pid) in pids:
+        return True
+    identity = re.sub(r"[\s_.-]+", "", f"{entry.get('Names', entry.get('Name', ''))} {entry.get('Paths', entry.get('Path', ''))}".lower())
+    return "amazonmusic" in identity or "amazonmobilellcamazonmusic" in identity
+
+
+def _devtools_owner_trust(port, launched_pid="", force=False):
+    now = time.time()
+    if not force and _PORT_OWNER_CACHE["port"] == int(port) and now < _PORT_OWNER_CACHE["expires"]:
+        return _PORT_OWNER_CACHE["value"]
+    entries = _port_owner_entries(port)
+    if not entries:
+        result = {"trusted": True, "status": "unavailable", "detail": "Windows could not resolve the enhanced metadata listener owner"}
+    elif all(_amazon_owner_entry(entry, launched_pid) for entry in entries):
+        result = {"trusted": True, "status": "verified", "detail": "Enhanced metadata listener belongs to Amazon Music", "pids": [_clean(entry.get("Pid")) for entry in entries]}
+    else:
+        result = {"trusted": False, "status": "rejected", "detail": "The selected enhanced metadata port is owned by a non-Amazon process", "pids": [_clean(entry.get("Pid")) for entry in entries]}
+    _PORT_OWNER_CACHE.update({"port": int(port), "expires": now + 10, "value": result})
+    return result
+
+
 def _page_target(port=None):
     try:
         targets = _http_json("/json/list", port=port)
@@ -562,22 +663,22 @@ def _page_target(port=None):
     if not isinstance(targets, list):
         return None
     for target in targets:
-        if _is_amazon_music_target(target):
+        if _is_amazon_music_target(target) and _valid_target_websocket(target, port or get_devtools_port(False)):
             return target
     return None
 
 
 class _CdpSocket:
-    def __init__(self, websocket_url, timeout=2):
+    def __init__(self, websocket_url, timeout=2, expected_port=None, expected_target_id=""):
         self._id = 0
         parsed = urlparse(websocket_url)
-        self._host = parsed.hostname or "127.0.0.1"
-        self._port = parsed.port or get_devtools_port(False)
-        if not self._port:
-            raise ConnectionError("No enhanced metadata port selected")
+        selected_port = expected_port or get_devtools_port(False)
+        target = {"id": expected_target_id, "webSocketDebuggerUrl": websocket_url}
+        if not selected_port or not _valid_target_websocket(target, selected_port):
+            raise ConnectionError("DevTools websocket endpoint did not match the trusted loopback target")
+        self._host = parsed.hostname
+        self._port = parsed.port
         self._path = parsed.path
-        if parsed.query:
-            self._path += "?" + parsed.query
         self._socket = socket.create_connection((self._host, self._port), timeout=timeout)
         self._socket.settimeout(timeout)
         self._handshake()
@@ -801,13 +902,22 @@ def get_devtools_track_sync(link_region=None, port=None, method=""):
         if unexpected_warning:
             payload["warning"] = unexpected_warning
         return payload
+    owner = _devtools_owner_trust(port, _LAST_LAUNCH.get("pid", ""))
+    if not owner.get("trusted"):
+        return {
+            "status": "error",
+            "detail": owner.get("detail"),
+            "source": "amazon_devtools",
+            "port": port,
+            "owner": owner,
+        }
     cache_key = f"{port}|{target.get('id')}|{normalize_amazon_music_link_region(link_region)}"
     now = time.time()
     if _CACHE["key"] == cache_key and now < _CACHE["expires"]:
         return _CACHE["value"]
     client = None
     try:
-        client = _CdpSocket(target["webSocketDebuggerUrl"])
+        client = _CdpSocket(target["webSocketDebuggerUrl"], expected_port=port, expected_target_id=target.get("id", ""))
         response = client.request("Runtime.evaluate", {
             "expression": _TRANSPORT_EXPRESSION,
             "returnByValue": True,
@@ -830,6 +940,7 @@ def get_devtools_track_sync(link_region=None, port=None, method=""):
             track["method"] = method
         if unexpected_warning:
             track["warning"] = unexpected_warning
+        track["owner"] = owner
     finally:
         if client:
             client.close()
@@ -877,8 +988,11 @@ def launch_amazon_music_devtools(launcher_override=None):
     port = get_devtools_port(True)
     if _is_local_port_open(port):
         if _page_target(port=port):
-            _remember_launch("existing", "", port)
-            return {"ok": True, "pid": "", "port": port, "already_running": True, "method": "existing"}
+            owner = _devtools_owner_trust(port, force=True)
+            if not owner.get("trusted"):
+                return {"ok": False, "error": owner.get("detail"), "port": port, "owner": owner}
+            _remember_launch("existing", "", port, owner=owner)
+            return {"ok": True, "pid": "", "port": port, "already_running": True, "method": "existing", "owner": owner}
         if _valid_devtools_port(os.environ.get(DEVTOOLS_PORT_ENV)) == port:
             return {"ok": False, "error": f"Shared metadata port {port} is already in use", "port": port}
         for _ in range(8):
@@ -888,18 +1002,36 @@ def launch_amazon_music_devtools(launcher_override=None):
                 break
         else:
             return {"ok": False, "error": "Could not find a free local metadata port"}
+    try:
+        port, reservation = _reserve_devtools_port(port)
+    except RuntimeError:
+        reset_devtools_port()
+        try:
+            port, reservation = _reserve_devtools_port()
+            set_devtools_port(port)
+        except RuntimeError as error:
+            return {"ok": False, "error": str(error)}
     attempts = []
-    for candidate in _launcher_candidates(launcher_override):
+    try:
+        candidates = _launcher_candidates(launcher_override)
+    finally:
+        reservation.close()
+    for candidate in candidates:
         result = _launch_candidate(candidate, port)
         if result.get("ok"):
             if _wait_for_page_target(port):
-                _remember_launch(candidate.get("method", ""), candidate.get("value", ""), port)
+                owner = _devtools_owner_trust(port, result.get("pid", ""), force=True)
+                if not owner.get("trusted"):
+                    attempts.append(f"{_candidate_label(candidate)}: {owner.get('detail')}")
+                    continue
+                _remember_launch(candidate.get("method", ""), candidate.get("value", ""), port, result.get("pid", ""), owner)
                 return {
                     "ok": True,
                     "pid": result.get("pid", ""),
                     "port": port,
                     "method": candidate.get("method", ""),
                     "launcher": candidate.get("value", ""),
+                    "owner": owner,
                 }
             attempts.append(f"{_candidate_label(candidate)}: metadata target did not appear")
         else:

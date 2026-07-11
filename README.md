@@ -64,7 +64,7 @@ Notification enrichment is off by default. If enabled, Windows may ask for notif
 
 Private session mode clears Discord presence and can stop scrobbling while it is enabled. Keyword privacy rules can also block specific tracks from being shared.
 
-Settings are stored in `%APPDATA%\AmazonMusicRPC\config.json` for installed builds, or the `Windows/` directory when running from source. Last.fm and ListenBrainz tokens are stored locally in that config today. Diagnostics and log views redact known token values, and Settings includes a clear-token action, but you should still treat config files as private.
+Settings are stored in `%APPDATA%\AmazonMusicRPC\config.json` for installed builds, or the `Windows/` directory when running from source. Last.fm and ListenBrainz tokens are stored in Windows Credential Manager. If Credential Manager is unavailable, the app keeps a DPAPI-protected fallback file and verifies it before removing any previous copy. Diagnostics and log views redact known token values, and Settings includes a clear-token action.
 
 ### Data Flow
 

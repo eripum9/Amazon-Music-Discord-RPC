@@ -16,13 +16,13 @@ from album_art import get_album_art, search_tracks, find_custom_album_art
 from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, launch_amazon_music_devtools, restart_amazon_music_devtools, amazon_music_is_running, devtools_environment, amazon_music_search_link
 from amazon_status_overlay import AmazonStatusOverlay
 from discord_rpc import DiscordRPC
-from config import load_config, load_config_for_update, save_config, get_exe_path, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION, normalize_discord_status_display, redact_data
+from config import load_config, load_config_for_update, save_config, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION, normalize_discord_status_display, redact_data
 from amazify_compat import amazify_compat_state, ensure_amazify_compat, push_rpc_state_to_amazify
 from amazify_rpc_bridge import start_amazify_rpc_bridge
 from metadata_pipeline import apply_art_result, apply_devtools_source, base_track_for_devtools, diagnostics_track_link, link_buttons, merge_notification_metadata, should_lookup_deezer_button
 from rpc_state import GameModeState, ResolvedTrackStore, TrackTimingState, configured_game_mode_processes, devtools_no_track_state, duration_value, game_mode_matches_processes, hidden_privacy_track, normalise_process_name, normalised_text, privacy_keywords, privacy_match, running_process_names, same_track_field, track_info_payload, track_position
 from status_summary import metadata_source_summary
-from updater import check_for_update, prompt_for_update
+from updater import check_for_update, prompt_for_update, run_update_helper
 
 if getattr(sys, 'frozen', False):
     BUNDLE_DIR = sys._MEIPASS
@@ -1403,14 +1403,14 @@ def wrong_song_handler(icon=None, item=None):
     threading.Thread(target=_worker, daemon=True).start()
 
 
-def _prompt_and_install_update(latest_ver, download_url, changelog="", release_url=None, expected_sha256=""):
+def _prompt_and_install_update(update):
     MB_TOPMOST = 0x40000
-    print(f"[Update] Downloading installer...")
+    print("[Update] Downloading installer...")
     try:
-        installer_path = prompt_for_update(latest_ver, download_url, changelog, release_url, expected_sha256, defer_until_exit=True)
-        if not installer_path:
+        downloaded = prompt_for_update(update, defer_until_exit=True)
+        if not downloaded:
             return
-        print(f"[Update] Downloaded to {installer_path}, launching installer...")
+        print(f"[Update] Downloaded to {downloaded.path}, launching installer...")
         on_quit(tray_icon, None)
     except Exception as e:
         print(f"[Update] Download/install failed: {e}")
@@ -1424,12 +1424,14 @@ def _prompt_and_install_update(latest_ver, download_url, changelog="", release_u
 
 def _check_for_update_and_prompt():
     try:
-        has_update, latest_ver, download_url, changelog, release_url, expected_sha256 = check_for_update()
-        if has_update and download_url:
-            print(f"[Update] New version {latest_ver} available!")
-            _prompt_and_install_update(latest_ver, download_url, changelog, release_url, expected_sha256)
-        elif has_update:
-            print(f"[Update] New version {latest_ver} found but no installer asset.")
+        update = check_for_update()
+        if update.available and update.installer_url:
+            print(f"[Update] New version {update.version} available!")
+            _prompt_and_install_update(update)
+        elif update.available:
+            print(f"[Update] New version {update.version} found but no trusted installer asset.")
+        elif update.error:
+            print(f"[Update] Check failed: {update.error}")
     except Exception as e:
         print(f"[Update] Check failed: {e}")
 
@@ -1592,6 +1594,14 @@ def update_tray_menu(state=None, force=False):
 def main():
     global tray_icon, current_config
 
+    helper_result = run_update_helper()
+    if helper_result is not None:
+        raise SystemExit(helper_result)
+
+    if '--remove-credentials' in sys.argv:
+        from config import clear_sensitive_credentials
+        raise SystemExit(0 if clear_sensitive_credentials() else 1)
+
     if '--settings' in sys.argv:
         from settings_ui import SettingsWindow
         SettingsWindow().show()
@@ -1700,7 +1710,8 @@ def main():
     _sync_status_overlay(current_config)
 
     def _check_update():
-        _check_for_update_and_prompt()
+        if current_config.get("automatic_update_checks", True):
+            _check_for_update_and_prompt()
     threading.Thread(target=_check_update, daemon=True).start()
 
     should_open_settings = not is_startup_launch and (

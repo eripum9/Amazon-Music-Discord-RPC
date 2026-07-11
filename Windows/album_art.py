@@ -7,6 +7,27 @@ from urllib.parse import quote
 _cache = {}
 
 
+def _lookup_policy(deezer_enabled=None, itunes_enabled=None):
+    if deezer_enabled is not None and itunes_enabled is not None:
+        return bool(deezer_enabled), bool(itunes_enabled)
+    try:
+        from config import load_config
+        config = load_config()
+    except Exception:
+        config = {}
+    deezer = config.get("deezer_lookup_enabled", True) if deezer_enabled is None else deezer_enabled
+    itunes = config.get("itunes_lookup_enabled", True) if itunes_enabled is None else itunes_enabled
+    return bool(deezer), bool(itunes)
+
+
+def _network_event(service, operation, status, detail=""):
+    try:
+        from network_audit import record_network_event
+        record_network_event(service, operation, status, detail)
+    except Exception:
+        pass
+
+
 def _clean_title(title):
     import re
     title = re.sub(r'\s*\[.*?\]', '', title)
@@ -22,31 +43,36 @@ def _bounded_int(value, default, minimum=0):
         return default
 
 
-def search_tracks(query, limit=5, offset=0):
+def search_tracks(query, limit=5, offset=0, deezer_enabled=None, itunes_enabled=None):
     limit = _bounded_int(limit, 5, 1)
     offset = _bounded_int(offset, 0, 0)
-    url = f"https://api.deezer.com/search?q={quote(query)}&limit={limit}&index={offset}"
-    try:
-        resp = requests.get(url, timeout=5)
-        resp.raise_for_status()
-        data = resp.json()
-        results = []
-        for track in data.get("data", []):
-            album = track.get("album", {})
-            art = album.get("cover_xl") or album.get("cover_big") or album.get("cover_medium")
-            results.append({
-                "title": track.get("title", ""),
-                "artist": track.get("artist", {}).get("name", ""),
-                "album": album.get("title", ""),
-                "art_url": art or "",
-                "track_link": track.get("link", ""),
-                "duration": track.get("duration", 0) or 0,
-            })
-        if results:
-            return results
-    except (requests.RequestException, KeyError, ValueError):
-        pass
+    use_deezer, use_itunes = _lookup_policy(deezer_enabled, itunes_enabled)
+    if use_deezer:
+        url = f"https://api.deezer.com/search?q={quote(query)}&limit={limit}&index={offset}"
+        try:
+            resp = requests.get(url, timeout=5)
+            resp.raise_for_status()
+            data = resp.json()
+            results = []
+            for track in data.get("data", []):
+                album = track.get("album", {})
+                art = album.get("cover_xl") or album.get("cover_big") or album.get("cover_medium")
+                results.append({
+                    "title": track.get("title", ""),
+                    "artist": track.get("artist", {}).get("name", ""),
+                    "album": album.get("title", ""),
+                    "art_url": art or "",
+                    "track_link": track.get("link", ""),
+                    "duration": track.get("duration", 0) or 0,
+                })
+            _network_event("deezer", "track-search", "success", f"{len(results)} results")
+            if results:
+                return results
+        except (requests.RequestException, KeyError, ValueError) as error:
+            _network_event("deezer", "track-search", "error", type(error).__name__)
 
+    if not use_itunes:
+        return []
     fetch_limit = min(max(limit + offset, limit), 200)
     url = f"https://itunes.apple.com/search?term={quote(query)}&media=music&limit={fetch_limit}"
     try:
@@ -66,9 +92,10 @@ def search_tracks(query, limit=5, offset=0):
                 "track_link": r.get("trackViewUrl", ""),
                 "duration": round((r.get("trackTimeMillis") or 0) / 1000),
             })
+        _network_event("itunes", "track-search", "success", f"{len(results)} results")
         return results
-    except (requests.RequestException, KeyError, ValueError):
-        pass
+    except (requests.RequestException, KeyError, ValueError) as error:
+        _network_event("itunes", "track-search", "error", type(error).__name__)
     return []
 
 
@@ -128,9 +155,11 @@ def _search_deezer(title, artist):
                 album = track.get("album", {})
                 art = album.get("cover_xl") or album.get("cover_big") or album.get("cover_medium")
                 if art:
+                    _network_event("deezer", "artwork-lookup", "success", "match")
                     return art, album.get("title", ""), track.get("link", ""), track.get("duration", 0)
-    except (requests.RequestException, KeyError, IndexError, ValueError):
-        pass
+        _network_event("deezer", "artwork-lookup", "success", "no match")
+    except (requests.RequestException, KeyError, IndexError, ValueError) as error:
+        _network_event("deezer", "artwork-lookup", "error", type(error).__name__)
     return None, None, None, 0
 
 
@@ -147,19 +176,24 @@ def _search_itunes(title, artist):
             for result in data["results"]:
                 art_url = result.get("artworkUrl100", "")
                 if art_url:
+                    _network_event("itunes", "artwork-lookup", "success", "match")
                     return art_url.replace("100x100bb", "600x600bb"), result.get("collectionName", "")
-    except (requests.RequestException, KeyError, IndexError, ValueError):
-        pass
+        _network_event("itunes", "artwork-lookup", "success", "no match")
+    except (requests.RequestException, KeyError, IndexError, ValueError) as error:
+        _network_event("itunes", "artwork-lookup", "error", type(error).__name__)
     return None, None
 
 
-def get_album_art(title, artist):
-    cache_key = f"{title}|{artist}".lower()
+def get_album_art(title, artist, deezer_enabled=None, itunes_enabled=None):
+    use_deezer, use_itunes = _lookup_policy(deezer_enabled, itunes_enabled)
+    cache_key = f"{title}|{artist}|{int(use_deezer)}|{int(use_itunes)}".lower()
     if cache_key in _cache:
         return _cache[cache_key]
 
-    art_url, album_name, track_link, track_duration = _search_deezer(title, artist)
-    if not art_url:
+    art_url, album_name, track_link, track_duration = (None, None, None, 0)
+    if use_deezer:
+        art_url, album_name, track_link, track_duration = _search_deezer(title, artist)
+    if not art_url and use_itunes:
         art_url, album_name = _search_itunes(title, artist)
         track_link = None
         track_duration = 0

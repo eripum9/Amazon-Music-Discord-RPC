@@ -93,7 +93,7 @@ jobs:
           "INNO_COMPILER=$compiler" >> $env:GITHUB_ENV
 
       - name: Compile
-        run: python -m py_compile Windows/main.py Windows/amazon_devtools.py Windows/media_reader.py Windows/discord_rpc.py Windows/config.py Windows/updater.py Windows/status_summary.py Windows/qt_tray_ui.py Windows/rpc_state.py Windows/metadata_pipeline.py Windows/launcher_diagnostics.py Windows/security_trust.py Windows/self_tests.py Windows/release_smoke.py Windows/run_self_tests.py
+        run: python -m py_compile Windows/main.py Windows/amazon_devtools.py Windows/media_reader.py Windows/discord_rpc.py Windows/config.py Windows/credential_store.py Windows/network_audit.py Windows/updater.py Windows/status_summary.py Windows/qt_tray_ui.py Windows/rpc_state.py Windows/metadata_pipeline.py Windows/launcher_diagnostics.py Windows/security_trust.py Windows/self_tests.py Windows/release_smoke.py Windows/run_self_tests.py
 
       - name: Pytest
         run: python -m pytest Windows/tests

@@ -2494,16 +2494,16 @@ class _Api:
     def check_for_updates(self):
         try:
             from updater import check_for_update, prompt_for_update
-            has_update, version, download_url, changelog, release_url, expected_sha256 = check_for_update()
-            if has_update:
-                result = {"has_update": True, "version": version, "changelog": changelog, "release_url": release_url, "sha256_available": bool(expected_sha256)}
-                if download_url:
-                    installer_path = prompt_for_update(version, download_url, changelog, release_url, expected_sha256)
-                    result["install_started"] = bool(installer_path)
+            update = check_for_update()
+            if update.available:
+                result = {"has_update": True, "version": update.version, "changelog": update.changelog, "release_url": update.release_url, "sha256_available": bool(update.expected_sha256)}
+                if update.installer_url:
+                    downloaded = prompt_for_update(update)
+                    result["install_started"] = bool(downloaded)
                 else:
-                    result["error"] = "No installer asset found for this release."
+                    result["error"] = "No trusted installer asset found for this release."
                 return result
-            return {"has_update": False}
+            return {"has_update": False, "error": update.error}
         except Exception as e:
             return {"has_update": False, "error": f"Could not check: {e}"}
 

@@ -10,6 +10,8 @@ import tempfile
 import winreg
 from ctypes import wintypes
 
+from credential_store import WindowsCredentialStore
+
 APP_NAME = "AmazonMusicRPC"
 DEFAULT_CLIENT_ID = "1479925587697995857"
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", ""), APP_NAME)
@@ -72,6 +74,9 @@ DEFAULTS = {
     "settings_window_height": 800,
     "diagnostics_window_width": 940,
     "diagnostics_window_height": 700,
+    "automatic_update_checks": True,
+    "deezer_lookup_enabled": True,
+    "itunes_lookup_enabled": True,
 }
 
 
@@ -105,6 +110,10 @@ def _read_saved_config():
 
 def _secret_path():
     return os.path.join(os.path.dirname(CONFIG_PATH), "secrets.dpapi.json")
+
+
+def _credential_store():
+    return WindowsCredentialStore(APP_NAME, CONFIG_PATH)
 
 
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -211,25 +220,82 @@ def _atomic_write_json(path, payload):
 
 def _read_secret_config():
     path = _secret_path()
-    if not os.path.exists(path):
-        return {}
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    if not isinstance(data, dict):
-        return {}
-    return unprotect_sensitive_config(data)
+    fallback = {}
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            fallback = unprotect_sensitive_config(data)
+    store = _credential_store()
+    secrets = dict(fallback)
+    if store.available:
+        for key in SENSITIVE_CONFIG_KEYS:
+            value = store.read(key)
+            if value:
+                secrets[key] = value
+    return secrets
 
 
 def _write_secret_config(secrets):
     secrets = {key: value for key, value in (secrets or {}).items() if key in SENSITIVE_CONFIG_KEYS and str(value or "")}
+    store = _credential_store()
+    fallback = {}
+    for key in SENSITIVE_CONFIG_KEYS:
+        value = str(secrets.get(key, "") or "")
+        if value:
+            if not store.write(key, value):
+                fallback[key] = value
+        else:
+            store.delete(key)
     path = _secret_path()
-    if secrets:
-        _atomic_write_json(path, protect_sensitive_config(secrets))
+    if fallback:
+        _atomic_write_json(path, protect_sensitive_config(fallback))
     else:
         try:
             os.remove(path)
         except FileNotFoundError:
             pass
+    verified = _read_secret_config()
+    for key, value in secrets.items():
+        if verified.get(key) != value:
+            raise OSError(f"Could not verify secure storage for {key}")
+
+
+def credential_storage_status():
+    store = _credential_store()
+    fallback = {}
+    path = _secret_path()
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                fallback = data
+        except (OSError, json.JSONDecodeError):
+            fallback = {}
+    credential_keys = []
+    if store.available:
+        credential_keys = [key for key in sorted(SENSITIVE_CONFIG_KEYS) if store.read(key)]
+    return {
+        "credential_manager_available": store.available,
+        "credential_manager_keys": credential_keys,
+        "dpapi_fallback_keys": sorted(key for key in fallback if key in SENSITIVE_CONFIG_KEYS),
+    }
+
+
+def clear_sensitive_credentials():
+    store = _credential_store()
+    removed = True
+    for key in SENSITIVE_CONFIG_KEYS:
+        if store.available and not store.delete(key):
+            removed = False
+    try:
+        os.remove(_secret_path())
+    except FileNotFoundError:
+        pass
+    except OSError:
+        removed = False
+    return removed
 
 
 def _public_config(config):
@@ -243,6 +309,8 @@ def _config_secret_values(config):
 def _load_public_and_secret_config():
     saved = _read_saved_config()
     secrets = _read_secret_config()
+    if os.path.exists(_secret_path()) and secrets:
+        _write_secret_config(secrets)
     moved = _config_secret_values(saved)
     if moved:
         for key, value in moved.items():

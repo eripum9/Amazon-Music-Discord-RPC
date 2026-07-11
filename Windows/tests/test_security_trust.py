@@ -1,7 +1,12 @@
 import security_trust
 
 
-def test_redaction_audit_detects_token_leaks_and_tracks_storage():
+def test_redaction_audit_detects_token_leaks_and_tracks_storage(monkeypatch):
+    monkeypatch.setattr(
+        security_trust,
+        "credential_storage_status",
+        lambda: {"credential_manager_available": True, "credential_manager_keys": ["listenbrainz_token"], "dpapi_fallback_keys": []},
+    )
     config = {
         "listenbrainz_token": "listenbrainz_secret_value",
         "lastfm_session_key": "lastfm_secret_value",
@@ -13,10 +18,10 @@ def test_redaction_audit_detects_token_leaks_and_tracks_storage():
     assert clean["ok"] is True
     assert leaked["ok"] is False
     assert leaked["leaks"] == [{"key": "listenbrainz_token", "location": "report"}]
-    assert review["storage"] == "local-secret-file-dpapi"
+    assert review["storage"] == "windows-credential-manager"
     assert review["redaction_required"] is True
     assert "listenbrainz_token" in review["present_keys"]
-    assert review["at_rest_protection"] == "DPAPI on Windows"
+    assert review["at_rest_protection"] == "Windows Credential Manager with DPAPI fallback"
 
 
 def test_release_notes_trust_check_requires_installer_changelog_and_compatibility():

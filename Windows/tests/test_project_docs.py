@@ -71,3 +71,15 @@ def test_official_release_workflow_keeps_trust_guards():
     assert "strip=False" in spec
     assert "cryptography==48.0.1" in lock
     assert "--hash=sha256:" in lock
+
+
+def test_windows_runtime_avoids_powershell_policy_bypass_and_packages_security_modules():
+    runtime_sources = [
+        (ROOT / "Windows/updater.py").read_text(encoding="utf-8"),
+        (ROOT / "Windows/amazon_devtools.py").read_text(encoding="utf-8"),
+        (ROOT / "Windows/windows_file_dialog.py").read_text(encoding="utf-8"),
+    ]
+    spec = (ROOT / "Windows/AmazonMusicRPC.spec").read_text(encoding="utf-8")
+    assert all("ExecutionPolicy" not in source and "Bypass" not in source for source in runtime_sources)
+    assert "'credential_store'" in spec
+    assert "'network_audit'" in spec

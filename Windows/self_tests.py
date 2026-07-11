@@ -103,6 +103,9 @@ def run_self_tests(log_dir, diagnostics_path):
             and DEFAULTS.get("setup_wizard_seen") is False
             and DEFAULTS.get("notification_enrichment_enabled") is False
             and DEFAULTS.get("amazon_music_link_region") == "com"
+            and DEFAULTS.get("automatic_update_checks") is True
+            and DEFAULTS.get("deezer_lookup_enabled") is True
+            and DEFAULTS.get("itunes_lookup_enabled") is True
             and normalize_amazon_music_link_region("de") == "de"
             and normalize_amazon_music_link_region(".com") == "com"
             and normalize_amazon_music_link_region("bad") == "com"
@@ -136,7 +139,7 @@ def run_self_tests(log_dir, diagnostics_path):
         clean = redaction_audit(secrets, {"report": {"token": "[redacted]"}})
         leaked = redaction_audit(secrets, {"report": secrets["listenbrainz_token"]})
         review = token_storage_review(secrets)
-        ok = clean.get("ok") is True and leaked.get("ok") is False and review.get("at_rest_protection") == "DPAPI on Windows"
+        ok = clean.get("ok") is True and leaked.get("ok") is False and review.get("at_rest_protection") == "Windows Credential Manager with DPAPI fallback"
         results.append(_result("Security trust audit", ok, "Token storage protection is reviewed and redaction leaks are detectable"))
     except Exception as e:
         results.append(_result("Security trust audit", False, str(e)))
@@ -145,14 +148,33 @@ def run_self_tests(log_dir, diagnostics_path):
         import config as config_module
         old_dir = config_module.CONFIG_DIR
         old_path = config_module.CONFIG_PATH
+        old_store_factory = config_module._credential_store
+        class MemoryCredentialStore:
+            available = True
+
+            def __init__(self):
+                self.values = {}
+
+            def write(self, key, value):
+                self.values[key] = value
+                return True
+
+            def read(self, key):
+                return self.values.get(key, "")
+
+            def delete(self, key):
+                self.values.pop(key, None)
+                return True
+
+        memory_store = MemoryCredentialStore()
         with tempfile.TemporaryDirectory(prefix="amrpc_dpapi_guard_", dir=CONFIG_DIR) as temp_dir:
             config_module.CONFIG_DIR = temp_dir
             config_module.CONFIG_PATH = os.path.join(temp_dir, "config.json")
+            config_module._credential_store = lambda: memory_store
             config_module.save_config({**DEFAULTS, "listenbrainz_token": "plain-listenbrainz-token", "lastfm_session_key": "plain-lastfm-session"})
             with open(config_module.CONFIG_PATH, "r", encoding="utf-8") as f:
                 stored = f.read()
-            with open(os.path.join(temp_dir, "secrets.dpapi.json"), "r", encoding="utf-8") as f:
-                secret_stored = f.read()
+            fallback_exists = os.path.exists(os.path.join(temp_dir, "secrets.dpapi.json"))
             loaded = config_module.load_config_for_update()
             legacy_payload = {**DEFAULTS, "listenbrainz_token": "legacy-listenbrainz-token", "lastfm_session_key": "legacy-lastfm-session"}
             with open(config_module.CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -162,14 +184,15 @@ def run_self_tests(log_dir, diagnostics_path):
                 migrated_stored = json.load(f)
         config_module.CONFIG_DIR = old_dir
         config_module.CONFIG_PATH = old_path
+        config_module._credential_store = old_store_factory
         ok = (
             "plain-listenbrainz-token" not in stored
             and "plain-lastfm-session" not in stored
             and "listenbrainz_token" not in json.loads(stored)
             and "lastfm_session_key" not in json.loads(stored)
-            and "plain-listenbrainz-token" not in secret_stored
-            and "plain-lastfm-session" not in secret_stored
-            and "dpapi:" in secret_stored
+            and not fallback_exists
+            and memory_store.values.get("listenbrainz_token") == "legacy-listenbrainz-token"
+            and memory_store.values.get("lastfm_session_key") == "legacy-lastfm-session"
             and loaded.get("listenbrainz_token") == "plain-listenbrainz-token"
             and loaded.get("lastfm_session_key") == "plain-lastfm-session"
             and migrated.get("listenbrainz_token") == "legacy-listenbrainz-token"
@@ -177,11 +200,12 @@ def run_self_tests(log_dir, diagnostics_path):
             and "listenbrainz_token" not in migrated_stored
             and "lastfm_session_key" not in migrated_stored
         )
-        results.append(_result("Sensitive config at rest", ok, "Sensitive config values migrate out of config into DPAPI-wrapped secret storage"))
+        results.append(_result("Sensitive config at rest", ok, "Sensitive config values migrate into Windows Credential Manager with verified fallback"))
     except Exception as e:
         try:
             config_module.CONFIG_DIR = old_dir
             config_module.CONFIG_PATH = old_path
+            config_module._credential_store = old_store_factory
         except Exception:
             pass
         results.append(_result("Sensitive config at rest", False, str(e)))
@@ -250,8 +274,8 @@ def run_self_tests(log_dir, diagnostics_path):
             missing_rejected = True
         assets = {
             "assets": [
-                {"name": "AmazonMusicRPC_Setup.exe"},
-                {"name": "AmazonMusicRPC_Setup.exe.sha256", "browser_download_url": "https://example.invalid/hash"},
+                {"name": "AmazonMusicRPC_Setup.exe", "size": 1024, "browser_download_url": "https://github.com/eripum9/Amazon-Music-Discord-RPC/releases/download/v5.0.0/AmazonMusicRPC_Setup.exe"},
+                {"name": "AmazonMusicRPC_Setup.exe.sha256", "size": 96, "browser_download_url": "https://github.com/eripum9/Amazon-Music-Discord-RPC/releases/download/v5.0.0/AmazonMusicRPC_Setup.exe.sha256"},
             ]
         }
         checksum_asset = _checksum_asset(assets, assets["assets"][0])
@@ -271,7 +295,7 @@ def run_self_tests(log_dir, diagnostics_path):
 
     try:
         import inspect
-        from updater import _clean_launch_env, _ps_literal, prompt_for_update, launch_installer, download_installer
+        from updater import _clean_launch_env, prompt_for_update, launch_installer, download_installer, run_update_helper
         prompt_source = inspect.getsource(prompt_for_update)
         launch_source = inspect.getsource(launch_installer)
         cleaned_env = _clean_launch_env({
@@ -282,18 +306,18 @@ def run_self_tests(log_dir, diagnostics_path):
             "SAFE_KEY": "value",
         })
         ok = (
-            _ps_literal("a'b") == "'a''b'"
-            and "defer_until_exit" in prompt_source
+            "defer_until_exit" in prompt_source
             and "launch_installer" in prompt_source
-            and "Get-Process -Id $pidToWait" in launch_source
-            and "Get-FileHash -LiteralPath $installer -Algorithm SHA256" in launch_source
-            and "Start-Process -FilePath $installer" in launch_source
+            and "_helper_command" in launch_source
+            and "DownloadedInstaller" in launch_source
             and "env=launch_env" in launch_source
             and "tempfile.mkdtemp" in inspect.getsource(download_installer)
+            and "MAX_INSTALLER_BYTES" in inspect.getsource(download_installer)
             and "automatic download is disabled" in prompt_source
+            and run_update_helper(["app", "--other"]) is None
             and cleaned_env == {"SAFE_KEY": "value"}
         )
-        results.append(_result("Updater installer handoff", ok, "Auto-updates use unique temp paths, deferred hash verification, and clean PyInstaller environment"))
+        results.append(_result("Updater installer handoff", ok, "Auto-updates use a native deferred helper, strict size limits, and clean PyInstaller environment"))
     except Exception as e:
         results.append(_result("Updater installer handoff", False, str(e)))
 
@@ -307,6 +331,7 @@ def run_self_tests(log_dir, diagnostics_path):
             and "BeforeInstall: KillRunningApp" in installer_script
             and '/F /T /IM "{#MyAppExeName}"' in installer_script
             and 'WorkingDir: "{app}"' in installer_script
+            and '--remove-credentials' in installer_script
         )
         results.append(_result("Installer running-app guard", ok, "Installer stops the running app before replacing files and launches from the install directory"))
     except Exception as e:
