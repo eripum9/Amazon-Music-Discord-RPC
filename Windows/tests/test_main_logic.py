@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-import main
+import desktop_runtime as main
 
 
 def test_game_mode_process_matching_and_wrong_song_suppression():
@@ -16,7 +16,7 @@ def test_game_mode_process_matching_and_wrong_song_suppression():
 
 def test_playback_time_resyncs_on_resume_and_seek():
     main._track_timing_cache.clear()
-    with patch("main.time.time", return_value=1000):
+    with patch("desktop_runtime.time.time", return_value=1000):
         resumed_ts, resumed_paused, refreshed = main._playing_start_ts(
             {"position": 104},
             "Song|Artist",

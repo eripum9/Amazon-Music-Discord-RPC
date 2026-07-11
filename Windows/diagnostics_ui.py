@@ -58,9 +58,10 @@ def _read_state():
 
 def _log_files():
     files = []
-    candidates = [("console.log", LOG_PATH)]
+    candidates = [("console.log", LOG_PATH), ("events.jsonl", os.path.join(CONFIG_DIR, "events.jsonl"))]
     for index in range(1, 6):
         candidates.append((f"console.{index}.log", os.path.join(CONFIG_DIR, f"console.{index}.log")))
+        candidates.append((f"events.{index}.jsonl", os.path.join(CONFIG_DIR, f"events.{index}.jsonl")))
     for label, path in candidates:
         if os.path.exists(path):
             try:

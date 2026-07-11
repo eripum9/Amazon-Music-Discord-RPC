@@ -71,16 +71,19 @@ def run_self_tests(log_dir, diagnostics_path):
         else:
             settings_ui.sys.frozen = old_frozen
         here = os.path.dirname(os.path.abspath(__file__))
-        with open(os.path.join(here, "main.py"), "r", encoding="utf-8") as f:
+        with open(os.path.join(here, "desktop_runtime.py"), "r", encoding="utf-8") as f:
             main_source = f.read()
+        with open(os.path.join(here, "window_controller.py"), "r", encoding="utf-8") as f:
+            window_source = f.read()
         with open(os.path.join(here, "settings_ui.py"), "r", encoding="utf-8") as f:
             settings_source = f.read()
         ok = (
             env.get("PYINSTALLER_RESET_ENVIRONMENT") == "1"
-            and "_frozen_child_env(devtools_environment())" in main_source
+            and "_frozen_child_env(devtools_environment() if include_devtools else None)" in main_source
             and "subprocess.run(cmd, timeout=60, env=env)" in main_source
             and "subprocess.run(cmd, timeout=120, env=env)" in main_source
-            and "Popen([sys.executable, '--diagnostics'], creationflags=0x08000000, env=env)" in main_source
+            and "WindowController" in main_source
+            and "--diagnostics" in window_source
             and "subprocess.Popen(cmd, creationflags=0x08000000, env=_frozen_child_env())" in settings_source
         )
         results.append(_result("Frozen subprocess isolation", ok, "Packaged self-launched windows reset the PyInstaller extraction environment"))
@@ -94,6 +97,32 @@ def run_self_tests(log_dir, diagnostics_path):
         except Exception:
             pass
         results.append(_result("Frozen subprocess isolation", False, str(e)))
+
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "main.py"), "r", encoding="utf-8") as f:
+            entry_source = f.read()
+        with open(os.path.join(here, "desktop_runtime.py"), "r", encoding="utf-8") as f:
+            runtime_source = f.read()
+        required_modules = [
+            "app_models.py",
+            "runtime_state.py",
+            "task_supervisor.py",
+            "structured_logging.py",
+            "window_controller.py",
+            "rpc_controller.py",
+            "command_controller.py",
+        ]
+        ok = (
+            len(entry_source.splitlines()) < 40
+            and all(os.path.exists(os.path.join(here, name)) for name in required_modules)
+            and "TaskSupervisor" in runtime_source
+            and "StructuredLogTee" in runtime_source
+            and "threading.Thread" not in runtime_source
+        )
+        results.append(_result("Runtime architecture", ok, "Typed state, controllers, structured logs, and supervised runtime workers are active"))
+    except Exception as e:
+        results.append(_result("Runtime architecture", False, str(e)))
 
     try:
         ok = (
@@ -331,7 +360,7 @@ def run_self_tests(log_dir, diagnostics_path):
             and "BeforeInstall: KillRunningApp" in installer_script
             and '/F /T /IM "{#MyAppExeName}"' in installer_script
             and 'WorkingDir: "{app}"' in installer_script
-            and '--remove-credentials' in installer_script
+            and '--uninstall-cleanup' in installer_script
         )
         results.append(_result("Installer running-app guard", ok, "Installer stops the running app before replacing files and launches from the install directory"))
     except Exception as e:
@@ -393,7 +422,7 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Discord presence payload", False, str(e)))
 
     try:
-        import main
+        import desktop_runtime as main
         configured = main._configured_game_mode_processes({"game_mode_processes": "Game.exe, C:\\Tools\\OtherGame.exe\nNoExt"})
         ok = (
             configured == {"game.exe", "othergame.exe", "noext"}
@@ -410,7 +439,7 @@ def run_self_tests(log_dir, diagnostics_path):
 
     try:
         import inspect
-        import main
+        import desktop_runtime as main
         old_running = main.rpc_running
         old_config = dict(main.current_config) if isinstance(main.current_config, dict) else {}
         main.rpc_running = True
@@ -580,15 +609,22 @@ def run_self_tests(log_dir, diagnostics_path):
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
         commands = []
-        bridge = AmazifyRpcBridge(lambda: {"snapshot": {"rpc": "On", "title": "Rusty"}}, lambda command: commands.append(command), port=port)
+        bridge = AmazifyRpcBridge(lambda: {"snapshot": {"rpc": "On", "title": "Rusty"}}, lambda command: commands.append(command), port=port, token="b" * 64)
         started = bridge.start()
         try:
-            health = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2).read().decode("utf-8"))
-            state = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/state", timeout=2).read().decode("utf-8"))
+            def bridge_request(path, data=None):
+                return urllib.request.Request(
+                    f"http://127.0.0.1:{port}{path}",
+                    data=data,
+                    headers={"X-Amazon-Music-RPC-Token": bridge.token, "Content-Type": "application/json"},
+                    method="POST" if data is not None else "GET",
+                )
+            health = json.loads(urllib.request.urlopen(bridge_request("/health"), timeout=2).read().decode("utf-8"))
+            state = json.loads(urllib.request.urlopen(bridge_request("/state"), timeout=2).read().decode("utf-8"))
             request = urllib.request.Request(
                 f"http://127.0.0.1:{port}/command",
                 data=json.dumps({"command": "private"}).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", "X-Amazon-Music-RPC-Token": bridge.token},
                 method="POST",
             )
             command_result = json.loads(urllib.request.urlopen(request, timeout=2).read().decode("utf-8"))
@@ -601,6 +637,7 @@ def run_self_tests(log_dir, diagnostics_path):
             and command_result.get("command") == "private"
             and commands == ["private"]
             and "quit" not in ALLOWED_COMMANDS
+            and len(bridge.token) == 64
         )
         results.append(_result("Amazify RPC bridge", ok, "Fixed bridge health, state, and command routing are stable"))
     except Exception as e:
@@ -610,7 +647,7 @@ def run_self_tests(log_dir, diagnostics_path):
         import inspect
         import amazify_compat
         import amazify_rpc_bridge
-        import main
+        import desktop_runtime as main
         spec_path = os.path.join(os.path.dirname(__file__), "AmazonMusicRPC.spec")
         with open(spec_path, "r", encoding="utf-8") as f:
             spec = f.read()
@@ -634,6 +671,8 @@ def run_self_tests(log_dir, diagnostics_path):
             and "'amazify_compat'" in spec
             and "'amazify_rpc_bridge'" in spec
             and "AmazifyNativeCommand" not in inspect.getsource(amazify_compat)
+            and 'Access-Control-Allow-Origin", "*"' not in inspect.getsource(amazify_rpc_bridge)
+            and "X-Amazon-Music-RPC-Token" in inspect.getsource(amazify_compat)
         )
         results.append(_result("Amazify compatibility source", ok, "RPC uses a narrow fixed bridge, packaged plugin, and active Amazify metadata handoff"))
     except Exception as e:
@@ -668,7 +707,7 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Custom album art", False, str(e)))
 
     try:
-        import main
+        import desktop_runtime as main
         main._resolved_cache["raw title|raw artist"] = ("Fixed Title", "Fixed Artist")
         title, artist, applied = main._apply_resolved_cache("raw title|raw artist", "raw title", "raw artist")
         main._resolved_cache.pop("raw title|raw artist", None)
@@ -678,10 +717,10 @@ def run_self_tests(log_dir, diagnostics_path):
         results.append(_result("Track correction cache", False, str(e)))
 
     try:
-        import main
+        import desktop_runtime as main
         from unittest.mock import patch
         main._track_timing_cache.clear()
-        with patch("main.time.time", return_value=1000):
+        with patch("desktop_runtime.time.time", return_value=1000):
             resumed_ts, resumed_paused, refreshed = main._playing_start_ts(
                 {"position": 104},
                 "Song|Artist",
@@ -979,7 +1018,7 @@ def run_self_tests(log_dir, diagnostics_path):
 
     try:
         import inspect
-        import main
+        import desktop_runtime as main
         unavailable = {"enabled": True, "status": "unavailable", "detail": "DevTools unavailable"}
         error = {"enabled": True, "status": "error", "detail": "Socket failed"}
         launching = {"enabled": True, "status": "launching", "detail": "Starting Amazon Music"}

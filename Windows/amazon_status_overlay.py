@@ -2,11 +2,9 @@
 
 import base64
 import json
-import os
 import threading
-import time
 
-from amazon_devtools import _CdpSocket, _page_target
+from amazon_devtools import _CdpSocket, _page_target, get_devtools_port
 
 
 OVERLAY_VERSION = "2026.06.03.1"
@@ -98,7 +96,7 @@ class AmazonStatusOverlay:
             if self._inject_thread and self._inject_thread.is_alive():
                 return
             self._stop_event.clear()
-            self._inject_thread = threading.Thread(target=self._run, daemon=True)
+            self._inject_thread = threading.Thread(target=self._run, name="amazon-status-overlay", daemon=False)
             self._inject_thread.start()
 
     def stop(self):
@@ -110,6 +108,9 @@ class AmazonStatusOverlay:
         except Exception:
             pass
         self._client = None
+        if self._inject_thread and self._inject_thread is not threading.current_thread():
+            self._inject_thread.join(timeout=5)
+        self._inject_thread = None
 
     def status(self):
         return {
@@ -137,22 +138,27 @@ class AmazonStatusOverlay:
                 target = _page_target()
                 if not target:
                     self._close_client()
-                    time.sleep(2)
+                    self._stop_event.wait(2)
                     continue
                 target_id = target.get("id") or target.get("webSocketDebuggerUrl")
                 if not self._client or target_id != last_target:
                     self._close_client()
-                    self._client = _CdpSocket(target["webSocketDebuggerUrl"], timeout=5)
+                    self._client = _CdpSocket(
+                        target["webSocketDebuggerUrl"],
+                        timeout=5,
+                        expected_port=get_devtools_port(False),
+                        expected_target_id=target.get("id", ""),
+                    )
                     last_target = target_id
                 if not self._ui_present(self._client):
                     self._inject(self._client)
                 self._consume_action(self._client)
                 self._push_payload(self._client)
-                time.sleep(1)
+                self._stop_event.wait(1)
             except Exception as e:
                 self._last_error = str(e)
                 self._close_client()
-                time.sleep(3)
+                self._stop_event.wait(3)
 
     def _close_client(self):
         if self._client:

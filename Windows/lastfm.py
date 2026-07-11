@@ -4,6 +4,8 @@ import pylast
 import traceback
 import threading
 
+from task_supervisor import TaskSupervisor
+
 
 class LastFMScrobbler:
     def __init__(self, api_key, api_secret, session_key):
@@ -14,6 +16,7 @@ class LastFMScrobbler:
         )
         self._pending = []
         self._lock = threading.Lock()
+        self._tasks = TaskSupervisor()
 
     def update_now_playing(self, title, artist, album=None, duration=None):
         self._run_async("now playing", self._update_now_playing_sync, title, artist, album, duration, drop_if_busy=True)
@@ -84,7 +87,11 @@ class LastFMScrobbler:
             finally:
                 self._lock.release()
 
-        threading.Thread(target=runner, daemon=True).start()
+        self._tasks.start_unique(f"lastfm-{label}", runner)
+
+    def close(self):
+        self._tasks.request_stop()
+        self._tasks.join(timeout=3)
 
 
 def get_auth_url(api_key, api_secret):

@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,7 @@ AMAZIFY_RPC_BRIDGE_PORT = 14797
 AMAZIFY_DEVTOOLS_STATE = "devtools_state.json"
 AMAZIFY_PLUGIN_STATE = "plugins_state.json"
 AMAZIFY_LOG_PORT_RE = re.compile(r"(?:DevTools port|with DevTools port)\D+(\d{2,5})", re.IGNORECASE)
+AMAZIFY_BRIDGE_TOKEN = "rpc_bridge.token"
 
 
 def _appdata_base():
@@ -30,6 +32,23 @@ def amazify_root():
 
 def amazify_plugin_root():
     return amazify_root() / "plugins"
+
+
+def amazify_bridge_token():
+    path = amazify_root() / AMAZIFY_BRIDGE_TOKEN
+    if path.exists():
+        try:
+            value = path.read_text(encoding="ascii").strip().lower()
+        except OSError:
+            value = ""
+        if re.fullmatch(r"[a-f0-9]{64}", value):
+            return value
+    value = secrets.token_hex(32)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(value, encoding="ascii")
+    temporary.replace(path)
+    return value
 
 
 def _local_install_path():
@@ -213,9 +232,11 @@ def _rpc_icon_path():
     return path if path.exists() else None
 
 
-def _plugin_js():
+def _plugin_js(token=None):
+    token = str(token or amazify_bridge_token())
     return f"""
 const RPC_PORT = {AMAZIFY_RPC_BRIDGE_PORT};
+const RPC_TOKEN = {json.dumps(token)};
 const ROOT_ID = "amrpc-amazify-panel";
 const iconSrc = source && typeof source.assetUrl === "function"
   ? source.assetUrl("icon")
@@ -252,9 +273,11 @@ function esc(value) {{
 }}
 
 async function rpcFetch(path, options) {{
+  const supplied = options || {{}};
   const response = await fetch(`http://127.0.0.1:${{RPC_PORT}}${{path}}`, {{
     cache: "no-store",
-    ...(options || {{}})
+    ...supplied,
+    headers: {{ "X-Amazon-Music-RPC-Token": RPC_TOKEN, ...(supplied.headers || {{}}) }}
   }});
   if (!response.ok) throw new Error(`RPC bridge ${{response.status}}`);
   return await response.json();
@@ -638,7 +661,11 @@ def push_rpc_state_to_amazify(port, payload):
         target = _page_target(port=port)
         if not target:
             return False
-        client = _CdpSocket(target["webSocketDebuggerUrl"])
+        client = _CdpSocket(
+            target["webSocketDebuggerUrl"],
+            expected_port=port,
+            expected_target_id=target.get("id", ""),
+        )
         try:
             expression = (
                 "(()=>{const bridge=window.__amrpcAmazifyBridge;"
@@ -707,6 +734,29 @@ def install_rpc_plugin(version, enable=True):
         "plugin_enabled": plugin_enabled(),
         "plugin_dir": str(root),
     }
+
+
+def remove_rpc_plugin():
+    removed = True
+    root = _plugin_dir()
+    try:
+        if root.exists():
+            shutil.rmtree(root)
+    except OSError:
+        removed = False
+    state_path = amazify_root() / AMAZIFY_PLUGIN_STATE
+    if state_path.exists():
+        try:
+            state = _read_plugin_state()
+            state.setdefault("enabled", {}).pop(AMAZIFY_PLUGIN_ID, None)
+            _write_json_atomic(state_path, state)
+        except OSError:
+            removed = False
+    try:
+        (amazify_root() / AMAZIFY_BRIDGE_TOKEN).unlink(missing_ok=True)
+    except OSError:
+        removed = False
+    return removed
 
 
 def amazify_compat_state(version=None):

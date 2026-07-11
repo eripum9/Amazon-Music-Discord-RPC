@@ -21,5 +21,6 @@ network-history.json
 
 *.manifest
 *.log
+events*.jsonl
 
 PLAN.md
