@@ -7,6 +7,7 @@ Official Windows releases are built by `.github/workflows/release-draft.yml`. Th
 - Local builds are development artifacts only.
 - The workflow verifies that its checkout still matches `origin/master` before and after the build.
 - Python dependencies are installed from `Windows/requirements-release.lock` with required hashes.
+- Official builds use Python 3.12.13 so the published WinSDK wheel is used instead of compiling WinSDK from source.
 - GitHub Actions are pinned to full commit SHAs.
 - UPX compression and binary stripping are disabled.
 - Optional Authenticode signing runs only when both signing secrets are configured.

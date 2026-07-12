@@ -45,6 +45,8 @@ Run from source:
 python Windows\main.py
 ```
 
+Python 3.12.13 is the official CI and release baseline. A root `.venv` can be created with `uv venv --python 3.12.13 --seed .venv`; it is ignored by Git.
+
 Run checks:
 
 ```powershell

@@ -18,6 +18,7 @@ network-history.json
 
 .vscode/
 .idea/
+.venv/
 
 *.manifest
 *.log

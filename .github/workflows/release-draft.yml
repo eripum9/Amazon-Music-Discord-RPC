@@ -48,7 +48,7 @@ jobs:
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: "3.14.4"
+          python-version: "3.12.13"
           cache: pip
           cache-dependency-path: Windows/requirements-release.lock
 
@@ -79,7 +79,7 @@ jobs:
         run: .github/scripts/test-release-notes.ps1
 
       - name: Install pinned dependencies
-        run: python -m pip install --require-hashes -r Windows/requirements-release.lock
+        run: python -m pip install --require-hashes --only-binary=winsdk -r Windows/requirements-release.lock
 
       - name: Install Inno Setup
         shell: pwsh

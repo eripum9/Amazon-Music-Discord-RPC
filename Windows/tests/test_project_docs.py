@@ -98,6 +98,16 @@ def test_official_release_workflow_keeps_trust_guards():
     assert "--hash=sha256:" in lock
 
 
+def test_windows_workflows_use_winsdk_wheel_runtime():
+    release = (ROOT / ".github/workflows/release-draft.yml").read_text(encoding="utf-8")
+    tests = (ROOT / ".github/workflows/windows-tests.yml").read_text(encoding="utf-8")
+    security = (ROOT / ".github/workflows/security.yml").read_text(encoding="utf-8")
+    for workflow in (release, tests, security):
+        assert 'python-version: "3.12.13"' in workflow
+    assert "--only-binary=winsdk" in release
+    assert "--only-binary=winsdk" in tests
+
+
 def test_windows_runtime_avoids_powershell_policy_bypass_and_packages_security_modules():
     runtime_sources = [
         (ROOT / "Windows/updater.py").read_text(encoding="utf-8"),
