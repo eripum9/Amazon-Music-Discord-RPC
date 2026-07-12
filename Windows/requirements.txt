@@ -1,9 +1,9 @@
 winsdk==1.0.0b10
-pypresence==4.6.1
+pypresence==4.6.2
 requests==2.34.2
-Pillow==12.2.0
+Pillow==12.3.0
 PySide6-Essentials==6.11.1
 pywebview==6.2.1
-pylast==7.0.2
+pylast==7.1.0
 liblistenbrainz==0.7.0
-cryptography==48.0.1
+cryptography==49.0.0
