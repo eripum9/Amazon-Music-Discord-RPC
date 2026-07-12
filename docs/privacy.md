@@ -27,9 +27,15 @@ To run without enhanced metadata, open Settings and turn off **Enhanced Amazon m
 
 ## Tokens
 
-Last.fm session keys and ListenBrainz tokens are stored locally in the app config today. Diagnostics and log views redact known token values, Settings exports omit tokens unless explicitly requested, and Settings includes a clear-token action.
+Last.fm session keys and ListenBrainz tokens are migrated out of the normal config and stored in Windows Credential Manager. The app verifies migration before deleting the old config value. If Credential Manager is unavailable, a DPAPI-protected local fallback is used.
 
-Treat `%APPDATA%\AmazonMusicRPC\config.json` as private.
+Diagnostics and log views redact known token values, Settings exports omit tokens unless explicitly requested, and Settings includes a clear-token action. Treat the entire `%APPDATA%\AmazonMusicRPC` directory as private because decrypted values must exist briefly in app memory while a service is used.
+
+## Network Controls
+
+Settings provides separate controls for automatic update checks, Deezer lookup, and iTunes artwork fallback. Disabling a lookup prevents that provider from receiving track search terms. Last.fm and ListenBrainz are contacted only when their scrobbling options are enabled.
+
+Diagnostics shows a bounded redacted history of recent outbound operations. It stores service, operation, result, and time, not the query text or authentication token. See [network-endpoints.md](network-endpoints.md) for the endpoint inventory.
 
 ## Private Session
 

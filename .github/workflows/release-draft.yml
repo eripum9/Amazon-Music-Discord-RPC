@@ -1,0 +1,285 @@
+name: Build Draft Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semantic version without the v prefix
+        required: true
+        type: string
+      summary:
+        description: One-sentence release summary
+        required: true
+        type: string
+      prerelease:
+        description: Mark the draft as a prerelease
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: draft-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build-draft:
+    runs-on: windows-2025
+    env:
+      GH_TOKEN: ${{ github.token }}
+      WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+      WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+    steps:
+      - name: Require master
+        shell: pwsh
+        run: |
+          if ('${{ github.ref }}' -ne 'refs/heads/master') {
+            throw 'Official draft releases can only be built from master.'
+          }
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.14.4"
+          cache: pip
+          cache-dependency-path: Windows/requirements-release.lock
+
+      - name: Validate source and version
+        id: source
+        shell: pwsh
+        run: |
+          $version = '${{ inputs.version }}'.Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw 'Version must use major.minor.patch without a v prefix.'
+          }
+          git fetch origin master --no-tags
+          $head = (git rev-parse HEAD).Trim()
+          $remote = (git rev-parse origin/master).Trim()
+          if ($head -ne $remote) {
+            throw "Selected commit $head is not current master $remote."
+          }
+          $configVersion = (Select-String -Path Windows/config.py -Pattern 'APP_VERSION\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          $installerVersion = (Select-String -Path Windows/installer.iss -Pattern '#define\s+MyAppVersion\s+"([^"]+)"').Matches[0].Groups[1].Value
+          if ($version -ne $configVersion -or $version -ne $installerVersion) {
+            throw "Input version $version does not match config $configVersion and installer $installerVersion."
+          }
+          "sha=$head" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Install pinned dependencies
+        run: python -m pip install --require-hashes -r Windows/requirements-release.lock
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          winget install --id JRSoftware.InnoSetup --version 6.7.3 --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+          $compilerPaths = @(
+            "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+            "${env:LOCALAPPDATA}\Programs\Inno Setup 6\ISCC.exe"
+          )
+          $compiler = $compilerPaths | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+          if (-not $compiler) {
+            throw 'Inno Setup 6.7.3 compiler was not found after installation.'
+          }
+          "INNO_COMPILER=$compiler" >> $env:GITHUB_ENV
+
+      - name: Compile
+        run: python -m py_compile Windows/main.py Windows/desktop_runtime.py Windows/app_models.py Windows/runtime_state.py Windows/task_supervisor.py Windows/structured_logging.py Windows/window_controller.py Windows/rpc_controller.py Windows/command_controller.py Windows/amazon_devtools.py Windows/media_reader.py Windows/discord_rpc.py Windows/config.py Windows/credential_store.py Windows/network_audit.py Windows/updater.py Windows/status_summary.py Windows/qt_tray_ui.py Windows/rpc_state.py Windows/metadata_pipeline.py Windows/launcher_diagnostics.py Windows/security_trust.py Windows/self_tests.py Windows/release_smoke.py Windows/run_self_tests.py
+
+      - name: Pytest
+        run: python -m pytest Windows/tests
+
+      - name: Built-in self-tests
+        run: python Windows/run_self_tests.py
+
+      - name: Ruff safety checks
+        run: python -m ruff check Windows --select E9,F63,F7,F82
+
+      - name: Typed controller checks
+        run: python -m pyright Windows/app_models.py Windows/runtime_state.py Windows/task_supervisor.py Windows/structured_logging.py Windows/window_controller.py Windows/rpc_controller.py Windows/command_controller.py Windows/main.py
+
+      - name: Dependency audit
+        run: python -m pip_audit -r Windows/requirements-release.lock --strict
+
+      - name: Build executable
+        run: python -m PyInstaller Windows/AmazonMusicRPC.spec --noconfirm --clean --workpath Windows/build --distpath Windows/dist
+
+      - name: Sign executable when configured
+        id: signing
+        shell: pwsh
+        run: |
+          $hasCertificate = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_PFX_BASE64)
+          $hasPassword = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_PFX_PASSWORD)
+          if ($hasCertificate -ne $hasPassword) {
+            throw 'Both Windows signing secrets must be configured together.'
+          }
+          if (-not $hasCertificate) {
+            'signed=false' >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'windows-signing.pfx'
+          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_SIGNING_PFX_BASE64))
+          $signTool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signTool) {
+            throw 'signtool.exe was not found.'
+          }
+          & $signTool.FullName sign /f $certificatePath /p $env:WINDOWS_SIGNING_PFX_PASSWORD /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com Windows/dist/AmazonMusicRPC.exe
+          & $signTool.FullName verify /pa /all Windows/dist/AmazonMusicRPC.exe
+          Remove-Item -LiteralPath $certificatePath -Force
+          "SIGN_TOOL=$($signTool.FullName)" >> $env:GITHUB_ENV
+          'signed=true' >> $env:GITHUB_OUTPUT
+
+      - name: Build installer
+        shell: pwsh
+        run: '& $env:INNO_COMPILER Windows/installer.iss'
+
+      - name: Sign installer when configured
+        if: steps.signing.outputs.signed == 'true'
+        shell: pwsh
+        run: |
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'windows-signing.pfx'
+          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_SIGNING_PFX_BASE64))
+          & $env:SIGN_TOOL sign /f $certificatePath /p $env:WINDOWS_SIGNING_PFX_PASSWORD /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com Windows/installer_output/AmazonMusicRPC_Setup.exe
+          & $env:SIGN_TOOL verify /pa /all Windows/installer_output/AmazonMusicRPC_Setup.exe
+          Remove-Item -LiteralPath $certificatePath -Force
+
+      - name: Generate checksum
+        shell: pwsh
+        run: |
+          $installer = 'Windows/installer_output/AmazonMusicRPC_Setup.exe'
+          $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath "$installer.sha256" -Value "$hash  AmazonMusicRPC_Setup.exe" -Encoding ascii
+
+      - name: Release smoke
+        run: python Windows/release_smoke.py --installer Windows/installer_output/AmazonMusicRPC_Setup.exe
+
+      - name: Packaged window smoke tests
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path 'Windows/dist/AmazonMusicRPC.exe').Path
+          foreach ($argument in @('--settings', '--diagnostics')) {
+            $process = Start-Process -FilePath $exe -ArgumentList $argument -PassThru
+            Start-Sleep -Seconds 7
+            if ($process.HasExited) {
+              throw "$argument exited early with code $($process.ExitCode)."
+            }
+            Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $exe } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          }
+
+      - name: Silent installer smoke test
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP 'AmazonMusicRPC-Installed'
+          $arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$installDir`" /MERGETASKS=`"!desktopicon,!startupentry`""
+          $installer = Start-Process -FilePath 'Windows/installer_output/AmazonMusicRPC_Setup.exe' -ArgumentList $arguments -Wait -PassThru
+          if ($installer.ExitCode -ne 0 -or -not (Test-Path (Join-Path $installDir 'AmazonMusicRPC.exe'))) {
+            throw "Silent installer smoke test failed with code $($installer.ExitCode)."
+          }
+          $uninstaller = Join-Path $installDir 'unins000.exe'
+          if (Test-Path $uninstaller) {
+            Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait
+          }
+
+      - name: Microsoft Defender scan
+        id: defender
+        shell: pwsh
+        run: |
+          $status = Get-MpComputerStatus -ErrorAction SilentlyContinue
+          if (-not $status -or -not $status.AntivirusEnabled) {
+            'result=unavailable' >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          Start-MpScan -ScanType CustomScan -ScanPath (Resolve-Path 'Windows/installer_output/AmazonMusicRPC_Setup.exe').Path
+          $threats = @(Get-MpThreatDetection -ErrorAction SilentlyContinue | Where-Object { $_.Resources -match 'AmazonMusicRPC_Setup.exe' })
+          if ($threats.Count -gt 0) {
+            throw 'Microsoft Defender reported the installer as a threat.'
+          }
+          'result=passed' >> $env:GITHUB_OUTPUT
+
+      - name: Generate SBOM and build evidence
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path Windows/release_evidence | Out-Null
+          cyclonedx-py environment --output-reproducible --output-format JSON --output-file Windows/release_evidence/sbom.cdx.json
+          $hash = (Get-FileHash Windows/installer_output/AmazonMusicRPC_Setup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $manifest = [ordered]@{
+            version = '${{ inputs.version }}'
+            commit = '${{ steps.source.outputs.sha }}'
+            runner = '${{ runner.name }}'
+            python = (python --version 2>&1).ToString()
+            installer_sha256 = $hash
+            signed = '${{ steps.signing.outputs.signed }}'
+            defender = '${{ steps.defender.outputs.result }}'
+          }
+          $manifest | ConvertTo-Json | Set-Content Windows/release_evidence/build-manifest.json -Encoding utf8NoBOM
+          @"
+          # Release Security Evidence
+
+          - Commit: `${{ steps.source.outputs.sha }}`
+          - Installer SHA256: `$hash`
+          - Code signed: `${{ steps.signing.outputs.signed }}`
+          - Microsoft Defender: `${{ steps.defender.outputs.result }}`
+          - Pytest, built-in self-tests, Ruff, dependency audit, packaged windows, and installer smoke tests passed in this workflow.
+          "@ | Set-Content Windows/release_evidence/security-report.md -Encoding utf8NoBOM
+
+      - name: Attest installer
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
+        with:
+          subject-path: Windows/installer_output/AmazonMusicRPC_Setup.exe
+
+      - name: Attest checksum
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
+        with:
+          subject-path: Windows/installer_output/AmazonMusicRPC_Setup.exe.sha256
+
+      - name: Upload workflow evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-evidence-v${{ inputs.version }}
+          path: Windows/release_evidence
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Recheck master
+        shell: pwsh
+        run: |
+          git fetch origin master --no-tags
+          $remote = (git rev-parse origin/master).Trim()
+          if ($remote -ne '${{ steps.source.outputs.sha }}') {
+            throw "Master advanced to $remote during the build. Run the workflow again."
+          }
+
+      - name: Generate draft notes
+        shell: pwsh
+        run: |
+          $generated = gh api --method POST "repos/${{ github.repository }}/releases/generate-notes" -f "tag_name=${{ steps.source.outputs.tag }}" -f "target_commitish=${{ steps.source.outputs.sha }}" --jq '.body'
+          & .github/scripts/new-release-notes.ps1 -Version '${{ inputs.version }}' -Summary '${{ inputs.summary }}' -GeneratedNotes $generated -OutputPath Windows/release_evidence/release-notes.md -Signed ($('${{ steps.signing.outputs.signed }}') -eq 'true')
+
+      - name: Create or update draft release
+        shell: pwsh
+        run: |
+          $tag = '${{ steps.source.outputs.tag }}'
+          $existingJson = gh api --paginate "repos/${{ github.repository }}/releases" --jq ".[] | select(.tag_name == `"$tag`")"
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not inspect existing releases.'
+          }
+          $existing = if ([string]::IsNullOrWhiteSpace($existingJson)) { $null } else { $existingJson | ConvertFrom-Json }
+          if ($existing -and -not $existing.draft) {
+            throw "Release $tag is already published."
+          }
+          $prereleaseArgument = "--prerelease=${{ inputs.prerelease }}"
+          if ($existing) {
+            gh release edit $tag --repo '${{ github.repository }}' --draft --title "Amazon Music RPC — $tag" --notes-file Windows/release_evidence/release-notes.md $prereleaseArgument
+            gh release upload $tag --repo '${{ github.repository }}' Windows/installer_output/AmazonMusicRPC_Setup.exe Windows/installer_output/AmazonMusicRPC_Setup.exe.sha256 --clobber
+          } else {
+            gh release create $tag --repo '${{ github.repository }}' --target '${{ steps.source.outputs.sha }}' --draft --title "Amazon Music RPC — $tag" --notes-file Windows/release_evidence/release-notes.md $prereleaseArgument Windows/installer_output/AmazonMusicRPC_Setup.exe Windows/installer_output/AmazonMusicRPC_Setup.exe.sha256
+          }

@@ -115,3 +115,21 @@ def test_devtools_port_and_powershell_hardening():
     assert os.path.isabs(powershell_path) or powershell_path.lower() == "powershell.exe"
     assert '["powershell"' not in aumid_source
     amazon_devtools.reset_devtools_port()
+
+
+def test_devtools_websocket_target_stays_on_selected_loopback_page():
+    target = {
+        "id": "page-123",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:52856/devtools/page/page-123",
+    }
+    assert amazon_devtools._valid_target_websocket(target, 52856)
+    assert not amazon_devtools._valid_target_websocket({**target, "webSocketDebuggerUrl": "ws://example.com:52856/devtools/page/page-123"}, 52856)
+    assert not amazon_devtools._valid_target_websocket({**target, "webSocketDebuggerUrl": "ws://127.0.0.1:52857/devtools/page/page-123"}, 52856)
+    assert not amazon_devtools._valid_target_websocket({**target, "webSocketDebuggerUrl": "ws://127.0.0.1:52856/devtools/page/other"}, 52856)
+
+
+def test_devtools_owner_rejects_confirmed_non_amazon_listener(monkeypatch):
+    monkeypatch.setattr(amazon_devtools, "_port_owner_entries", lambda port: [{"Pid": "44", "Name": "malware", "Path": r"C:\Temp\malware.exe"}])
+    result = amazon_devtools._devtools_owner_trust(52856, force=True)
+    assert result["trusted"] is False
+    assert result["status"] == "rejected"

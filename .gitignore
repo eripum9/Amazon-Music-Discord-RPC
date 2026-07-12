@@ -14,11 +14,13 @@ config.json
 secrets.dpapi.json
 diagnostics.json
 diagnostics.json.tmp
+network-history.json
 
 .vscode/
 .idea/
 
 *.manifest
 *.log
+events*.jsonl
 
 PLAN.md

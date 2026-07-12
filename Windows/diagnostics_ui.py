@@ -58,9 +58,10 @@ def _read_state():
 
 def _log_files():
     files = []
-    candidates = [("console.log", LOG_PATH)]
+    candidates = [("console.log", LOG_PATH), ("events.jsonl", os.path.join(CONFIG_DIR, "events.jsonl"))]
     for index in range(1, 6):
         candidates.append((f"console.{index}.log", os.path.join(CONFIG_DIR, f"console.{index}.log")))
+        candidates.append((f"events.{index}.jsonl", os.path.join(CONFIG_DIR, f"events.{index}.jsonl")))
     for label, path in candidates:
         if os.path.exists(path):
             try:
@@ -186,12 +187,16 @@ def _report_launcher_candidates(config):
 def _write_diagnostics_report(path, include_tests=True):
     config = load_config()
     state = _read_state()
+    from network_audit import network_summary
+    from security_trust import token_storage_review
     report = {
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "system": _report_system_info(),
         "source_summary": metadata_source_summary(state, config),
         "notification_access": _notification_access(),
         "launcher_candidates": _report_launcher_candidates(config),
+        "network": network_summary(),
+        "secret_storage": token_storage_review(config),
     }
     if include_tests:
         try:
@@ -326,6 +331,43 @@ def _build_cards(state, config, access):
     else:
         bad = any(s == "error" for s in enabled)
         cards.append({"label": "Scrobbling", "value": "Needs attention", "detail": f"Last.fm {_scrobble_label(lastfm)}, ListenBrainz {_scrobble_label(listenbrainz)}", "state": "bad" if bad else "warn"})
+
+    from network_audit import network_summary
+    from security_trust import token_storage_review
+    enabled_network = [
+        label
+        for key, label in (
+            ("automatic_update_checks", "Updates"),
+            ("deezer_lookup_enabled", "Deezer"),
+            ("itunes_lookup_enabled", "iTunes"),
+        )
+        if config.get(key, True)
+    ]
+    network = network_summary()
+    latest = network.get("latest") or {}
+    if latest:
+        detail = f"{latest.get('service', 'Network')} · {latest.get('operation', 'request')} · {latest.get('status', 'unknown')}"
+        network_state = "bad" if latest.get("status") == "error" else "good"
+    else:
+        detail = "No outbound request history yet"
+        network_state = "muted"
+    cards.append({"label": "Network", "value": f"{len(enabled_network)} enabled" if enabled_network else "Optional traffic off", "detail": detail, "state": network_state})
+
+    storage = token_storage_review(config)
+    fallback_keys = storage.get("dpapi_fallback_keys") or []
+    if storage.get("credential_manager_available") and not fallback_keys:
+        storage_value = "Credential Manager"
+        storage_detail = "Sensitive values are stored outside config.json"
+        storage_state = "good"
+    elif fallback_keys:
+        storage_value = "DPAPI fallback"
+        storage_detail = f"{len(fallback_keys)} value(s) retained in protected fallback storage"
+        storage_state = "warn"
+    else:
+        storage_value = "Unavailable"
+        storage_detail = "Windows secure credential storage is unavailable"
+        storage_state = "bad"
+    cards.append({"label": "Secret Storage", "value": storage_value, "detail": storage_detail, "state": storage_state})
 
     return cards
 
@@ -964,6 +1006,8 @@ class _Api:
         state = redact_data(_read_state(), config)
         access = _notification_access()
         track = state.get("track") or {}
+        from network_audit import network_summary
+        from security_trust import token_storage_review
         return {
             "cards": _build_cards(state, config, access),
             "track": track,
@@ -973,6 +1017,8 @@ class _Api:
             "config_path": CONFIG_PATH,
             "state_path": DIAGNOSTICS_PATH,
             "app_version": APP_VERSION,
+            "network": network_summary(),
+            "secret_storage": token_storage_review(config),
         }
 
     def get_log(self, label="console.log", offset=0):

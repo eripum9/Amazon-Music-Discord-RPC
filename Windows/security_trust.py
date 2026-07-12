@@ -2,7 +2,7 @@
 
 import json
 
-from config import SENSITIVE_CONFIG_KEYS
+from config import SENSITIVE_CONFIG_KEYS, credential_storage_status
 INSTALLER_NAME = "AmazonMusicRPC_Setup.exe"
 RELEASE_COMPATIBILITY_TERMS = (
     "compatibility",
@@ -39,12 +39,13 @@ def redaction_audit(config, payloads):
 
 
 def token_storage_review(config):
+    status = credential_storage_status()
     return {
-        "storage": "local-secret-file-dpapi",
+        "storage": "windows-credential-manager" if status["credential_manager_available"] else "local-secret-file-dpapi",
         "present_keys": [key for key, _ in sensitive_config_values(config)],
         "redaction_required": True,
-        "at_rest_protection": "DPAPI on Windows",
-        "future_hardening": ["Windows Credential Manager"],
+        "at_rest_protection": "Windows Credential Manager with DPAPI fallback",
+        **status,
     }
 
 

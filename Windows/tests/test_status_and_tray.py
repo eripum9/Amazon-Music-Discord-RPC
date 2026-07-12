@@ -1,4 +1,4 @@
-import main
+import desktop_runtime as main
 import qt_tray_ui
 from status_summary import metadata_source_summary
 

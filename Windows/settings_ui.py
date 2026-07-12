@@ -37,6 +37,9 @@ _REQUIRED_SETTINGS_KEYS = {
     "amazon_devtools_enabled",
     "amazon_devtools_auto_launch",
     "amazon_music_launcher_override",
+    "automatic_update_checks",
+    "deezer_lookup_enabled",
+    "itunes_lookup_enabled",
     "lastfm_enabled",
     "listenbrainz_enabled",
     "listenbrainz_token",
@@ -183,6 +186,9 @@ def _settings_config_from_payload(data, existing):
         "amazon_devtools_enabled": bool(data.get("amazon_devtools_enabled")),
         "amazon_devtools_auto_launch": bool(data.get("amazon_devtools_auto_launch", False)),
         "amazon_music_launcher_override": validate_launcher_override(data.get("amazon_music_launcher_override", "")),
+        "automatic_update_checks": bool(data.get("automatic_update_checks", True)),
+        "deezer_lookup_enabled": bool(data.get("deezer_lookup_enabled", True)),
+        "itunes_lookup_enabled": bool(data.get("itunes_lookup_enabled", True)),
         "lastfm_enabled": bool(data.get("lastfm_enabled")),
         "listenbrainz_enabled": bool(data.get("listenbrainz_enabled")),
         "listenbrainz_token": listenbrainz_token,
@@ -215,6 +221,9 @@ def _settings_payload():
         "amazon_devtools_enabled",
         "amazon_devtools_auto_launch",
         "amazon_music_launcher_override",
+        "automatic_update_checks",
+        "deezer_lookup_enabled",
+        "itunes_lookup_enabled",
         "lastfm_enabled",
         "lastfm_username",
         "listenbrainz_enabled",
@@ -1234,6 +1243,46 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </div>
 
 <div class="card">
+  <div class="card-title">Network &amp; Updates</div>
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Automatic update checks</span>
+      <div class="row-desc">Check GitHub for a newer release when the app starts</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="automaticUpdateChecks" aria-label="Automatic update checks">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <div class="separator"></div>
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">Deezer lookup</span>
+      <div class="row-desc">Find fallback artwork, duration, and optional Deezer links</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="deezerLookupEnabled" aria-label="Enable Deezer lookup">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <div class="separator"></div>
+  <div class="row">
+    <div class="row-labels">
+      <span class="row-label">iTunes artwork fallback</span>
+      <div class="row-desc">Try iTunes artwork only when the preferred lookup has no cover</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="itunesLookupEnabled" aria-label="Enable iTunes artwork fallback">
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <div class="row-desc" style="padding-top:10px;">Lookup requests contain track and artist search text. Recent request status is available in Diagnostics.</div>
+</div>
+
+<div class="card">
   <div class="card-title">Discord Client ID</div>
   <div class="row">
     <div class="row-labels"><span class="row-label">Mode</span></div>
@@ -1386,6 +1435,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       amazon_devtools_enabled: document.getElementById('amazonDevtoolsEnabled').checked,
       amazon_devtools_auto_launch: document.getElementById('amazonDevtoolsAutoLaunch').checked,
       amazon_music_launcher_override: document.getElementById('amazonLauncherOverride').value.trim(),
+      automatic_update_checks: document.getElementById('automaticUpdateChecks').checked,
+      deezer_lookup_enabled: document.getElementById('deezerLookupEnabled').checked,
+      itunes_lookup_enabled: document.getElementById('itunesLookupEnabled').checked,
       lastfm_enabled: document.getElementById('lastfmEnabled').checked,
       listenbrainz_enabled: document.getElementById('lbEnabled').checked,
       listenbrainz_token: document.getElementById('lbToken').value.trim()
@@ -1565,7 +1617,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       {
         eyebrow: 'Step 6 of 8',
         title: 'Scrobbling',
-        copy: 'Last.fm and ListenBrainz are optional. Tokens are stored on this device and protected by Windows DPAPI when available.',
+        copy: 'Last.fm and ListenBrainz are optional. Tokens are stored in Windows Credential Manager, with a DPAPI-protected fallback if needed.',
         kind: 'scrobbling'
       },
       {
@@ -1674,8 +1726,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           ${wizardToggleButton('startMinimized', 'Start minimized', 'Recommended for tray use')}
         </div>
         <div class="wizard-choice">
+          ${wizardToggleButton('automaticUpdateChecks', 'Automatic update checks', 'Check GitHub at startup')}
           ${wizardToggleButton('notifEnrichEnabled', 'Notifications fallback', 'Use Amazon Music notifications')}
-          ${wizardToggleButton('gameModeEnabled', 'Game Mode', 'Suppress wrong-song picker')}
         </div>
       </div>`;
     }
@@ -2124,6 +2176,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     document.getElementById('amazonDevtoolsEnabled').checked = firstWizardRun ? true : !!cfg.amazon_devtools_enabled;
     document.getElementById('amazonDevtoolsAutoLaunch').checked = firstWizardRun ? true : !!cfg.amazon_devtools_auto_launch;
     document.getElementById('amazonLauncherOverride').value = cfg.amazon_music_launcher_override || '';
+    document.getElementById('automaticUpdateChecks').checked = cfg.automatic_update_checks !== false;
+    document.getElementById('deezerLookupEnabled').checked = cfg.deezer_lookup_enabled !== false;
+    document.getElementById('itunesLookupEnabled').checked = cfg.itunes_lookup_enabled !== false;
     amazonLauncherInstalled = !!cfg.amazon_devtools_launcher_installed;
     renderAmazonLauncherButton();
     if (cfg.notification_enrichment_enabled) {
@@ -2494,16 +2549,16 @@ class _Api:
     def check_for_updates(self):
         try:
             from updater import check_for_update, prompt_for_update
-            has_update, version, download_url, changelog, release_url, expected_sha256 = check_for_update()
-            if has_update:
-                result = {"has_update": True, "version": version, "changelog": changelog, "release_url": release_url, "sha256_available": bool(expected_sha256)}
-                if download_url:
-                    installer_path = prompt_for_update(version, download_url, changelog, release_url, expected_sha256)
-                    result["install_started"] = bool(installer_path)
+            update = check_for_update()
+            if update.available:
+                result = {"has_update": True, "version": update.version, "changelog": update.changelog, "release_url": update.release_url, "sha256_available": bool(update.expected_sha256)}
+                if update.installer_url:
+                    downloaded = prompt_for_update(update)
+                    result["install_started"] = bool(downloaded)
                 else:
-                    result["error"] = "No installer asset found for this release."
+                    result["error"] = "No trusted installer asset found for this release."
                 return result
-            return {"has_update": False}
+            return {"has_update": False, "error": update.error}
         except Exception as e:
             return {"has_update": False, "error": f"Could not check: {e}"}
 

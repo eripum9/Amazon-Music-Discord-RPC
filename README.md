@@ -43,6 +43,8 @@ Show your Amazon Music songs, album art, pause state, and live timer on Discord.
 - **Modern settings UI** — dark theme with WebView2 (Edge), Windows 11 style, with saved window sizing
 - **Start on Windows startup** — optional, launches minimized to tray
 - **Custom Discord Application ID** — use your own if you want custom assets
+- **Network controls** — independently control automatic update checks, Deezer lookup, and iTunes artwork fallback
+- **Request transparency** — review recent redacted outbound request status in Diagnostics
 
 ## How It Works
 
@@ -64,7 +66,9 @@ Notification enrichment is off by default. If enabled, Windows may ask for notif
 
 Private session mode clears Discord presence and can stop scrobbling while it is enabled. Keyword privacy rules can also block specific tracks from being shared.
 
-Settings are stored in `%APPDATA%\AmazonMusicRPC\config.json` for installed builds, or the `Windows/` directory when running from source. Last.fm and ListenBrainz tokens are stored locally in that config today. Diagnostics and log views redact known token values, and Settings includes a clear-token action, but you should still treat config files as private.
+Settings are stored in `%APPDATA%\AmazonMusicRPC\config.json` for installed builds, or the `Windows/` directory when running from source. Last.fm and ListenBrainz tokens are stored in Windows Credential Manager. If Credential Manager is unavailable, the app keeps a DPAPI-protected fallback file and verifies it before removing any previous copy. Diagnostics and log views redact known token values, and Settings includes a clear-token action.
+
+Optional outbound services are individually configurable under **Network & Updates**. Automatic update checks contact GitHub, Deezer lookups can receive track and artist search text, and iTunes can receive the same search text when used as an artwork fallback. Diagnostics records a bounded, redacted history containing the service, operation, result, and time, but not the search query or token value. See [docs/network-endpoints.md](docs/network-endpoints.md) for the complete endpoint inventory.
 
 ### Data Flow
 
@@ -95,6 +99,8 @@ The installer removes the app startup entry, installed files, app config directo
 
 For vulnerability reporting and supported version details, see [SECURITY.md](SECURITY.md).
 
+For implementation boundaries and maintainability details, see [docs/architecture.md](docs/architecture.md) and [docs/threat-model.md](docs/threat-model.md).
+
 ## Installation
 
 ### Installer (recommended)
@@ -118,7 +124,7 @@ Get-FileHash .\AmazonMusicRPC_Setup.exe -Algorithm SHA256
 
 Compare the output with the value in `AmazonMusicRPC_Setup.exe.sha256` on the GitHub release page. If a release does not include a checksum, review the release page before installing.
 
-Maintainer release steps are tracked in [docs/release-checklist.md](docs/release-checklist.md).
+Official installers are created only by the manually triggered **Build Draft Release** GitHub Actions workflow from the current `master` commit. The workflow runs tests, audits dependencies, builds from a hash-locked environment, creates provenance attestations, and leaves the release as a draft for maintainer review. Maintainer steps are documented in [docs/release-process.md](docs/release-process.md) and [docs/release-checklist.md](docs/release-checklist.md).
 
 ### From Source
 
@@ -147,10 +153,12 @@ No Python installation needed if using the Installer.
 
 Windows app source, dependencies, icons, and packaging files live in `Windows/`.
 
+The commands below create local development builds. They are not official release artifacts. Official releases must use the manual GitHub Actions workflow described in [docs/release-process.md](docs/release-process.md).
+
 ### Build the executable
 
 ```bash
-pip install pyinstaller
+pip install -r Windows/requirements-build.txt
 pyinstaller Windows/AmazonMusicRPC.spec --noconfirm --workpath Windows/build --distpath Windows/dist
 ```
 
