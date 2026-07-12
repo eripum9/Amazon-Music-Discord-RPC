@@ -61,9 +61,12 @@ def test_trust_documents_cover_v5_boundaries():
     assert "Windows Credential Manager" in privacy
     assert "TaskSupervisor" in architecture
     assert "Amazify localhost bridge" in threat_model
-    assert "api.deezer.com" in endpoints
-    assert "itunes.apple.com" in endpoints
-    assert "api.github.com" in endpoints
+    destinations = {
+        line.split("|")[1].strip().strip("`")
+        for line in endpoints.splitlines()
+        if line.startswith("| `")
+    }
+    assert {"api.deezer.com", "itunes.apple.com", "api.github.com"}.issubset(destinations)
 
 
 def test_platform_roadmap_keeps_linux_and_macos_out_of_scope():
