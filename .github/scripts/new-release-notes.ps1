@@ -1,10 +1,12 @@
 param(
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][string]$Summary,
-    [Parameter(Mandatory = $true)][string]$GeneratedNotes,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string[]]$GeneratedNotes,
     [Parameter(Mandatory = $true)][string]$OutputPath,
     [Parameter(Mandatory = $true)][bool]$Signed
 )
+
+$generatedText = $GeneratedNotes -join [Environment]::NewLine
 
 $signingText = if ($Signed) {
     "The Windows executable and installer were code-signed and verified during the release workflow."
@@ -25,7 +27,7 @@ Enhanced metadata on Windows is built and tested for the Microsoft Store version
 
 ## Changes
 
-$GeneratedNotes
+$generatedText
 
 ## Installation
 

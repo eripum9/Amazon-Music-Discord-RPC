@@ -74,6 +74,10 @@ jobs:
           "sha=$head" >> $env:GITHUB_OUTPUT
           "tag=v$version" >> $env:GITHUB_OUTPUT
 
+      - name: Release notes script smoke
+        shell: pwsh
+        run: .github/scripts/test-release-notes.ps1
+
       - name: Install pinned dependencies
         run: python -m pip install --require-hashes -r Windows/requirements-release.lock
 
@@ -261,7 +265,11 @@ jobs:
       - name: Generate draft notes
         shell: pwsh
         run: |
-          $generated = gh api --method POST "repos/${{ github.repository }}/releases/generate-notes" -f "tag_name=${{ steps.source.outputs.tag }}" -f "target_commitish=${{ steps.source.outputs.sha }}" --jq '.body'
+          $generatedLines = @(gh api --method POST "repos/${{ github.repository }}/releases/generate-notes" -f "tag_name=${{ steps.source.outputs.tag }}" -f "target_commitish=${{ steps.source.outputs.sha }}" --jq '.body')
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not generate GitHub release notes.'
+          }
+          $generated = $generatedLines -join [Environment]::NewLine
           & .github/scripts/new-release-notes.ps1 -Version '${{ inputs.version }}' -Summary '${{ inputs.summary }}' -GeneratedNotes $generated -OutputPath Windows/release_evidence/release-notes.md -Signed ($('${{ steps.signing.outputs.signed }}') -eq 'true')
 
       - name: Create or update draft release
