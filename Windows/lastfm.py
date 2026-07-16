@@ -8,7 +8,7 @@ from task_supervisor import TaskSupervisor
 
 
 class LastFMScrobbler:
-    def __init__(self, api_key, api_secret, session_key):
+    def __init__(self, api_key, api_secret, session_key, privacy_enabled=False):
         self.network = pylast.LastFMNetwork(
             api_key=api_key,
             api_secret=api_secret,
@@ -16,12 +16,29 @@ class LastFMScrobbler:
         )
         self._pending = []
         self._lock = threading.Lock()
+        self._privacy_blocked = threading.Event()
+        if privacy_enabled:
+            self._privacy_blocked.set()
         self._tasks = TaskSupervisor()
+
+    def set_privacy(self, enabled):
+        if enabled:
+            self._privacy_blocked.set()
+        with self._lock:
+            if enabled:
+                self._pending.clear()
+            else:
+                self._privacy_blocked.clear()
+
+    def _submission_allowed(self):
+        return not self._privacy_blocked.is_set() and not self._tasks.stopping
 
     def update_now_playing(self, title, artist, album=None, duration=None):
         self._run_async("now playing", self._update_now_playing_sync, title, artist, album, duration, drop_if_busy=True)
 
     def _update_now_playing_sync(self, title, artist, album=None, duration=None):
+        if not self._submission_allowed():
+            return
         try:
             self.network.update_now_playing(
                 artist=artist,
@@ -47,8 +64,12 @@ class LastFMScrobbler:
         self._run_async("scrobble", self._scrobble_sync, entry)
 
     def _scrobble_sync(self, entry):
+        if not self._submission_allowed():
+            return
         try:
             self._flush_pending()
+            if not self._submission_allowed():
+                return
             self.network.scrobble(**entry)
             print(f"[Last.fm] Scrobbled: {entry['title']} by {entry['artist']}")
         except (pylast.NetworkError, pylast.MalformedResponseError) as e:
@@ -63,6 +84,9 @@ class LastFMScrobbler:
             return
         remaining = []
         for entry in self._pending:
+            if not self._submission_allowed():
+                self._pending = []
+                return
             try:
                 self.network.scrobble(**entry)
                 print(f"[Last.fm] Flushed cached scrobble: {entry['title']} by {entry['artist']}")
@@ -90,6 +114,7 @@ class LastFMScrobbler:
         self._tasks.start_unique(f"lastfm-{label}", runner)
 
     def close(self):
+        self._privacy_blocked.set()
         self._tasks.request_stop()
         self._tasks.join(timeout=3)
 

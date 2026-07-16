@@ -8,17 +8,34 @@ from task_supervisor import TaskSupervisor
 
 
 class ListenBrainzScrobbler:
-    def __init__(self, user_token):
+    def __init__(self, user_token, privacy_enabled=False):
         self.client = liblistenbrainz.ListenBrainz()
         self.client.set_auth_token(user_token, check_validity=False)
         self._pending = []
         self._lock = threading.Lock()
+        self._privacy_blocked = threading.Event()
+        if privacy_enabled:
+            self._privacy_blocked.set()
         self._tasks = TaskSupervisor()
+
+    def set_privacy(self, enabled):
+        if enabled:
+            self._privacy_blocked.set()
+        with self._lock:
+            if enabled:
+                self._pending.clear()
+            else:
+                self._privacy_blocked.clear()
+
+    def _submission_allowed(self):
+        return not self._privacy_blocked.is_set() and not self._tasks.stopping
 
     def update_now_playing(self, title, artist, album=None, duration=None):
         self._run_async("now playing", self._update_now_playing_sync, title, artist, album, duration, drop_if_busy=True)
 
     def _update_now_playing_sync(self, title, artist, album=None, duration=None):
+        if not self._submission_allowed():
+            return
         try:
             listen = liblistenbrainz.Listen(
                 track_name=title,
@@ -40,8 +57,12 @@ class ListenBrainzScrobbler:
         self._run_async("scrobble", self._scrobble_sync, entry)
 
     def _scrobble_sync(self, entry):
+        if not self._submission_allowed():
+            return
         try:
             self._flush_pending()
+            if not self._submission_allowed():
+                return
             listen = liblistenbrainz.Listen(**entry)
             self.client.submit_single_listen(listen)
             print(f"[ListenBrainz] Scrobbled: {entry['track_name']} by {entry['artist_name']}")
@@ -58,6 +79,9 @@ class ListenBrainzScrobbler:
             return
         remaining = []
         for entry in self._pending:
+            if not self._submission_allowed():
+                self._pending = []
+                return
             try:
                 listen = liblistenbrainz.Listen(**entry)
                 self.client.submit_single_listen(listen)
@@ -86,5 +110,6 @@ class ListenBrainzScrobbler:
         self._tasks.start_unique(f"listenbrainz-{label}", runner)
 
     def close(self):
+        self._privacy_blocked.set()
         self._tasks.request_stop()
         self._tasks.join(timeout=3)

@@ -1,0 +1,20 @@
+[tool.pytest.ini_options]
+testpaths = ["Windows/tests"]
+
+[tool.coverage.run]
+source = ["Windows"]
+omit = [
+    "Windows/tests/*",
+    "Windows/self_tests.py",
+    "Windows/run_self_tests.py",
+    "Windows/diagnostics_ui.py",
+    "Windows/main.py",
+    "Windows/qt_tray_ui.py",
+    "Windows/release_smoke.py",
+    "Windows/settings_ui.py",
+    "Windows/track_picker.py",
+    "Windows/windows_file_dialog.py",
+]
+
+[tool.coverage.report]
+fail_under = 45

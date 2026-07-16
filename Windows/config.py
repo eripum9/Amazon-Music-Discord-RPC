@@ -7,8 +7,13 @@ import os
 import re
 import sys
 import tempfile
+import threading
+import time
 import winreg
+from contextlib import contextmanager
 from ctypes import wintypes
+
+import msvcrt
 
 from credential_store import WindowsCredentialStore
 
@@ -16,6 +21,7 @@ APP_NAME = "AmazonMusicRPC"
 DEFAULT_CLIENT_ID = "1479925587697995857"
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", ""), APP_NAME)
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+CONFIG_REVISION_KEY = "_revision"
 
 if not os.environ.get("APPDATA") or getattr(sys, "frozen", False) is False:
     CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -79,6 +85,12 @@ DEFAULTS = {
     "itunes_lookup_enabled": True,
 }
 
+_CONFIG_THREAD_LOCK = threading.RLock()
+
+
+class ConfigConflictError(RuntimeError):
+    pass
+
 
 def normalize_amazon_music_link_region(value):
     text = str(value or "").strip().lower().lstrip(".")
@@ -92,6 +104,10 @@ def normalize_discord_status_display(value):
 
 def _complete_config(saved):
     config = {**DEFAULTS, **saved}
+    try:
+        config[CONFIG_REVISION_KEY] = max(0, int(saved.get(CONFIG_REVISION_KEY, 0)))
+    except (TypeError, ValueError):
+        config[CONFIG_REVISION_KEY] = 0
     config["discord_status_display"] = normalize_discord_status_display(config.get("discord_status_display"))
     if saved and "enhanced_metadata_prompt_seen" not in saved and "amazon_devtools_enabled" not in saved:
         config["amazon_devtools_enabled"] = True
@@ -218,6 +234,33 @@ def _atomic_write_json(path, payload):
         raise
 
 
+@contextmanager
+def _exclusive_config_lock(timeout=10):
+    lock_path = CONFIG_PATH + ".lock"
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    with _CONFIG_THREAD_LOCK:
+        with open(lock_path, "a+b") as handle:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Timed out waiting for the configuration lock")
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 def _read_secret_config():
     path = _secret_path()
     fallback = {}
@@ -284,18 +327,24 @@ def credential_storage_status():
 
 
 def clear_sensitive_credentials():
-    store = _credential_store()
-    removed = True
-    for key in SENSITIVE_CONFIG_KEYS:
-        if store.available and not store.delete(key):
+    with _exclusive_config_lock():
+        store = _credential_store()
+        removed = True
+        for key in SENSITIVE_CONFIG_KEYS:
+            if store.available and not store.delete(key):
+                removed = False
+        try:
+            os.remove(_secret_path())
+        except FileNotFoundError:
+            pass
+        except OSError:
             removed = False
-    try:
-        os.remove(_secret_path())
-    except FileNotFoundError:
-        pass
-    except OSError:
-        removed = False
-    return removed
+        if os.path.exists(CONFIG_PATH):
+            saved = _read_saved_config()
+            saved = _public_config(saved)
+            saved[CONFIG_REVISION_KEY] = _stored_revision(saved) + 1
+            _atomic_write_json(CONFIG_PATH, saved)
+        return removed
 
 
 def _public_config(config):
@@ -319,19 +368,21 @@ def _load_public_and_secret_config():
             else:
                 secrets.pop(key, None)
         saved = _public_config(saved)
+        saved[CONFIG_REVISION_KEY] = _stored_revision(saved) + 1
         _write_secret_config(secrets)
         _atomic_write_json(CONFIG_PATH, saved)
     return {**saved, **secrets}
 
 
 def migrate_sensitive_config():
-    if not os.path.exists(CONFIG_PATH):
-        return False
-    saved = _read_saved_config()
-    if not any(key in saved for key in SENSITIVE_CONFIG_KEYS):
-        return False
-    _load_public_and_secret_config()
-    return True
+    with _exclusive_config_lock():
+        if not os.path.exists(CONFIG_PATH):
+            return False
+        saved = _read_saved_config()
+        if not any(key in saved for key in SENSITIVE_CONFIG_KEYS):
+            return False
+        _load_public_and_secret_config()
+        return True
 
 
 def _sensitive_values(config=None):
@@ -370,33 +421,90 @@ def redact_data(value, config=None):
 
 
 def load_config():
-    if os.path.exists(CONFIG_PATH):
-        try:
-            saved = _load_public_and_secret_config()
-        except (OSError, json.JSONDecodeError, TypeError) as e:
-            print(f"[Config] Could not read config, using defaults: {e}")
-            saved = {}
-        config = _complete_config(saved)
-    else:
-        config = dict(DEFAULTS)
-    return config
+    with _exclusive_config_lock():
+        if os.path.exists(CONFIG_PATH):
+            try:
+                saved = _load_public_and_secret_config()
+            except (OSError, json.JSONDecodeError, TypeError) as e:
+                print(f"[Config] Could not read config, using defaults: {e}")
+                saved = {}
+            return _complete_config(saved)
+        return _complete_config({})
 
 
 def load_config_for_update():
+    with _exclusive_config_lock():
+        if os.path.exists(CONFIG_PATH):
+            return _complete_config(_load_public_and_secret_config())
+        return _complete_config({})
+
+
+def _stored_revision(config):
+    try:
+        return max(0, int((config or {}).get(CONFIG_REVISION_KEY, 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _current_config_locked():
     if os.path.exists(CONFIG_PATH):
         return _complete_config(_load_public_and_secret_config())
-    return dict(DEFAULTS)
+    return _complete_config({})
+
+
+def _persist_config_locked(config, revision):
+    persisted = dict(config or {})
+    persisted[CONFIG_REVISION_KEY] = int(revision)
+    secrets = {
+        key: value
+        for key, value in _config_secret_values(persisted).items()
+        if str(value or "")
+    }
+    _write_secret_config(secrets)
+    _atomic_write_json(CONFIG_PATH, _public_config(persisted))
+    return _complete_config(persisted)
 
 
 def save_config(config):
-    secrets = _read_secret_config()
-    for key, value in _config_secret_values(config).items():
-        if str(value or ""):
-            secrets[key] = value
-        else:
-            secrets.pop(key, None)
-    _write_secret_config(secrets)
-    _atomic_write_json(CONFIG_PATH, _public_config(config))
+    with _exclusive_config_lock():
+        current = _current_config_locked()
+        expected = (config or {}).get(CONFIG_REVISION_KEY)
+        current_revision = _stored_revision(current)
+        if os.path.exists(CONFIG_PATH) and expected is None:
+            raise ConfigConflictError("Whole-configuration saves require a revision")
+        if expected is not None and _stored_revision({CONFIG_REVISION_KEY: expected}) != current_revision:
+            raise ConfigConflictError(
+                f"Configuration changed from revision {expected} to {current_revision}"
+            )
+        return _persist_config_locked(config, current_revision + 1)
+
+
+def update_config_fields(updates, expected_revision=None):
+    if not isinstance(updates, dict):
+        raise TypeError("Configuration updates must be a dictionary")
+    invalid = set(updates).difference(DEFAULTS)
+    if invalid:
+        raise KeyError(f"Unsupported configuration fields: {', '.join(sorted(invalid))}")
+    with _exclusive_config_lock():
+        current = _current_config_locked()
+        current_revision = _stored_revision(current)
+        if expected_revision is not None and int(expected_revision) > current_revision:
+            raise ConfigConflictError("Configuration revision is newer than the stored revision")
+        current.update(updates)
+        return _persist_config_locked(current, current_revision + 1)
+
+
+def mutate_config_fields(fields, transform):
+    allowed = set(fields or ())
+    if not allowed or allowed.difference(DEFAULTS):
+        raise KeyError("Configuration mutation fields must be known settings")
+    with _exclusive_config_lock():
+        current = _current_config_locked()
+        proposed = transform({key: current.get(key) for key in allowed})
+        if not isinstance(proposed, dict) or set(proposed).difference(allowed):
+            raise ValueError("Configuration mutation changed fields outside its declared scope")
+        current.update(proposed)
+        return _persist_config_locked(current, _stored_revision(current) + 1)
 
 
 def get_exe_path():

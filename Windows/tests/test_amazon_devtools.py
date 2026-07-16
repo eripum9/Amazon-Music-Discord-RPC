@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 import inspect
 import os
 
@@ -57,9 +59,21 @@ def test_devtools_target_validation_and_search_links():
         "url": "https://example.com/morpho/webapp/index.html",
         "title": "Amazon Music",
     }
+    suffix_confusion = {
+        "type": "page",
+        "url": "https://music.amazon.de.evil.example/morpho/webapp/index.html",
+        "title": "Amazon Music",
+    }
+    invented_region = {
+        "type": "page",
+        "url": "https://music.amazon.invalid/morpho/webapp/index.html",
+        "title": "Amazon Music",
+    }
     assert amazon_devtools._is_amazon_music_target(good_target)
     assert amazon_devtools._is_amazon_music_target(regional_target)
     assert not amazon_devtools._is_amazon_music_target(bad_target)
+    assert not amazon_devtools._is_amazon_music_target(suffix_confusion)
+    assert not amazon_devtools._is_amazon_music_target(invented_region)
     assert amazon_devtools.amazon_music_search_link("Noid", "Tyler, The Creator", "de") == "https://music.amazon.de/search/Noid%20Tyler%2C%20The%20Creator"
 
 
@@ -133,3 +147,28 @@ def test_devtools_owner_rejects_confirmed_non_amazon_listener(monkeypatch):
     result = amazon_devtools._devtools_owner_trust(52856, force=True)
     assert result["trusted"] is False
     assert result["status"] == "rejected"
+
+
+def test_devtools_owner_fails_closed_and_requires_exact_install_identity(monkeypatch, tmp_path):
+    monkeypatch.setattr(amazon_devtools, "_port_owner_entries", lambda port: [])
+    unavailable = amazon_devtools._devtools_owner_trust(52856, force=True)
+    assert unavailable == {
+        "trusted": False,
+        "status": "unavailable",
+        "detail": "Windows could not verify the enhanced metadata listener owner",
+    }
+
+    fake = tmp_path / "not-amazonmusic-helper.exe"
+    fake.write_bytes(b"fake")
+    assert not amazon_devtools._amazon_owner_entry({"Paths": [str(fake)], "Pids": ["44"]}, "44")
+
+    install_dir = tmp_path / "Amazon Music"
+    install_dir.mkdir()
+    amazon_exe = install_dir / "Amazon Music.exe"
+    amazon_exe.write_bytes(b"fake")
+    assert not amazon_devtools._amazon_owner_entry({"Paths": [str(amazon_exe)], "Pids": ["45"]}, "45")
+    assert amazon_devtools._amazon_owner_entry(
+        {"Paths": [str(amazon_exe)], "Pids": ["45"]},
+        "45",
+        str(amazon_exe),
+    )

@@ -13,6 +13,7 @@ if str(WINDOWS_DIR) not in sys.path:
 from config import APP_VERSION
 from security_trust import release_notes_trust_errors
 from updater import _extract_sha256, file_sha256
+from release_artifact import embedded_pillow_version
 
 VERSION_RE = re.compile(r'#define\s+MyAppVersion\s+"([^"]+)"')
 
@@ -29,6 +30,8 @@ def main():
     parser.add_argument("--release-notes", default="")
     parser.add_argument("--checksum", default="")
     parser.add_argument("--allow-missing-installer", action="store_true")
+    parser.add_argument("--executable", default="")
+    parser.add_argument("--expected-pillow", default="")
     args = parser.parse_args()
 
     errors = []
@@ -38,6 +41,7 @@ def main():
         "installer": str(Path(args.installer)),
         "checksum": "",
         "sha256": "",
+        "embedded_pillow": "",
     }
 
     if smoke["app_version"] != smoke["installer_version"]:
@@ -58,6 +62,20 @@ def main():
                 errors.append(f"Checksum mismatch: expected {smoke['sha256']}, found {declared_sha256}")
     elif not args.allow_missing_installer:
         errors.append(f"Installer not found: {installer}")
+
+    if args.executable:
+        executable = Path(args.executable)
+        if not executable.exists():
+            errors.append(f"Executable not found: {executable}")
+        else:
+            try:
+                smoke["embedded_pillow"] = embedded_pillow_version(executable)
+            except Exception as error:
+                errors.append(f"Could not inspect packaged Pillow: {error}")
+            if args.expected_pillow and smoke["embedded_pillow"] != args.expected_pillow:
+                errors.append(
+                    f"Packaged Pillow mismatch: expected {args.expected_pillow}, found {smoke['embedded_pillow'] or 'unknown'}"
+                )
 
     if args.release_notes:
         notes = Path(args.release_notes)

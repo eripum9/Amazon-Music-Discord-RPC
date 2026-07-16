@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 from unittest.mock import patch
 
 import desktop_runtime as main

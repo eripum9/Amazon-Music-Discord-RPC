@@ -50,7 +50,7 @@ Discord, Last.fm, ListenBrainz, Deezer, iTunes, GitHub, and remote artwork hosts
 
 - A process running as the same Windows user may read app memory or use that user’s Credential Manager entries.
 - Enhanced metadata intentionally enables a local debugging interface while Amazon Music is running.
-- Unsigned installers can trigger SmartScreen and cannot provide publisher identity until code signing is configured.
+- Unsigned installers can trigger SmartScreen and do not provide publisher identity; users must verify the release checksum and GitHub provenance attestation.
 - Third-party metadata layouts and APIs can change without notice and may reduce metadata quality.
 - Discord ultimately controls whether Rich Presence buttons and assets are displayed.
 

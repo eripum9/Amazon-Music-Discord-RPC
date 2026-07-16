@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 import json
 import os
 import re
@@ -10,6 +12,8 @@ import urllib.request
 import winreg
 from pathlib import Path
 from urllib.parse import urlparse
+
+from amazon_domains import AMAZON_WEBAPP_HOSTS
 
 
 AMAZIFY_NAME = "Amazify"
@@ -175,7 +179,18 @@ def _is_amazon_target(target):
     title = str(target.get("title") or "").lower()
     parsed = urlparse(str(target.get("url") or ""))
     host = (parsed.hostname or "").lower()
-    return "amazon music" in title and (host.startswith("music.amazon.") or host.startswith("www.amazon."))
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    return bool(
+        "amazon music" in title
+        and parsed.scheme.lower() == "https"
+        and host in AMAZON_WEBAPP_HOSTS
+        and port in (None, 443)
+        and not parsed.username
+        and not parsed.password
+    )
 
 
 def valid_amazify_devtools_port(port, timeout=0.25):

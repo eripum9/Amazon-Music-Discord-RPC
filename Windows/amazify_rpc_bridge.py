@@ -1,11 +1,13 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 import json
 import hmac
-import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from amazify_compat import AMAZIFY_RPC_BRIDGE_PORT, amazify_bridge_token
+from amazon_domains import AMAZON_WEBAPP_HOSTS, exact_https_origin
 from config import APP_VERSION
 
 
@@ -19,7 +21,6 @@ ALLOWED_COMMANDS = {
     "toggle_rpc",
     "updates",
 }
-AMAZON_ORIGIN_RE = re.compile(r"^https://(?:music|www)\.amazon\.(?:com|de|co\.uk|fr|it|es|co\.jp|ca|com\.au|com\.br|com\.mx)$", re.IGNORECASE)
 TOKEN_HEADER = "X-Amazon-Music-RPC-Token"
 MAX_REQUEST_BYTES = 16 * 1024
 
@@ -96,7 +97,7 @@ class AmazifyRpcBridge:
             @property
             def allowed_origin(self):
                 origin = str(self.headers.get("Origin") or "")
-                return origin if AMAZON_ORIGIN_RE.fullmatch(origin) else ""
+                return exact_https_origin(origin, AMAZON_WEBAPP_HOSTS)
 
             @property
             def authorized(self):

@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 import threading
 import time
 
@@ -126,3 +128,80 @@ def test_lastfm_scrobble_waits_in_background_when_busy(monkeypatch):
     assert not scrobbled.is_set()
     release_update.set()
     assert scrobbled.wait(1)
+
+
+def test_lastfm_queued_worker_cannot_submit_after_privacy_enabled(monkeypatch):
+    update_started = threading.Event()
+    release_update = threading.Event()
+    submitted = threading.Event()
+
+    class FakeNetwork:
+        def __init__(self, **kwargs):
+            pass
+
+        def update_now_playing(self, **kwargs):
+            update_started.set()
+            release_update.wait(2)
+
+        def scrobble(self, **kwargs):
+            submitted.set()
+
+    class FakePylast:
+        LastFMNetwork = FakeNetwork
+        NetworkError = RuntimeError
+        MalformedResponseError = ValueError
+
+    monkeypatch.setattr(lastfm, "pylast", FakePylast)
+    scrobbler = lastfm.LastFMScrobbler("key", "secret", "session")
+    scrobbler.update_now_playing("Song", "Artist")
+    assert update_started.wait(1)
+    scrobbler.scrobble("Song", "Artist", 1000)
+    privacy = threading.Thread(target=scrobbler.set_privacy, args=(True,))
+    privacy.start()
+    release_update.set()
+    privacy.join(2)
+    assert not privacy.is_alive()
+    assert scrobbler._tasks.join(1)
+    assert not submitted.is_set()
+
+
+def test_listenbrainz_queued_worker_cannot_submit_after_privacy_enabled(monkeypatch):
+    update_started = threading.Event()
+    release_update = threading.Event()
+    submitted = threading.Event()
+
+    class FakeClient:
+        def set_auth_token(self, token, check_validity=True):
+            pass
+
+        def submit_playing_now(self, listen):
+            update_started.set()
+            release_update.wait(2)
+
+        def submit_single_listen(self, listen):
+            submitted.set()
+
+    class FakeListen:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeErrors:
+        ListenBrainzAPIException = RuntimeError
+
+    class FakeLib:
+        ListenBrainz = FakeClient
+        Listen = FakeListen
+        errors = FakeErrors
+
+    monkeypatch.setattr(listenbrainz_scrobbler, "liblistenbrainz", FakeLib)
+    scrobbler = listenbrainz_scrobbler.ListenBrainzScrobbler("token")
+    scrobbler.update_now_playing("Song", "Artist")
+    assert update_started.wait(1)
+    scrobbler.scrobble("Song", "Artist", 1000)
+    privacy = threading.Thread(target=scrobbler.set_privacy, args=(True,))
+    privacy.start()
+    release_update.set()
+    privacy.join(2)
+    assert not privacy.is_alive()
+    assert scrobbler._tasks.join(1)
+    assert not submitted.is_set()

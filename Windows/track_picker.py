@@ -2,11 +2,9 @@
 
 import sys
 import json
-import io
 import tkinter as tk
 from tkinter import font as tkfont
-from urllib.parse import urlparse
-import requests
+from safe_image import load_thumbnail_image
 
 BG = "#202020"
 CARD_BG = "#2d2d2d"
@@ -21,15 +19,8 @@ _photo_refs = []
 
 def _load_thumbnail(url, size=50):
     try:
-        parsed = urlparse(str(url or ""))
-        if parsed.scheme.lower() not in {"http", "https"}:
-            return None
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
-        resp.raise_for_status()
-        raw = resp.content
-        from PIL import Image, ImageTk
-        img = Image.open(io.BytesIO(raw))
-        img = img.resize((size, size), Image.LANCZOS)
+        from PIL import ImageTk
+        img = load_thumbnail_image(url, size)
         return ImageTk.PhotoImage(img)
     except Exception:
         return None

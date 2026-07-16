@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 from pathlib import Path
 
 
@@ -94,8 +96,24 @@ def test_official_release_workflow_keeps_trust_guards():
     assert "attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373" in workflow
     assert "upx=False" in spec
     assert "strip=False" in spec
-    assert "cryptography==48.0.1" in lock
+    assert "cryptography==49.0.0" in lock
+    assert "pillow==12.3.0" in lock
+    assert "pillow==12.2.0" not in lock
+    assert "pytest-cov==7.1.0" in lock
     assert "--hash=sha256:" in lock
+    assert "WINDOWS_SIGNING" not in workflow
+    assert "signtool" not in workflow.lower()
+    assert "--expected-pillow 12.3.0" in workflow
+
+
+def test_pytest_enforces_measurable_coverage_floor():
+    config = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github/workflows/windows-tests.yml").read_text(encoding="utf-8")
+    release = (ROOT / ".github/workflows/release-draft.yml").read_text(encoding="utf-8")
+    assert "fail_under = 45" in config
+    assert "--cov-fail-under=45" in workflow
+    assert "--cov-fail-under=45" in release
+    assert "Pytest with coverage threshold" in workflow
 
 
 def test_windows_workflows_use_winsdk_wheel_runtime():

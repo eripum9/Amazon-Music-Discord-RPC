@@ -31,8 +31,6 @@ jobs:
     runs-on: windows-2025
     env:
       GH_TOKEN: ${{ github.token }}
-      WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
-      WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
     steps:
       - name: Require master
         shell: pwsh
@@ -97,10 +95,10 @@ jobs:
           "INNO_COMPILER=$compiler" >> $env:GITHUB_ENV
 
       - name: Compile
-        run: python -m py_compile Windows/main.py Windows/desktop_runtime.py Windows/app_models.py Windows/runtime_state.py Windows/task_supervisor.py Windows/structured_logging.py Windows/window_controller.py Windows/rpc_controller.py Windows/command_controller.py Windows/amazon_devtools.py Windows/media_reader.py Windows/discord_rpc.py Windows/config.py Windows/credential_store.py Windows/network_audit.py Windows/updater.py Windows/status_summary.py Windows/qt_tray_ui.py Windows/rpc_state.py Windows/metadata_pipeline.py Windows/launcher_diagnostics.py Windows/security_trust.py Windows/self_tests.py Windows/release_smoke.py Windows/run_self_tests.py
+        run: python -m py_compile Windows/main.py Windows/desktop_runtime.py Windows/app_models.py Windows/runtime_state.py Windows/task_supervisor.py Windows/structured_logging.py Windows/window_controller.py Windows/rpc_controller.py Windows/command_controller.py Windows/amazon_devtools.py Windows/amazon_domains.py Windows/amazon_status_overlay.py Windows/amazify_compat.py Windows/media_reader.py Windows/discord_rpc.py Windows/config.py Windows/credential_store.py Windows/network_audit.py Windows/updater.py Windows/status_summary.py Windows/tray_state.py Windows/qt_tray_ui.py Windows/rpc_state.py Windows/metadata_pipeline.py Windows/launcher_diagnostics.py Windows/safe_image.py Windows/settings_config.py Windows/security_trust.py Windows/self_tests.py Windows/release_artifact.py Windows/release_smoke.py Windows/run_self_tests.py
 
       - name: Pytest
-        run: python -m pytest Windows/tests
+        run: python -m pytest Windows/tests --cov=Windows --cov-report=term-missing --cov-fail-under=45
 
       - name: Built-in self-tests
         run: python Windows/run_self_tests.py
@@ -117,44 +115,9 @@ jobs:
       - name: Build executable
         run: python -m PyInstaller Windows/AmazonMusicRPC.spec --noconfirm --clean --workpath Windows/build --distpath Windows/dist
 
-      - name: Sign executable when configured
-        id: signing
-        shell: pwsh
-        run: |
-          $hasCertificate = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_PFX_BASE64)
-          $hasPassword = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_PFX_PASSWORD)
-          if ($hasCertificate -ne $hasPassword) {
-            throw 'Both Windows signing secrets must be configured together.'
-          }
-          if (-not $hasCertificate) {
-            'signed=false' >> $env:GITHUB_OUTPUT
-            exit 0
-          }
-          $certificatePath = Join-Path $env:RUNNER_TEMP 'windows-signing.pfx'
-          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_SIGNING_PFX_BASE64))
-          $signTool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' | Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $signTool) {
-            throw 'signtool.exe was not found.'
-          }
-          & $signTool.FullName sign /f $certificatePath /p $env:WINDOWS_SIGNING_PFX_PASSWORD /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com Windows/dist/AmazonMusicRPC.exe
-          & $signTool.FullName verify /pa /all Windows/dist/AmazonMusicRPC.exe
-          Remove-Item -LiteralPath $certificatePath -Force
-          "SIGN_TOOL=$($signTool.FullName)" >> $env:GITHUB_ENV
-          'signed=true' >> $env:GITHUB_OUTPUT
-
       - name: Build installer
         shell: pwsh
         run: '& $env:INNO_COMPILER Windows/installer.iss'
-
-      - name: Sign installer when configured
-        if: steps.signing.outputs.signed == 'true'
-        shell: pwsh
-        run: |
-          $certificatePath = Join-Path $env:RUNNER_TEMP 'windows-signing.pfx'
-          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_SIGNING_PFX_BASE64))
-          & $env:SIGN_TOOL sign /f $certificatePath /p $env:WINDOWS_SIGNING_PFX_PASSWORD /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com Windows/installer_output/AmazonMusicRPC_Setup.exe
-          & $env:SIGN_TOOL verify /pa /all Windows/installer_output/AmazonMusicRPC_Setup.exe
-          Remove-Item -LiteralPath $certificatePath -Force
 
       - name: Generate checksum
         shell: pwsh
@@ -164,7 +127,7 @@ jobs:
           Set-Content -LiteralPath "$installer.sha256" -Value "$hash  AmazonMusicRPC_Setup.exe" -Encoding ascii
 
       - name: Release smoke
-        run: python Windows/release_smoke.py --installer Windows/installer_output/AmazonMusicRPC_Setup.exe
+        run: python Windows/release_smoke.py --installer Windows/installer_output/AmazonMusicRPC_Setup.exe --executable Windows/dist/AmazonMusicRPC.exe --expected-pillow 12.3.0
 
       - name: Packaged window smoke tests
         shell: pwsh
@@ -221,7 +184,6 @@ jobs:
             runner = '${{ runner.name }}'
             python = (python --version 2>&1).ToString()
             installer_sha256 = $hash
-            signed = '${{ steps.signing.outputs.signed }}'
             defender = '${{ steps.defender.outputs.result }}'
           }
           $manifest | ConvertTo-Json | Set-Content Windows/release_evidence/build-manifest.json -Encoding utf8NoBOM
@@ -230,7 +192,7 @@ jobs:
 
           - Commit: `${{ steps.source.outputs.sha }}`
           - Installer SHA256: `$hash`
-          - Code signed: `${{ steps.signing.outputs.signed }}`
+          - Artifact trust: SHA256 checksum and GitHub build provenance attestation
           - Microsoft Defender: `${{ steps.defender.outputs.result }}`
           - Pytest, built-in self-tests, Ruff, dependency audit, packaged windows, and installer smoke tests passed in this workflow.
           "@ | Set-Content Windows/release_evidence/security-report.md -Encoding utf8NoBOM
@@ -270,7 +232,7 @@ jobs:
             throw 'Could not generate GitHub release notes.'
           }
           $generated = $generatedLines -join [Environment]::NewLine
-          & .github/scripts/new-release-notes.ps1 -Version '${{ inputs.version }}' -Summary '${{ inputs.summary }}' -GeneratedNotes $generated -OutputPath Windows/release_evidence/release-notes.md -Signed ($('${{ steps.signing.outputs.signed }}') -eq 'true')
+          & .github/scripts/new-release-notes.ps1 -Version '${{ inputs.version }}' -Summary '${{ inputs.summary }}' -GeneratedNotes $generated -OutputPath Windows/release_evidence/release-notes.md
 
       - name: Create or update draft release
         shell: pwsh

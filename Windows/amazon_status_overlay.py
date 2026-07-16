@@ -7,7 +7,8 @@ import threading
 from amazon_devtools import _CdpSocket, _page_target, get_devtools_port
 
 
-OVERLAY_VERSION = "2026.06.03.1"
+OVERLAY_VERSION = "2026.07.16.1"
+OVERLAY_WORLD_NAME = "AmazonMusicRPC.StatusOverlay"
 
 
 def _clean(value):
@@ -88,6 +89,7 @@ class AmazonStatusOverlay:
         self._inject_thread = None
         self._stop_event = threading.Event()
         self._client = None
+        self._context_id = None
         self._lock = threading.Lock()
         self._last_error = ""
 
@@ -149,6 +151,8 @@ class AmazonStatusOverlay:
                         expected_port=get_devtools_port(False),
                         expected_target_id=target.get("id", ""),
                     )
+                    self._context_id = None
+                    self._ensure_isolated_context(self._client)
                     last_target = target_id
                 if not self._ui_present(self._client):
                     self._inject(self._client)
@@ -167,6 +171,43 @@ class AmazonStatusOverlay:
             except Exception:
                 pass
         self._client = None
+        self._context_id = None
+
+    def _ensure_isolated_context(self, client):
+        if self._context_id:
+            return self._context_id
+        client.request("Page.enable")
+        tree = client.request("Page.getFrameTree")
+        frame_id = (
+            tree.get("result", {})
+            .get("frameTree", {})
+            .get("frame", {})
+            .get("id")
+        )
+        if not frame_id:
+            raise RuntimeError("Amazon status overlay could not resolve the main frame")
+        created = client.request(
+            "Page.createIsolatedWorld",
+            {
+                "frameId": frame_id,
+                "worldName": OVERLAY_WORLD_NAME,
+                "grantUniveralAccess": False,
+            },
+        )
+        self._context_id = created.get("result", {}).get("executionContextId")
+        if not self._context_id:
+            raise RuntimeError("Amazon status overlay could not create an isolated world")
+        return self._context_id
+
+    def _evaluate(self, client, expression, await_promise=False):
+        params = {
+            "expression": expression,
+            "returnByValue": True,
+            "contextId": self._ensure_isolated_context(client),
+        }
+        if await_promise:
+            params["awaitPromise"] = True
+        return client.request("Runtime.evaluate", params)
 
     def _ui_present(self, client):
         expression = (
@@ -174,31 +215,19 @@ class AmazonStatusOverlay:
             "&& window.__amrpcStatusOverlay "
             f"&& window.__amrpcStatusOverlay.version === {json.dumps(OVERLAY_VERSION)})"
         )
-        response = client.request(
-            "Runtime.evaluate",
-            {
-                "expression": expression,
-                "returnByValue": True,
-            },
-        )
+        response = self._evaluate(client, expression)
         return bool(response.get("result", {}).get("result", {}).get("value"))
 
     def _remove_ui(self, client):
-        client.request(
-            "Runtime.evaluate",
-            {
-                "expression": "if(window.__amrpcStatusOverlay&&window.__amrpcStatusOverlay.stop)window.__amrpcStatusOverlay.stop();['amrpc-status-button','amrpc-status-menu','amrpc-status-style'].forEach(function(id){var node=document.getElementById(id);if(node&&node.parentElement)node.parentElement.removeChild(node);});delete window.__amrpcStatusOverlay;",
-                "returnByValue": True,
-            },
+        self._evaluate(
+            client,
+            "if(window.__amrpcStatusOverlay&&window.__amrpcStatusOverlay.stop)window.__amrpcStatusOverlay.stop();['amrpc-status-button','amrpc-status-menu','amrpc-status-style'].forEach(function(id){var node=document.getElementById(id);if(node&&node.parentElement)node.parentElement.removeChild(node);});delete window.__amrpcStatusOverlay;",
         )
 
     def _consume_action(self, client):
-        response = client.request(
-            "Runtime.evaluate",
-            {
-                "expression": "(function(){var api=window.__amrpcStatusOverlay;if(!api||!api.nextAction)return null;var action=api.nextAction;api.nextAction=null;return action;})()",
-                "returnByValue": True,
-            },
+        response = self._evaluate(
+            client,
+            "(function(){var api=window.__amrpcStatusOverlay;return api&&api.consume?api.consume():null;})()",
         )
         action = response.get("result", {}).get("result", {}).get("value")
         if isinstance(action, dict) and action.get("type") == "privacy":
@@ -206,24 +235,14 @@ class AmazonStatusOverlay:
 
     def _push_payload(self, client):
         payload = json.dumps(self.payload())
-        client.request(
-            "Runtime.evaluate",
-            {
-                "expression": f"(function(data){{if(window.__amrpcStatusOverlay&&window.__amrpcStatusOverlay.render)window.__amrpcStatusOverlay.render(data);}})({payload})",
-                "returnByValue": True,
-            },
+        self._evaluate(
+            client,
+            f"(function(data){{if(window.__amrpcStatusOverlay&&window.__amrpcStatusOverlay.render)window.__amrpcStatusOverlay.render(data);}})({payload})",
         )
 
     def _inject(self, client):
         script = self._script()
-        response = client.request(
-            "Runtime.evaluate",
-            {
-                "expression": script,
-                "returnByValue": True,
-                "awaitPromise": True,
-            },
-        )
+        response = self._evaluate(client, script, await_promise=True)
         result = response.get("result", {}).get("result", {})
         if result.get("subtype") == "error":
             raise RuntimeError(result.get("description") or "Amazon status overlay injection failed")
@@ -323,6 +342,7 @@ class AmazonStatusOverlay:
   var toggleShell = toggle.parentElement;
   var diagList = menu.querySelector('#amrpc-diag-list');
   var privacyBusy = false;
+  var nextAction = null;
   var escapeHtml = function (value) {{
     return String(value || '').replace(/[&<>"']/g, function (ch) {{
       return {{ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }}[ch];
@@ -356,15 +376,20 @@ class AmazonStatusOverlay:
   var closeMenu = function () {{
     menu.hidden = true;
   }};
-  button.onclick = function (event) {{
+  button.addEventListener('click', function (event) {{
+    if (!event.isTrusted) return;
     event.preventDefault();
     event.stopPropagation();
     if (event.stopImmediatePropagation) event.stopImmediatePropagation();
     if (menu.hidden) openMenu();
     else closeMenu();
-    return false;
-  }};
+  }}, true);
   toggle.addEventListener('click', function (event) {{
+    if (!event.isTrusted) {{
+      event.preventDefault();
+      event.stopPropagation();
+      return false;
+    }}
     if (privacyBusy) {{
       event.preventDefault();
       event.stopPropagation();
@@ -374,17 +399,24 @@ class AmazonStatusOverlay:
   }}, true);
   toggle.addEventListener('change', function (event) {{
     event.stopPropagation();
-    if (privacyBusy) return;
+    if (!event.isTrusted || privacyBusy) return;
     setPrivacyBusy(true);
     label.textContent = '...';
-    window.__amrpcStatusOverlay.nextAction = {{ type: 'privacy', enabled: !!toggle.checked, at: Date.now() }};
+    nextAction = {{ type: 'privacy', enabled: !!toggle.checked, at: Date.now() }};
   }}, true);
   menu.addEventListener('click', function (event) {{ event.stopPropagation(); }});
   document.addEventListener('click', function (event) {{
     if (!menu.hidden && !menu.contains(event.target) && !button.contains(event.target)) closeMenu();
   }});
   window.addEventListener('resize', positionMenu);
-  window.__amrpcStatusOverlay = {{ version: overlayVersion, render: render, open: openMenu, close: closeMenu, stop: closeMenu, nextAction: null }};
+  window.__amrpcStatusOverlay = {{
+    version: overlayVersion,
+    render: render,
+    open: openMenu,
+    close: closeMenu,
+    stop: closeMenu,
+    consume: function () {{ var action = nextAction; nextAction = null; return action; }}
+  }};
   render(initialData);
   var rect = button.getBoundingClientRect();
   return {{ ok: true, text: label.textContent, rect: {{ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }} }};

@@ -88,7 +88,7 @@ The updater checks GitHub releases and can download the latest installer. It ope
 
 Official release drafts are built only from the current `master` commit by a manually triggered GitHub Actions workflow. The workflow installs hash-locked dependencies, runs tests and dependency auditing, creates an SBOM and build evidence, scans the installer with Microsoft Defender when available, and generates GitHub artifact attestations. Each release includes `AmazonMusicRPC_Setup.exe`, its matching `AmazonMusicRPC_Setup.exe.sha256`, a clear changelog, and an enhanced metadata compatibility note.
 
-Windows code signing is applied when the repository signing certificate is configured. Unsigned drafts are explicitly labeled as unsigned and must be reviewed before publication.
+Windows artifacts are not Authenticode signed. Verify the matching SHA256 asset and GitHub build provenance attestation before running an installer.
 
 ## Uninstall
 

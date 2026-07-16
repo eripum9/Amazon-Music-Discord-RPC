@@ -27,6 +27,7 @@ Confirm the workflow completed all of these checks:
 - Version and current `master` validation
 - Hash-locked dependency installation
 - Python compilation, pytest, built-in self-tests, and Ruff safety checks
+- Coverage remained at or above the repository threshold
 - Dependency vulnerability audit
 - Clean PyInstaller and Inno Setup builds with UPX and stripping disabled
 - Packaged Settings and Diagnostics smoke tests
@@ -54,6 +55,6 @@ Every release description should include:
 - Confirm the release contains only the installer and checksum as public release assets.
 - Download the Actions `release-evidence-vX.Y.Z` artifact and review the SBOM, build manifest, and security report.
 - Verify the attestation with `gh attestation verify AmazonMusicRPC_Setup.exe -R eripum9/Amazon-Music-Discord-RPC`.
-- Confirm the release notes accurately state whether the installer is signed.
+- Confirm the release notes state that the installer is unsigned and explain checksum and provenance verification.
 - Test the downloaded installer on a clean or disposable Windows environment before publishing.
 - Publish the existing draft; do not rebuild or replace assets after approval.

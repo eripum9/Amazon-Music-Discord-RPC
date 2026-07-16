@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 import json
 
 import pytest
@@ -159,3 +161,42 @@ def test_secret_redaction_covers_text_and_nested_data():
     combined = redacted_text + json.dumps(redacted_data)
     assert all(secret not in combined for secret in secrets.values())
     assert config.REDACTION_TEXT in combined
+
+
+def test_stale_whole_save_cannot_restore_privacy_or_cleared_tokens(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    store = MemoryCredentialStore()
+    monkeypatch.setattr(config, "CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "CONFIG_PATH", str(path))
+    monkeypatch.setattr(config, "_credential_store", lambda: store)
+
+    config.save_config({**config.DEFAULTS, "listenbrainz_token": "old-token"})
+    stale = config.load_config_for_update()
+    secured = config.update_config_fields(
+        {
+            "listenbrainz_token": "",
+            "listenbrainz_enabled": False,
+            "privacy_private_session": True,
+        }
+    )
+    stale["show_paused"] = False
+
+    with pytest.raises(config.ConfigConflictError):
+        config.save_config(stale)
+
+    current = config.load_config_for_update()
+    assert current["privacy_private_session"] is True
+    assert current["listenbrainz_token"] == ""
+    assert current[config.CONFIG_REVISION_KEY] == secured[config.CONFIG_REVISION_KEY]
+
+
+def test_field_specific_updates_merge_against_current_revision(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    monkeypatch.setattr(config, "CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "CONFIG_PATH", str(path))
+    config.save_config({**config.DEFAULTS, "privacy_private_session": False})
+    stale_revision = config.load_config()[config.CONFIG_REVISION_KEY]
+    config.update_config_fields({"privacy_private_session": True})
+    merged = config.update_config_fields({"show_paused": False}, expected_revision=stale_revision)
+    assert merged["privacy_private_session"] is True
+    assert merged["show_paused"] is False

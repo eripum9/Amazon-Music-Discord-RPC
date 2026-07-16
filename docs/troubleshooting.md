@@ -39,7 +39,7 @@ Notification fallback reads Windows notifications locally and only uses Amazon M
 
 ## Updater Or Installer Warnings
 
-Windows SmartScreen can warn because the installer is unsigned. Use the GitHub release page and the `AmazonMusicRPC_Setup.exe.sha256` release asset to verify the installer.
+Windows SmartScreen can warn because the installer is not Authenticode signed. Download only from the GitHub release page, confirm the `AmazonMusicRPC_Setup.exe.sha256` asset, and verify GitHub build provenance before running the installer.
 
 Manual PowerShell check:
 

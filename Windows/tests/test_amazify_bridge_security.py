@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 import json
 import socket
 import urllib.error
@@ -25,7 +27,13 @@ def test_amazify_bridge_requires_token_and_exact_amazon_origin():
             urllib.request.urlopen(f"http://127.0.0.1:{port}/state", timeout=2)
         assert unauthorized.value.code == 401
 
-        for origin in ("https://evil.example", "https://music.amazon.com.evil.com"):
+        for origin in (
+            "https://evil.example",
+            "https://music.amazon.com.evil.com",
+            "http://music.amazon.com",
+            "https://music.amazon.com/path",
+            "https://music.amazon.invalid",
+        ):
             bad_origin = urllib.request.Request(
                 f"http://127.0.0.1:{port}/state",
                 headers={"Origin": origin, "Access-Control-Request-Headers": TOKEN_HEADER},

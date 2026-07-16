@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from typing import Any, Mapping

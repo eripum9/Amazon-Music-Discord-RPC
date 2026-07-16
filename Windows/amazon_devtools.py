@@ -14,6 +14,7 @@ import time
 from urllib.parse import quote, urlparse, urlunparse
 import requests
 from config import load_config, normalize_amazon_music_link_region
+from amazon_domains import AMAZON_MUSIC_HOSTS, AMAZON_WEBAPP_HOSTS, is_amazon_webapp_url
 from launcher_diagnostics import format_launcher_failure, launcher_attempt_failure, launcher_candidate_label
 
 
@@ -23,6 +24,8 @@ DEVTOOLS_PORT_ENV = "AMRPC_DEVTOOLS_PORT"
 DEVTOOLS_PORT_MIN = 49152
 DEVTOOLS_PORT_MAX = 60999
 AMAZON_PACKAGE_NAME = "AmazonMobileLLC.AmazonMusic"
+AMAZON_PACKAGE_PUBLISHER_ID = "kc6t79cpj4tp0"
+AMAZON_EXECUTABLE_NAMES = frozenset({"amazon music.exe", "amazonmusic.exe"})
 LAUNCH_FAILURE_HELP = "Could not launch Amazon Music with enhanced metadata. Open Diagnostics and check the Amazon Music launcher entry, or paste the launcher ID from Get-StartApps."
 SHORTCUT_NAME = "Amazon Music Metadata.lnk"
 OLD_SHORTCUT_NAMES = ("Amazon Music Beta Metadata.lnk",)
@@ -31,8 +34,6 @@ _CACHE = {"key": None, "expires": 0, "value": None}
 _EXPLICIT_RE = re.compile(r"\s*\[Explicit\]\s*$", re.IGNORECASE)
 _TIME_RE = re.compile(r"^-?\d{1,2}:\d{2}(?::\d{2})?$")
 _ASIN_RE = re.compile(r"^[A-Z0-9]{10}$", re.IGNORECASE)
-_MUSIC_HOST_RE = re.compile(r"^music\.amazon\.[a-z.]+$", re.IGNORECASE)
-_AMAZON_WEBAPP_HOST_RE = re.compile(r"^(?:music|www)\.amazon\.[a-z.]+$", re.IGNORECASE)
 _DEVTOOLS_PAGE_PATH_RE = re.compile(r"^/devtools/page/([A-Za-z0-9._:-]+)$")
 _DEVTOOLS_PORT = None
 _LAST_LAUNCH = {}
@@ -203,8 +204,32 @@ def _is_allowed_amazon_exe(path, exists_fn=os.path.exists):
         return False
     if not exists_fn(text):
         return False
-    compact = re.sub(r"[\s_\-.]+", "", text.lower())
-    return "amazonmusic" in compact or "amazonmobilellcamazonmusic" in compact
+    normalised = os.path.normpath(text)
+    if os.path.basename(normalised).casefold() not in AMAZON_EXECUTABLE_NAMES:
+        return False
+    parent = os.path.basename(os.path.dirname(normalised)).casefold()
+    package_prefix = f"{AMAZON_PACKAGE_NAME.casefold()}_"
+    package_suffix = f"__{AMAZON_PACKAGE_PUBLISHER_ID}"
+    package_path = any(
+        part.casefold().startswith(package_prefix) and part.casefold().endswith(package_suffix)
+        for part in normalised.replace("/", "\\").split("\\")
+    )
+    return parent in {"amazon music", "amazonmusic"} or package_path
+
+
+def _is_exact_amazon_package_exe(path, exists_fn=os.path.exists):
+    text = _clean(path)
+    if not text or not _is_local_absolute_path(text) or not exists_fn(text):
+        return False
+    normalised = os.path.normpath(text)
+    if os.path.basename(normalised).casefold() not in AMAZON_EXECUTABLE_NAMES:
+        return False
+    package_prefix = f"{AMAZON_PACKAGE_NAME.casefold()}_"
+    package_suffix = f"__{AMAZON_PACKAGE_PUBLISHER_ID}"
+    return any(
+        part.casefold().startswith(package_prefix) and part.casefold().endswith(package_suffix)
+        for part in normalised.replace("/", "\\").split("\\")
+    )
 
 
 def validate_launcher_override(value, exists_fn=os.path.exists):
@@ -439,7 +464,7 @@ def _clean_asin(value):
 
 def _music_host(value):
     host = _clean(value).lower()
-    return host if _MUSIC_HOST_RE.match(host) else "music.amazon.com"
+    return host if host in AMAZON_MUSIC_HOSTS else "music.amazon.com"
 
 
 def _amazon_music_link_host(region=None):
@@ -454,8 +479,7 @@ def amazon_music_search_link(title, artist, link_region=None):
 
 def _normalise_amazon_link(url, host):
     parsed = urlparse(url)
-    source_host = (parsed.hostname or "").lower()
-    if parsed.scheme == "https" and _AMAZON_WEBAPP_HOST_RE.match(source_host):
+    if is_amazon_webapp_url(url) and host in AMAZON_MUSIC_HOSTS:
         return urlunparse(parsed._replace(netloc=host))
     return ""
 
@@ -567,11 +591,21 @@ def _is_amazon_music_target(target):
     parsed = urlparse(_clean(target.get("url")))
     host = (parsed.hostname or "").lower()
     path = parsed.path or ""
-    if parsed.scheme != "https" or not _AMAZON_WEBAPP_HOST_RE.match(host):
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    if (
+        parsed.scheme != "https"
+        or host not in AMAZON_WEBAPP_HOSTS
+        or port not in (None, 443)
+        or parsed.username
+        or parsed.password
+    ):
         return False
     if "morpho/webapp" in path and title.startswith("amazon music"):
         return True
-    return host.startswith("music.amazon.") and title == "amazon music"
+    return host in AMAZON_MUSIC_HOSTS and title == "amazon music"
 
 
 def _valid_target_websocket(target, port):
@@ -621,9 +655,9 @@ try {{
         }}
         $items += [PSCustomObject]@{{
             Pid = $owner
-            Pids = ($pids -join ',')
-            Names = ($names -join ' ')
-            Paths = ($paths -join ' ')
+            Pids = @($pids)
+            Names = @($names)
+            Paths = @($paths)
         }}
     }}
 }} catch {{}}
@@ -632,22 +666,47 @@ $items | ConvertTo-Json -Compress
     return _powershell_json(script, timeout=4)
 
 
-def _amazon_owner_entry(entry, launched_pid=""):
-    pids = {item for item in _clean(entry.get("Pids") or entry.get("Pid")).split(",") if item}
-    if launched_pid and _clean(launched_pid) in pids:
-        return True
-    identity = re.sub(r"[\s_.-]+", "", f"{entry.get('Names', entry.get('Name', ''))} {entry.get('Paths', entry.get('Path', ''))}".lower())
-    return "amazonmusic" in identity or "amazonmobilellcamazonmusic" in identity
+def _entry_values(entry, plural, singular):
+    value = entry.get(plural)
+    if isinstance(value, list):
+        return [_clean(item) for item in value if _clean(item)]
+    if value:
+        return [_clean(value)]
+    value = _clean(entry.get(singular))
+    return [value] if value else []
 
 
-def _devtools_owner_trust(port, launched_pid="", force=False):
+def _amazon_owner_entry(entry, launched_pid="", launcher="", registered_launchers=()):
+    paths = _entry_values(entry, "Paths", "Path")
+    trusted_launchers = {
+        os.path.normcase(os.path.normpath(value))
+        for value in (launcher, *registered_launchers)
+        if _looks_like_path(value) and _is_allowed_amazon_exe(value)
+    }
+    for path in paths:
+        if os.path.normcase(os.path.normpath(path)) in trusted_launchers:
+            return True
+        if _is_exact_amazon_package_exe(path):
+            return True
+    return False
+
+
+def _devtools_owner_trust(port, launched_pid="", launcher="", force=False):
     now = time.time()
     if not force and _PORT_OWNER_CACHE["port"] == int(port) and now < _PORT_OWNER_CACHE["expires"]:
         return _PORT_OWNER_CACHE["value"]
     entries = _port_owner_entries(port)
+    remembered_launcher = _LAST_LAUNCH.get("launcher", "")
+    registered_launchers = []
+    if not launcher and not remembered_launcher:
+        registered_launchers = [
+            candidate.get("value", "")
+            for candidate in _launcher_candidates()
+            if candidate.get("kind") == "exe"
+        ]
     if not entries:
-        result = {"trusted": True, "status": "unavailable", "detail": "Windows could not resolve the enhanced metadata listener owner"}
-    elif all(_amazon_owner_entry(entry, launched_pid) for entry in entries):
+        result = {"trusted": False, "status": "unavailable", "detail": "Windows could not verify the enhanced metadata listener owner"}
+    elif all(_amazon_owner_entry(entry, launched_pid, launcher or remembered_launcher, registered_launchers) for entry in entries):
         result = {"trusted": True, "status": "verified", "detail": "Enhanced metadata listener belongs to Amazon Music", "pids": [_clean(entry.get("Pid")) for entry in entries]}
     else:
         result = {"trusted": False, "status": "rejected", "detail": "The selected enhanced metadata port is owned by a non-Amazon process", "pids": [_clean(entry.get("Pid")) for entry in entries]}
@@ -780,7 +839,8 @@ _TRANSPORT_EXPRESSION = r"""
   };
   const musicHost = () => {
     const host = location.hostname.replace(/^www\./, 'music.').toLowerCase();
-    return /^music\.amazon\.[a-z.]+$/.test(host) ? host : 'music.amazon.com';
+    const allowed = new Set(__AMAZON_MUSIC_HOSTS__);
+    return allowed.has(host) ? host : 'music.amazon.com';
   };
   const albumAsinFromLocation = () => {
     const text = `${location.hash || ''} ${location.search || ''}`;
@@ -870,6 +930,10 @@ _TRANSPORT_EXPRESSION = r"""
   };
 })()
 """
+_TRANSPORT_EXPRESSION = _TRANSPORT_EXPRESSION.replace(
+    "__AMAZON_MUSIC_HOSTS__",
+    json.dumps(sorted(AMAZON_MUSIC_HOSTS)),
+)
 
 
 def _selected_devtools_port(port=None):
@@ -1020,7 +1084,12 @@ def launch_amazon_music_devtools(launcher_override=None):
         result = _launch_candidate(candidate, port)
         if result.get("ok"):
             if _wait_for_page_target(port):
-                owner = _devtools_owner_trust(port, result.get("pid", ""), force=True)
+                owner = _devtools_owner_trust(
+                    port,
+                    result.get("pid", ""),
+                    candidate.get("value", ""),
+                    force=True,
+                )
                 if not owner.get("trusted"):
                     attempts.append(f"{_candidate_label(candidate)}: {owner.get('detail')}")
                     continue

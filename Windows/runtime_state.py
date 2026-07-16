@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 import threading
 from copy import deepcopy
 

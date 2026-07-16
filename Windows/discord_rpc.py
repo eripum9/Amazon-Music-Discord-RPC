@@ -87,10 +87,12 @@ class DiscordRPC:
         self._last_button_signature = None
         self._backoff = 3
         self._next_retry = 0
+        self._closed = False
 
     def connect(self):
         try:
             self.rpc.connect()
+            self._closed = False
             self.connected = True
             self._backoff = 3
             self._next_retry = 0
@@ -102,12 +104,23 @@ class DiscordRPC:
             self._backoff = min(self._backoff * 1.5, 60)
 
     def disconnect(self):
-        if self.connected:
+        if not self._closed:
             try:
                 self.rpc.close()
             except Exception:
                 pass
-            self.connected = False
+            self._closed = True
+        self.connected = False
+
+    def shutdown(self):
+        try:
+            self.rpc.clear()
+        except Exception as e:
+            print(f"[RPC] Shutdown clear failed: {e}")
+        finally:
+            self._last_track_key = None
+            self._last_button_signature = None
+            self.disconnect()
 
     def _ensure_connected(self):
         if not self.connected:

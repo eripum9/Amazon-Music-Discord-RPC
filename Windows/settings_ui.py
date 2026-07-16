@@ -7,7 +7,8 @@ import json
 import subprocess
 from datetime import datetime
 import webview
-from config import load_config, load_config_for_update, save_config, is_startup_enabled, set_startup, DEFAULT_CLIENT_ID, APP_VERSION, normalize_amazon_music_link_region, normalize_discord_status_display, DEFAULTS, CONFIG_DIR, SENSITIVE_CONFIG_KEYS, redact_data
+from config import load_config, load_config_for_update, update_config_fields, is_startup_enabled, set_startup, APP_VERSION, DEFAULTS, CONFIG_DIR, CONFIG_REVISION_KEY
+from settings_config import EDITABLE_CONFIG_KEYS as _EDITABLE_CONFIG_KEYS, REQUIRED_SETTINGS_KEYS as _REQUIRED_SETTINGS_KEYS, clean_custom_albums as _clean_custom_albums, settings_config_from_payload as _settings_config_from_payload, settings_export_payload as _settings_export_payload, settings_import_config as _settings_import_config
 from status_summary import metadata_source_summary
 
 if getattr(sys, 'frozen', False):
@@ -17,33 +18,6 @@ else:
 
 ICON_PATH = os.path.join(_BUNDLE_DIR, "icon.png")
 DIAGNOSTICS_PATH = os.path.join(CONFIG_DIR, "diagnostics.json")
-_REQUIRED_SETTINGS_KEYS = {
-    "use_custom",
-    "client_id",
-    "discord_status_display",
-    "start_on_startup",
-    "start_minimized",
-    "show_paused",
-    "privacy_private_session",
-    "privacy_disable_scrobbling",
-    "privacy_blocked_keywords",
-    "game_mode_enabled",
-    "game_mode_processes",
-    "custom_albums",
-    "song_link_enabled",
-    "song_link_provider",
-    "amazon_music_link_region",
-    "notification_enrichment_enabled",
-    "amazon_devtools_enabled",
-    "amazon_devtools_auto_launch",
-    "amazon_music_launcher_override",
-    "automatic_update_checks",
-    "deezer_lookup_enabled",
-    "itunes_lookup_enabled",
-    "lastfm_enabled",
-    "listenbrainz_enabled",
-    "listenbrainz_token",
-}
 
 
 def _icon_b64():
@@ -62,13 +36,14 @@ def _bounded_int(value, default, minimum):
 
 def _save_window_size(width, height):
     try:
-        config = load_config_for_update()
+        update_config_fields(
+            {
+                "settings_window_width": _bounded_int(width, 460, 420),
+                "settings_window_height": _bounded_int(height, 800, 560),
+            }
+        )
     except Exception as e:
         print(f"[Settings] Could not save window size: {e}")
-        return
-    config["settings_window_width"] = _bounded_int(width, 460, 420)
-    config["settings_window_height"] = _bounded_int(height, 800, 560)
-    save_config(config)
 
 
 def _frozen_child_env():
@@ -76,29 +51,6 @@ def _frozen_child_env():
     if getattr(sys, 'frozen', False):
         env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
     return env
-
-
-def _split_aliases(value):
-    if isinstance(value, list):
-        items = value
-    else:
-        items = str(value or "").replace("\n", ",").split(",")
-    return [str(item).strip() for item in items if str(item).strip()]
-
-
-def _clean_custom_albums(items):
-    if not isinstance(items, list):
-        return []
-    cleaned = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        album = str(item.get("album", "")).strip()
-        art_url = str(item.get("art_url", "")).strip()
-        aliases = _split_aliases(item.get("aliases", []))
-        if album and art_url:
-            cleaned.append({"album": album, "aliases": aliases, "art_url": art_url})
-    return cleaned
 
 
 def _read_diagnostics_state():
@@ -110,97 +62,17 @@ def _read_diagnostics_state():
         return {}
 
 
-def _settings_export_payload(config, include_tokens=False):
-    exported = {}
-    for key in DEFAULTS:
-        if key in SENSITIVE_CONFIG_KEYS and not include_tokens:
-            continue
-        exported[key] = config.get(key, DEFAULTS.get(key))
-    if include_tokens:
-        safe_config = exported
-    else:
-        safe_config = redact_data(exported, config)
-    return {
-        "format": "AmazonMusicRPC.settings",
-        "app_version": APP_VERSION,
-        "exported_at": datetime.now().isoformat(timespec="seconds"),
-        "include_tokens": bool(include_tokens),
-        "config": safe_config,
-    }
-
-
-def _settings_import_config(payload, existing):
-    if not isinstance(payload, dict):
-        raise ValueError("Settings file is invalid.")
-    source = payload.get("config") if isinstance(payload.get("config"), dict) else payload
-    include_tokens = bool(payload.get("include_tokens"))
-    if not isinstance(source, dict):
-        raise ValueError("Settings file does not contain settings.")
-    merged = dict(existing)
-    for key, value in source.items():
-        if key not in DEFAULTS:
-            continue
-        if key in SENSITIVE_CONFIG_KEYS and not include_tokens:
-            continue
-        merged[key] = value
-    merged["amazon_music_link_region"] = normalize_amazon_music_link_region(merged.get("amazon_music_link_region"))
-    merged["discord_status_display"] = normalize_discord_status_display(merged.get("discord_status_display"))
-    from amazon_devtools import validate_launcher_override
-    merged["amazon_music_launcher_override"] = validate_launcher_override(merged.get("amazon_music_launcher_override", ""))
-    merged["custom_albums"] = _clean_custom_albums(merged.get("custom_albums", []))
-    return merged
-
-
-def _settings_config_from_payload(data, existing):
-    if not isinstance(data, dict):
-        raise ValueError("Settings payload is invalid.")
-    missing = sorted(key for key in _REQUIRED_SETTINGS_KEYS if key not in data)
-    if missing:
-        raise ValueError(f"Settings payload is incomplete: {', '.join(missing)}")
-
-    use_custom = data.get("use_custom", False)
-    client_id = data.get("client_id", "").strip() if use_custom else DEFAULT_CLIENT_ID
-    listenbrainz_token = data.get("listenbrainz_token", "").strip()
-    if not listenbrainz_token:
-        listenbrainz_token = existing.get("listenbrainz_token", "")
-    from amazon_devtools import validate_launcher_override
-
-    return {
-        **existing,
-        "discord_client_id": client_id,
-        "use_custom_client_id": use_custom,
-        "discord_status_display": normalize_discord_status_display(data.get("discord_status_display")),
-        "start_on_startup": bool(data.get("start_on_startup")),
-        "start_minimized": bool(data.get("start_minimized")),
-        "show_paused": bool(data.get("show_paused", True)),
-        "privacy_private_session": bool(data.get("privacy_private_session")),
-        "privacy_disable_scrobbling": bool(data.get("privacy_disable_scrobbling", True)),
-        "privacy_blocked_keywords": data.get("privacy_blocked_keywords", "").strip(),
-        "game_mode_enabled": bool(data.get("game_mode_enabled")),
-        "game_mode_processes": data.get("game_mode_processes", "").strip(),
-        "custom_albums": _clean_custom_albums(data.get("custom_albums", [])),
-        "song_link_enabled": bool(data.get("song_link_enabled")),
-        "song_link_provider": data.get("song_link_provider") if data.get("song_link_provider") in ("amazon", "deezer") else "amazon",
-        "amazon_music_link_region": normalize_amazon_music_link_region(data.get("amazon_music_link_region")),
-        "notification_enrichment_enabled": bool(data.get("notification_enrichment_enabled")),
-        "amazon_devtools_enabled": bool(data.get("amazon_devtools_enabled")),
-        "amazon_devtools_auto_launch": bool(data.get("amazon_devtools_auto_launch", False)),
-        "amazon_music_launcher_override": validate_launcher_override(data.get("amazon_music_launcher_override", "")),
-        "automatic_update_checks": bool(data.get("automatic_update_checks", True)),
-        "deezer_lookup_enabled": bool(data.get("deezer_lookup_enabled", True)),
-        "itunes_lookup_enabled": bool(data.get("itunes_lookup_enabled", True)),
-        "lastfm_enabled": bool(data.get("lastfm_enabled")),
-        "listenbrainz_enabled": bool(data.get("listenbrainz_enabled")),
-        "listenbrainz_token": listenbrainz_token,
-    }
-
-
-def _settings_payload():
+def _settings_snapshot():
     cfg = load_config()
     try:
         cfg["start_on_startup"] = is_startup_enabled()
     except Exception:
         cfg["start_on_startup"] = False
+    return cfg
+
+
+def _settings_payload(cfg=None):
+    cfg = dict(cfg or _settings_snapshot())
     keys = [
         "discord_client_id",
         "use_custom_client_id",
@@ -231,6 +103,7 @@ def _settings_payload():
         "setup_wizard_seen",
         "setup_wizard_version",
         "enhanced_metadata_prompt_seen",
+        CONFIG_REVISION_KEY,
     ]
     payload = {key: cfg.get(key) for key in keys}
     payload["listenbrainz_token_present"] = bool(cfg.get("listenbrainz_token"))
@@ -2441,44 +2314,68 @@ class _Api:
     def __init__(self, on_save, window_ref):
         self._on_save = on_save
         self._window_ref = window_ref
+        self._baseline = _settings_snapshot()
+
+    def _remember(self, config):
+        self._baseline = dict(config)
+        return {"ok": True, "config": _settings_payload(config)}
+
+    def _save_payload_changes(self, data, extra=None):
+        desired = _settings_config_from_payload(data, self._baseline)
+        updates = {
+            key: desired.get(key)
+            for key in _EDITABLE_CONFIG_KEYS
+            if desired.get(key) != self._baseline.get(key)
+        }
+        updates.update(extra or {})
+        config = update_config_fields(updates) if updates else load_config_for_update()
+        set_startup(config["start_on_startup"], config["start_minimized"])
+        if self._on_save:
+            self._on_save(config)
+        return self._remember(config)
 
     def get_config(self):
-        return _settings_payload()
+        config = _settings_snapshot()
+        self._baseline = dict(config)
+        return _settings_payload(config)
 
     def open_url(self, url):
         import webbrowser
         webbrowser.open(url)
 
     def dismiss_intro(self):
-        config = load_config_for_update()
-        config["intro_seen"] = True
-        config["setup_wizard_seen"] = True
-        config["setup_wizard_version"] = APP_VERSION
-        config["enhanced_metadata_prompt_seen"] = True
-        save_config(config)
-        return {"ok": True, "config": _settings_payload()}
+        config = update_config_fields(
+            {
+                "intro_seen": True,
+                "setup_wizard_seen": True,
+                "setup_wizard_version": APP_VERSION,
+                "enhanced_metadata_prompt_seen": True,
+            }
+        )
+        return self._remember(config)
 
     def complete_setup_wizard(self, data):
-        config = _settings_config_from_payload(data, load_config_for_update())
-        config["intro_seen"] = True
-        config["setup_wizard_seen"] = True
-        config["setup_wizard_version"] = APP_VERSION
-        config["enhanced_metadata_prompt_seen"] = True
-        save_config(config)
-        set_startup(config["start_on_startup"], config["start_minimized"])
-        if self._on_save:
-            self._on_save(config)
-        return {"ok": True, "config": _settings_payload()}
+        return self._save_payload_changes(
+            data,
+            {
+                "intro_seen": True,
+                "setup_wizard_seen": True,
+                "setup_wizard_version": APP_VERSION,
+                "enhanced_metadata_prompt_seen": True,
+            },
+        )
 
     def set_enhanced_metadata_prompt(self, enabled, auto_restart=False):
-        config = load_config_for_update()
-        config["amazon_devtools_enabled"] = bool(enabled)
-        config["amazon_devtools_auto_launch"] = bool(auto_restart) if enabled else False
-        config["enhanced_metadata_prompt_seen"] = True
-        save_config(config)
+        config = update_config_fields(
+            {
+                "amazon_devtools_enabled": bool(enabled),
+                "amazon_devtools_auto_launch": bool(auto_restart) if enabled else False,
+                "enhanced_metadata_prompt_seen": True,
+            }
+        )
         if self._on_save:
             self._on_save(config)
-        return {"ok": True, "config": _settings_payload()}
+        return self._remember(config)
 
     def validate_lb_token(self, token):
         try:
@@ -2522,29 +2419,34 @@ class _Api:
             _Api._skg = None
             _Api._auth_url = None
 
-            config = load_config_for_update()
-            config["lastfm_session_key"] = session_key
-            config["lastfm_username"] = username
-            config["lastfm_enabled"] = True
-            save_config(config)
+            config = update_config_fields(
+                {
+                    "lastfm_session_key": session_key,
+                    "lastfm_username": username,
+                    "lastfm_enabled": True,
+                }
+            )
+            self._baseline = dict(config)
 
             return {"ok": True, "username": username}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
     def clear_scrobbling_tokens(self):
-        config = load_config_for_update()
-        config["lastfm_session_key"] = ""
-        config["lastfm_username"] = ""
-        config["lastfm_enabled"] = False
-        config["listenbrainz_token"] = ""
-        config["listenbrainz_enabled"] = False
-        save_config(config)
+        config = update_config_fields(
+            {
+                "lastfm_session_key": "",
+                "lastfm_username": "",
+                "lastfm_enabled": False,
+                "listenbrainz_token": "",
+                "listenbrainz_enabled": False,
+            }
+        )
         _Api._skg = None
         _Api._auth_url = None
         if self._on_save:
             self._on_save(config)
-        return {"ok": True, "config": _settings_payload()}
+        return self._remember(config)
 
     def check_for_updates(self):
         try:
@@ -2606,12 +2508,12 @@ class _Api:
 
     def set_amazon_launcher_override(self, value):
         from amazon_devtools import validate_launcher_override
-        config = load_config_for_update()
-        config["amazon_music_launcher_override"] = validate_launcher_override(value)
-        save_config(config)
+        config = update_config_fields(
+            {"amazon_music_launcher_override": validate_launcher_override(value)}
+        )
         if self._on_save:
             self._on_save(config)
-        return {"ok": True, "config": _settings_payload()}
+        return self._remember(config)
 
     def test_amazon_launcher(self, value):
         try:
@@ -2642,22 +2544,19 @@ class _Api:
                 return {"ok": False, "error": "Import cancelled."}
             with open(path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
-            config = _settings_import_config(payload, load_config_for_update())
-            save_config(config)
+            source = payload.get("config") if isinstance(payload.get("config"), dict) else payload
+            merged = _settings_import_config(payload, load_config_for_update())
+            updates = {key: merged[key] for key in source if key in DEFAULTS and key in merged}
+            config = update_config_fields(updates) if updates else load_config_for_update()
             set_startup(config.get("start_on_startup"), config.get("start_minimized"))
             if self._on_save:
                 self._on_save(config)
-            return {"ok": True, "config": _settings_payload()}
+            return self._remember(config)
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
     def save_settings(self, data):
-        config = _settings_config_from_payload(data, load_config_for_update())
-        save_config(config)
-        set_startup(config["start_on_startup"], config["start_minimized"])
-
-        if self._on_save:
-            self._on_save(config)
+        return self._save_payload_changes(data)
 
     def close_window(self):
         window = self._window_ref()

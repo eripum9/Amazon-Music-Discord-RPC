@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 import discord_rpc
 from discord_rpc import DiscordRPC, _button_signature, _discord_asset_text
 
@@ -13,6 +15,9 @@ class FakePresence:
     def clear(self):
         self.calls.append(("clear", None))
 
+    def close(self):
+        self.calls.append(("close", None))
+
 
 def make_rpc(fake):
     rpc = DiscordRPC.__new__(DiscordRPC)
@@ -23,6 +28,7 @@ def make_rpc(fake):
     rpc._last_button_signature = None
     rpc._backoff = 3
     rpc._next_retry = 0
+    rpc._closed = False
     return rpc
 
 
@@ -97,3 +103,25 @@ def test_one_character_artist_does_not_leak_helper_label_into_byline():
     assert application["state"] == "by A"
     assert album["details"] == "Song by A"
     assert track["state"] == "by A"
+
+
+def test_shutdown_closes_transport_even_when_presence_clear_fails():
+    class FailingClearPresence(FakePresence):
+        def clear(self):
+            self.calls.append(("clear", None))
+            raise RuntimeError("update transport failed")
+
+    fake = FailingClearPresence()
+    rpc = make_rpc(fake)
+    rpc.shutdown()
+    assert [call[0] for call in fake.calls] == ["clear", "close"]
+    assert rpc.connected is False
+    assert rpc._closed is True
+
+
+def test_shutdown_attempts_clear_after_update_marked_transport_disconnected():
+    fake = FakePresence()
+    rpc = make_rpc(fake)
+    rpc.connected = False
+    rpc.shutdown()
+    assert [call[0] for call in fake.calls] == ["clear", "close"]

@@ -15,12 +15,13 @@ from album_art import get_album_art, search_tracks, find_custom_album_art
 from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, launch_amazon_music_devtools, restart_amazon_music_devtools, amazon_music_is_running, devtools_environment, amazon_music_search_link
 from amazon_status_overlay import AmazonStatusOverlay
 from discord_rpc import DiscordRPC
-from config import load_config, load_config_for_update, save_config, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION, normalize_discord_status_display, redact_data
+from config import load_config, update_config_fields, mutate_config_fields, DEFAULT_CLIENT_ID, CONFIG_PATH, APP_VERSION, normalize_discord_status_display, redact_data
 from amazify_compat import amazify_compat_state, ensure_amazify_compat, push_rpc_state_to_amazify
 from amazify_rpc_bridge import start_amazify_rpc_bridge
 from metadata_pipeline import apply_art_result, apply_devtools_source, base_track_for_devtools, diagnostics_track_link, link_buttons, merge_notification_metadata, should_lookup_deezer_button
 from rpc_state import GameModeState, ResolvedTrackStore, TrackTimingState, configured_game_mode_processes, devtools_no_track_state, duration_value, game_mode_matches_processes, hidden_privacy_track, normalise_process_name, normalised_text, privacy_keywords, privacy_match, running_process_names, same_track_field, track_info_payload, track_position
 from status_summary import metadata_source_summary
+from tray_state import build_snapshot as build_tray_snapshot, format_seconds as _format_tray_seconds, icon_title as _tray_icon_title, signature as _tray_signature, trim as _tray_trim
 from updater import check_for_update, prompt_for_update, run_update_helper
 from app_models import DiagnosticsSnapshot
 from runtime_state import ApplicationState
@@ -69,6 +70,7 @@ _skipped_keys = _resolved_store.skipped_keys
 _wrong_song_prompted_keys = set()
 _current_track_raw = None
 active_rpc = None
+active_scrobblers = ()
 _timing_state = TrackTimingState()
 _track_timing_cache = _timing_state.cache
 _privacy_restart_lock = threading.Lock()
@@ -262,17 +264,23 @@ def _read_tray_command():
 def _set_private_session_enabled(enabled):
     global current_config
     enabled = bool(enabled)
-    config = load_config_for_update()
+    if enabled:
+        _set_scrobbling_privacy(True)
+    config = load_config()
     if bool(config.get("privacy_private_session")) == enabled:
+        if not enabled:
+            _set_scrobbling_privacy(False)
         current_config = config
         update_tray_state()
         return
-    config["privacy_private_session"] = enabled
-    save_config(config)
+    config = update_config_fields({"privacy_private_session": enabled})
     current_config = config
+    application_state.replace_config(config)
     update_tray_state()
     if enabled:
         clear_current_presence("private session enabled")
+    else:
+        _set_scrobbling_privacy(False)
 
     def _restart():
         with _privacy_restart_lock:
@@ -537,9 +545,12 @@ def _resolve_missing_artist(title, artist, config, raw_key):
         _resolved_cache[raw_key] = (chosen["title"], chosen["artist"])
         _store_resolved_track(raw_key, chosen)
         if result.get("remember"):
-            mappings[mapping_key] = _track_info_payload(chosen)
-            config["track_mappings"] = mappings
-            save_config(config)
+            def _remember_mapping(fields):
+                current_mappings = dict(fields.get("track_mappings") or {})
+                current_mappings[mapping_key] = _track_info_payload(chosen)
+                return {"track_mappings": current_mappings}
+
+            mutate_config_fields({"track_mappings"}, _remember_mapping)
 
     _run_picker_async(
         {"mode": "choice", "title": title, "choices": choices, "search_query": title, "page_size": 5},
@@ -591,7 +602,7 @@ def _try_scrobble(scrobbler, lb_scrobbler, title, artist, start_time, album, dur
 
 
 def rpc_loop():
-    global rpc_running, _current_track_raw, active_rpc
+    global rpc_running, _current_track_raw, active_rpc, active_scrobblers
 
     config = current_config
     if config.get("use_custom_client_id") and config.get("discord_client_id"):
@@ -645,6 +656,7 @@ def rpc_loop():
                 config["lastfm_api_key"],
                 config["lastfm_api_secret"],
                 config["lastfm_session_key"],
+                privacy_enabled=bool(config.get("privacy_private_session")),
             )
             lastfm_state = "active"
             print("[Last.fm] Scrobbler active.")
@@ -659,7 +671,10 @@ def rpc_loop():
         listenbrainz_state = "error"
         try:
             from listenbrainz_scrobbler import ListenBrainzScrobbler
-            lb_scrobbler = ListenBrainzScrobbler(config["listenbrainz_token"])
+            lb_scrobbler = ListenBrainzScrobbler(
+                config["listenbrainz_token"],
+                privacy_enabled=bool(config.get("privacy_private_session")),
+            )
             listenbrainz_state = "active"
             print("[ListenBrainz] Scrobbler active.")
         except Exception as e:
@@ -676,6 +691,7 @@ def rpc_loop():
         "lastfm": lastfm_state,
         "listenbrainz": listenbrainz_state,
     }
+    active_scrobblers = tuple(service for service in (scrobbler, lb_scrobbler) if service)
 
     def _link_buttons(title="", artist=""):
         return link_buttons(
@@ -1170,11 +1186,8 @@ def rpc_loop():
     for service in (scrobbler, lb_scrobbler):
         if service and hasattr(service, "close"):
             service.close()
-    try:
-        rpc.clear()
-        rpc.disconnect()
-    except Exception:
-        pass
+    active_scrobblers = ()
+    rpc.shutdown()
     if active_rpc is rpc:
         active_rpc = None
         application_state.set_active_rpc(None)
@@ -1250,24 +1263,26 @@ def clear_current_presence(reason=""):
     return False
 
 
+def _set_scrobbling_privacy(enabled):
+    for service in tuple(active_scrobblers):
+        try:
+            service.set_privacy(bool(enabled))
+        except Exception as e:
+            print(f"[Privacy] Could not update scrobbling privacy gate: {e}")
+
+
 def toggle_private_session(icon=None, item=None):
-    global current_config
-    config = load_config_for_update()
-    config["privacy_private_session"] = not bool(config.get("privacy_private_session"))
-    save_config(config)
-    current_config = config
-    application_state.replace_config(config)
-    if config["privacy_private_session"]:
-        clear_current_presence("private session enabled")
-    restart_rpc()
-    print(f"[Privacy] Private session {'enabled' if config['privacy_private_session'] else 'disabled'}.")
+    enabled = not bool(load_config().get("privacy_private_session"))
+    _set_private_session_enabled(enabled)
+    print(f"[Privacy] Private session {'enabled' if enabled else 'disabled'}.")
 
 
 def toggle_game_mode(icon=None, item=None):
     global current_config
-    config = load_config_for_update()
-    config["game_mode_enabled"] = not bool(config.get("game_mode_enabled"))
-    save_config(config)
+    config = mutate_config_fields(
+        {"game_mode_enabled"},
+        lambda fields: {"game_mode_enabled": not bool(fields.get("game_mode_enabled"))},
+    )
     current_config = config
     application_state.replace_config(config)
     restart_rpc()
@@ -1284,6 +1299,8 @@ def _on_config_changed(previous, current, previous_rpc, current_rpc):
     current_config = current
     application_state.replace_config(current)
     _sync_status_overlay(current)
+    if current.get("privacy_private_session") != previous.get("privacy_private_session"):
+        _set_scrobbling_privacy(bool(current.get("privacy_private_session")))
     if current_rpc != previous_rpc:
         if current.get("privacy_private_session") and not previous.get("privacy_private_session"):
             clear_current_presence("private session enabled")
@@ -1396,89 +1413,17 @@ def _handle_tray_command(command):
     return command_controller.dispatch(command)
 
 
-def _tray_trim(value, limit=58):
-    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
-    while "  " in text:
-        text = text.replace("  ", " ")
-    if len(text) <= limit:
-        return text
-    return text[:max(0, limit - 3)].rstrip() + "..."
-
-
-def _format_tray_seconds(value):
-    try:
-        total = int(float(value))
-    except (TypeError, ValueError):
-        return ""
-    if total < 0:
-        return ""
-    minutes, seconds = divmod(total, 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours}:{minutes:02d}:{seconds:02d}"
-    return f"{minutes}:{seconds:02d}"
-
-
-def _tray_time_label(track):
-    position = _format_tray_seconds(track.get("position"))
-    duration = _format_tray_seconds(track.get("duration"))
-    if position and duration:
-        return f"{position} / {duration}"
-    return duration or position
-
-
-def _tray_line(label, value, limit=64):
-    text = _tray_trim(value, max(10, limit - len(label) - 2))
-    return f"{label}: {text}" if text else f"{label}: -"
-
-
 def _tray_menu_snapshot(state=None):
     state = state if isinstance(state, dict) else (_last_tray_state or _read_diagnostics_state())
     config = current_config if isinstance(current_config, dict) else {}
-    track = state.get("track") if isinstance(state.get("track"), dict) else {}
-    privacy = state.get("privacy") if isinstance(state.get("privacy"), dict) else {}
-    amazon = state.get("amazon_devtools") if isinstance(state.get("amazon_devtools"), dict) else {}
     source = metadata_source_summary(state, config)
-    title = track.get("title") or ""
-    artist = track.get("artist") or ""
-    album = track.get("album") or state.get("album_name") or ""
-    track_link = state.get("track_link") or ""
-    presence_visible = bool(state.get("presence_visible"))
-    private = bool(config.get("privacy_private_session") or privacy.get("hidden"))
-    return {
-        "rpc": "On" if rpc_running else "Off",
-        "discord": str(state.get("discord_status") or ("connected" if active_rpc and active_rpc.connected else "waiting")).title(),
-        "presence": "Private" if private else ("Visible" if presence_visible else "Hidden"),
-        "source": source.get("label") or "Waiting",
-        "source_detail": source.get("detail") or "",
-        "title": title,
-        "artist": artist,
-        "album": album,
-        "time": _tray_time_label(track),
-        "track_link": track_link,
-        "has_track": bool(title or artist or album),
-        "private": private,
-        "devtools": "On" if config.get("amazon_devtools_enabled") else "Off",
-        "devtools_status": str(amazon.get("status") or ("off" if not config.get("amazon_devtools_enabled") else "waiting")).title(),
-        "game_mode": "On" if config.get("game_mode_enabled") else "Off",
-        "link_provider": str(config.get("song_link_provider") or "amazon").title(),
-    }
-
-
-def _tray_signature(snapshot):
-    keys = ("rpc", "discord", "presence", "source", "title", "artist", "album", "time", "track_link", "devtools", "devtools_status", "game_mode", "link_provider")
-    return "|".join(str(snapshot.get(key) or "") for key in keys)
-
-
-def _tray_icon_title(snapshot):
-    if snapshot.get("private"):
-        return "Amazon Music RPC - Private"
-    if snapshot.get("title"):
-        title = snapshot.get("title")
-        artist = snapshot.get("artist")
-        text = f"{title} - {artist}" if artist else title
-        return _tray_trim(text, 120)
-    return f"Amazon Music RPC - RPC {snapshot.get('rpc', 'Off')}"
+    return build_tray_snapshot(
+        state,
+        config,
+        source,
+        rpc_running,
+        bool(active_rpc and active_rpc.connected),
+    )
 
 
 def on_quit(icon, item):
@@ -1486,6 +1431,9 @@ def on_quit(icon, item):
     rpc_running = False
     application_state.set_rpc_running(False)
     tasks.request_stop()
+    rpc = active_rpc
+    if rpc is not None:
+        rpc.shutdown()
     if amazify_bridge is not None:
         amazify_bridge.stop()
         amazify_bridge = None

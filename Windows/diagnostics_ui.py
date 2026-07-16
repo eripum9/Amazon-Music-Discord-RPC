@@ -9,7 +9,7 @@ import webbrowser
 import zipfile
 from datetime import datetime
 import webview
-from config import load_config, load_config_for_update, save_config, CONFIG_DIR, CONFIG_PATH, APP_VERSION, redact_data, redact_text
+from config import load_config, update_config_fields, CONFIG_DIR, CONFIG_PATH, APP_VERSION, redact_data, redact_text
 from status_summary import metadata_source_summary
 
 if getattr(sys, 'frozen', False):
@@ -39,13 +39,14 @@ def _bounded_int(value, default, minimum):
 
 def _save_window_size(width, height):
     try:
-        config = load_config_for_update()
+        update_config_fields(
+            {
+                "diagnostics_window_width": _bounded_int(width, 940, 700),
+                "diagnostics_window_height": _bounded_int(height, 700, 520),
+            }
+        )
     except Exception as e:
         print(f"[Diagnostics] Could not save window size: {e}")
-        return
-    config["diagnostics_window_width"] = _bounded_int(width, 940, 700)
-    config["diagnostics_window_height"] = _bounded_int(height, 700, 520)
-    save_config(config)
 
 
 def _read_state():
@@ -1059,9 +1060,7 @@ class _Api:
         return {"dismissed": bool(load_config().get("diagnostics_tests_warning_dismissed"))}
 
     def dismiss_test_warning(self):
-        config = load_config_for_update()
-        config["diagnostics_tests_warning_dismissed"] = True
-        save_config(config)
+        update_config_fields({"diagnostics_tests_warning_dismissed": True})
         return {"ok": True}
 
     def set_config_flag(self, key, value):
@@ -1073,9 +1072,7 @@ class _Api:
         }
         if key not in allowed:
             return {"ok": False, "error": "Unsupported flag"}
-        config = load_config_for_update()
-        config[key] = bool(value)
-        save_config(config)
+        update_config_fields({key: bool(value)})
         return {"ok": True}
 
     def run_tests(self):

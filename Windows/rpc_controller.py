@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 class RpcController:
     def __init__(self, tasks, state, config_provider, diagnostics_writer, tray_updater, loop_target, default_client_id, running_setter):
         self._tasks = tasks

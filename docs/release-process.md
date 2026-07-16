@@ -10,7 +10,7 @@ Official Windows releases are built by `.github/workflows/release-draft.yml`. Th
 - Official builds use Python 3.12.10, the final Python 3.12 release with Windows binaries, so the published WinSDK wheel is used instead of compiling WinSDK from source.
 - GitHub Actions are pinned to full commit SHAs.
 - UPX compression and binary stripping are disabled.
-- Optional Authenticode signing runs only when both signing secrets are configured.
+- Windows artifacts are currently unsigned and release notes state this clearly.
 - The installer and checksum receive GitHub build provenance attestations.
 
 ## Workflow Inputs
@@ -33,15 +33,6 @@ The workflow also stores a private Actions artifact for 90 days containing:
 - Security check report
 - Generated release notes
 
-## Signing
-
-Configure both repository secrets to enable Windows signing:
-
-- `WINDOWS_SIGNING_PFX_BASE64`
-- `WINDOWS_SIGNING_PFX_PASSWORD`
-
-If neither secret exists, the workflow creates an unsigned draft and labels it accordingly. If only one exists, the workflow fails instead of producing an ambiguous artifact.
-
 ## Publication
 
-Review the generated notes, evidence, installer behavior, checksum, signing status, and attestation. Publish the existing draft only after completing [the release checklist](release-checklist.md).
+Review the generated notes, evidence, installer behavior, checksum, and attestation. Publish the existing draft only after completing [the release checklist](release-checklist.md).

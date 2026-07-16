@@ -2,17 +2,10 @@ param(
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][string]$Summary,
     [Parameter(Mandatory = $true)][AllowEmptyString()][string[]]$GeneratedNotes,
-    [Parameter(Mandatory = $true)][string]$OutputPath,
-    [Parameter(Mandatory = $true)][bool]$Signed
+    [Parameter(Mandatory = $true)][string]$OutputPath
 )
 
 $generatedText = $GeneratedNotes -join [Environment]::NewLine
-
-$signingText = if ($Signed) {
-    "The Windows executable and installer were code-signed and verified during the release workflow."
-} else {
-    "This draft is unsigned because no Windows code-signing certificate was configured. Windows SmartScreen may display a warning."
-}
 
 $body = @"
 Discord Rich Presence integration for Amazon Music.
@@ -33,7 +26,7 @@ $generatedText
 
 Download `AmazonMusicRPC_Setup.exe` and `AmazonMusicRPC_Setup.exe.sha256` from the assets below, verify the checksum, then run the installer. No Python installation is required.
 
-$signingText
+This installer is not Authenticode signed, so Windows SmartScreen may display a warning. Verify the SHA256 checksum and GitHub build provenance before running it.
 
 ## Build Provenance
 

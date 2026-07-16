@@ -1,3 +1,5 @@
+# MIT License - Copyright (c) 2026 eripum9
+
 import desktop_runtime as main
 import qt_tray_ui
 from status_summary import metadata_source_summary
