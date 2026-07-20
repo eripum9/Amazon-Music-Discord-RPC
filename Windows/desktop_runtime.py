@@ -11,7 +11,7 @@ import tempfile
 
 from media_reader import get_track_sync
 from notification_reader import get_notification_track_sync, is_new_notification
-from album_art import get_album_art, search_tracks, find_custom_album_art
+from album_art import get_album_art, search_tracks
 from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, launch_amazon_music_devtools, restart_amazon_music_devtools, amazon_music_is_running, devtools_environment, amazon_music_search_link
 from amazon_status_overlay import AmazonStatusOverlay
 from discord_rpc import DiscordRPC
@@ -19,9 +19,9 @@ from config import load_config, update_config_fields, mutate_config_fields, DEFA
 from amazify_compat import amazify_compat_state, ensure_amazify_compat, push_rpc_state_to_amazify
 from amazify_rpc_bridge import start_amazify_rpc_bridge
 from metadata_pipeline import apply_art_result, apply_devtools_source, base_track_for_devtools, diagnostics_track_link, link_buttons, merge_notification_metadata, should_lookup_deezer_button
-from rpc_state import GameModeState, ResolvedTrackStore, TrackTimingState, configured_game_mode_processes, devtools_no_track_state, duration_value, game_mode_matches_processes, hidden_privacy_track, normalise_process_name, normalised_text, privacy_keywords, privacy_match, running_process_names, same_track_field, track_info_payload, track_position
+from rpc_state import GameModeState, ResolvedTrackStore, TrackTimingState, apply_track_mapping, configured_game_mode_processes, devtools_no_track_state, duration_value, find_custom_album_art, game_mode_matches_processes, hidden_privacy_track, normalise_process_name, normalise_track, normalised_text, privacy_keywords, privacy_match, remembered_track_mapping, running_process_names, same_track_field, scrobble_eligible, track_info_payload, track_position
 from status_summary import metadata_source_summary
-from tray_state import build_snapshot as build_tray_snapshot, format_seconds as _format_tray_seconds, icon_title as _tray_icon_title, signature as _tray_signature, trim as _tray_trim
+from tray_state import build_snapshot as build_tray_snapshot, icon_title as _tray_icon_title, signature as _tray_signature
 from updater import check_for_update, prompt_for_update, run_update_helper
 from app_models import DiagnosticsSnapshot
 from runtime_state import ApplicationState
@@ -264,9 +264,10 @@ def _read_tray_command():
 def _set_private_session_enabled(enabled):
     global current_config
     enabled = bool(enabled)
-    if enabled:
-        _set_scrobbling_privacy(True)
     config = load_config()
+    _set_scrobbling_privacy(
+        enabled and bool(config.get("privacy_disable_scrobbling", True))
+    )
     if bool(config.get("privacy_private_session")) == enabled:
         if not enabled:
             _set_scrobbling_privacy(False)
@@ -323,6 +324,15 @@ _track_info_payload = track_info_payload
 _normalise_process_name = normalise_process_name
 _configured_game_mode_processes = configured_game_mode_processes
 _game_mode_matches_processes = game_mode_matches_processes
+
+
+def _privacy_safe_devtools_state(state):
+    if not isinstance(state, dict):
+        return {}
+    allowed = ("enabled", "status", "detail", "source", "port", "method", "owner")
+    return {key: state[key] for key in allowed if key in state}
+
+
 _running_process_names = running_process_names
 
 
@@ -513,13 +523,13 @@ def _resolve_missing_artist(title, artist, config, raw_key):
     if raw_key in _skipped_keys:
         return title, artist
 
-    mappings = config.get("track_mappings", {})
-    mapping_key = title.lower().strip()
-    if mapping_key in mappings:
-        m = mappings[mapping_key]
-        result = (m.get("title", title), m.get("artist", ""))
+    mapping_key = _normalised_text(title)
+    remembered = remembered_track_mapping(config, title, artist)
+    if remembered:
+        mapped = apply_track_mapping(config, {"title": title, "artist": artist})
+        result = (mapped.get("title", title), mapped.get("artist", ""))
         _resolved_cache[raw_key] = result
-        _store_resolved_track(raw_key, m)
+        _store_resolved_track(raw_key, mapped)
         return result
 
     with _picker_lock:
@@ -586,7 +596,7 @@ def _try_scrobble(scrobbler, lb_scrobbler, title, artist, start_time, album, dur
     if not title or not start_time:
         return False
     elapsed = time.time() - start_time
-    if not (elapsed >= 30 and (duration > 0 and elapsed >= duration * 0.5 or elapsed >= 240)):
+    if not scrobble_eligible(elapsed, duration):
         return False
     if scrobbler:
         try:
@@ -656,7 +666,10 @@ def rpc_loop():
                 config["lastfm_api_key"],
                 config["lastfm_api_secret"],
                 config["lastfm_session_key"],
-                privacy_enabled=bool(config.get("privacy_private_session")),
+                privacy_enabled=bool(
+                    config.get("privacy_private_session")
+                    and privacy_disable_scrobbling
+                ),
             )
             lastfm_state = "active"
             print("[Last.fm] Scrobbler active.")
@@ -673,7 +686,10 @@ def rpc_loop():
             from listenbrainz_scrobbler import ListenBrainzScrobbler
             lb_scrobbler = ListenBrainzScrobbler(
                 config["listenbrainz_token"],
-                privacy_enabled=bool(config.get("privacy_private_session")),
+                privacy_enabled=bool(
+                    config.get("privacy_private_session")
+                    and privacy_disable_scrobbling
+                ),
             )
             listenbrainz_state = "active"
             print("[ListenBrainz] Scrobbler active.")
@@ -725,24 +741,29 @@ def rpc_loop():
             last_deezer_duration = deezer_duration
 
     def _update_state(track=None, presence=False, error="", privacy_reason=""):
+        hidden = bool(privacy_reason)
         _write_diagnostics_state(
             rpc_status="running" if rpc_running else "stopped",
             discord_status="connected" if rpc.connected else "retrying",
             client_id=client_id,
             track=track,
             presence_visible=presence,
-            album_art_url=last_art_url or "",
-            album_name=last_album_name or "",
-            track_link=_diagnostics_track_link(track),
+            album_art_url="" if hidden else (last_art_url or ""),
+            album_name="" if hidden else (last_album_name or ""),
+            track_link="" if hidden else _diagnostics_track_link(track),
             notification_enabled=notification_enrichment_enabled,
-            notification=_current_notif_data,
-            amazon_devtools=_current_amazon_devtools,
+            notification=None if hidden else _current_notif_data,
+            amazon_devtools=(
+                _privacy_safe_devtools_state(_current_amazon_devtools)
+                if hidden
+                else _current_amazon_devtools
+            ),
             amazify=_amazify_compat_snapshot(),
             scrobbling=scrobbling_state,
             privacy={
                 "private_session": bool(config.get("privacy_private_session")),
-                "blocked_keywords": config.get("privacy_blocked_keywords", ""),
-                "hidden": bool(privacy_reason),
+                "blocked_keywords": "" if hidden else config.get("privacy_blocked_keywords", ""),
+                "hidden": hidden,
                 "reason": privacy_reason,
             },
             last_error=error,
@@ -881,6 +902,14 @@ def rpc_loop():
                 _update_state(track=None, presence=False)
                 time.sleep(3)
                 continue
+
+            # Native sources keep their private enrichment fields, while the
+            # common playback fields follow the same normalization rules as
+            # the macOS runtime.
+            normalised_track = normalise_track(track)
+            if normalised_track:
+                for field in ("title", "artist", "album", "status", "position", "duration"):
+                    track[field] = normalised_track[field]
 
             if track["status"] == "paused":
                 last_playback_status = "paused"
@@ -1036,14 +1065,19 @@ def rpc_loop():
                 last_deezer_track_link = None
 
                 resolved = _resolved_art(raw_key, title, artist, track.get("album", ""))
-                fetched = None if resolved or track.get("_amazon_art_url") else get_album_art(title, artist)
+                fetched = (
+                    None
+                    if privacy_reason or resolved or track.get("_amazon_art_url")
+                    else get_album_art(title, artist)
+                )
                 art_state = apply_art_result(track, resolved, fetched, _notif_album, last_album_name)
                 last_art_url = art_state["art_url"]
                 last_album_name = art_state["album"]
                 last_deezer_track_link = art_state["deezer_link"]
                 last_deezer_duration = art_state["duration"]
                 last_amazon_track_link = art_state["amazon_link"]
-                _ensure_deezer_button_link(title, artist)
+                if not privacy_reason:
+                    _ensure_deezer_button_link(title, artist)
                 last_art_url, last_album_name = _apply_custom_album_override(
                     config, last_art_url, last_album_name, _notif_album, track.get("album", "")
                 )
@@ -1074,14 +1108,19 @@ def rpc_loop():
                                 pass
             elif raw_key in _resolved_cache and last_art_fetch_key != track_art_key:
                 resolved = _resolved_art(raw_key, title, artist, track.get("album", ""))
-                fetched = None if resolved or track.get("_amazon_art_url") else get_album_art(title, artist)
+                fetched = (
+                    None
+                    if privacy_reason or resolved or track.get("_amazon_art_url")
+                    else get_album_art(title, artist)
+                )
                 art_state = apply_art_result(track, resolved, fetched, _notif_album, last_album_name)
                 last_art_url = art_state["art_url"]
                 last_album_name = art_state["album"]
                 last_deezer_track_link = art_state["deezer_link"]
                 last_deezer_duration = art_state["duration"]
                 last_amazon_track_link = art_state["amazon_link"]
-                _ensure_deezer_button_link(title, artist)
+                if not privacy_reason:
+                    _ensure_deezer_button_link(title, artist)
                 last_art_url, last_album_name = _apply_custom_album_override(
                     config, last_art_url, last_album_name, _notif_album, track.get("album", "")
                 )
@@ -1118,7 +1157,7 @@ def rpc_loop():
             if _notif_album:
                 last_album_name = _notif_album
                 notif_art_key = f"{title}|{artist}|{_notif_album}".lower()
-                if _notif_art_fetched_for != notif_art_key:
+                if not privacy_reason and _notif_art_fetched_for != notif_art_key:
                     _notif_art, _notif_aname, _notif_link, _notif_dur = get_album_art(title, f"{artist} {_notif_album}")
                     if _notif_art:
                         last_art_url = _notif_art
@@ -1299,8 +1338,17 @@ def _on_config_changed(previous, current, previous_rpc, current_rpc):
     current_config = current
     application_state.replace_config(current)
     _sync_status_overlay(current)
-    if current.get("privacy_private_session") != previous.get("privacy_private_session"):
-        _set_scrobbling_privacy(bool(current.get("privacy_private_session")))
+    privacy_gate_changed = any(
+        current.get(key) != previous.get(key)
+        for key in ("privacy_private_session", "privacy_disable_scrobbling")
+    )
+    if privacy_gate_changed:
+        _set_scrobbling_privacy(
+            bool(
+                current.get("privacy_private_session")
+                and current.get("privacy_disable_scrobbling", True)
+            )
+        )
     if current_rpc != previous_rpc:
         if current.get("privacy_private_session") and not previous.get("privacy_private_session"):
             clear_current_presence("private session enabled")
