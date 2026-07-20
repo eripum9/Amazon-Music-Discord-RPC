@@ -1,5 +1,5 @@
 [tool.pytest.ini_options]
-testpaths = ["Windows/tests"]
+testpaths = ["Windows/tests", "MacOS/tests"]
 
 [tool.coverage.run]
 source = ["Windows"]
