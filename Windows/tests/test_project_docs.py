@@ -93,7 +93,7 @@ def test_official_release_workflow_keeps_trust_guards():
     assert "gh release create" in workflow
     assert "gh release publish" not in workflow
     assert "AmazonMusicRPC_Setup.exe.sha256" in workflow
-    assert "attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373" in workflow
+    assert "attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8" in workflow
     assert "upx=False" in spec
     assert "strip=False" in spec
     assert "cryptography==49.0.0" in lock
