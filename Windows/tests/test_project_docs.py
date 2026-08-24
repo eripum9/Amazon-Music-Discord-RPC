@@ -100,7 +100,10 @@ def test_official_release_workflow_keeps_trust_guards():
     assert "attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8" in workflow
     assert "upx=False" in spec
     assert "strip=False" in spec
-    assert "cryptography==49.0.0" in lock
+    assert "cryptography==50.0.0" in lock
+    assert "cryptography==49.0.0" not in lock
+    assert "pip==26.2.1" in lock
+    assert "pip==26.1.2" not in lock
     assert "pillow==12.3.0" in lock
     assert "pillow==12.2.0" not in lock
     assert "pytest-cov==7.1.0" in lock

@@ -1,6 +1,6 @@
 # macOS Beta
 
-macOS is an active beta development target maintained on `master`. Windows remains the only published stable release, and v5.0.1 does not include a macOS artifact. The macOS build is a menu-bar app for Amazon's official `/Applications/Amazon Music.app`; it is not a browser wrapper and does not alter the Amazon application bundle.
+macOS is an active beta development target maintained on `master`. Windows remains the only published stable release, and the release workflow does not include a macOS artifact yet. The macOS build is a menu-bar app for Amazon's official `/Applications/Amazon Music.app`; it is not a browser wrapper and does not alter the Amazon application bundle.
 
 ## Implemented Beta Features
 

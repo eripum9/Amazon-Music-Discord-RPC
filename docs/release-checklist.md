@@ -17,6 +17,7 @@ Use this to review and publish a release draft created by the **Build Draft Rele
 - `Windows/installer_output/AmazonMusicRPC_Setup.exe.sha256`
 - Release notes with a clear changelog
 - Compatibility note for enhanced metadata and fallback mode
+- Platform-status note that macOS remains an active beta and no macOS artifact is included
 
 Always upload `AmazonMusicRPC_Setup.exe` and its newly generated `AmazonMusicRPC_Setup.exe.sha256` together. Never reuse a checksum from an earlier build or publish the installer without its matching sidecar.
 
@@ -53,6 +54,7 @@ Every release description should include:
 - Keep the latest installer attached to the release.
 - Confirm `AmazonMusicRPC_Setup.exe.sha256` is attached beside the installer and matches the uploaded installer. v4.0.1 is the final transition release that also includes the hash in its description.
 - Confirm the release contains only the installer and checksum as public release assets.
+- Confirm no macOS DMG is attached until the macOS release process is explicitly approved.
 - Download the Actions `release-evidence-vX.Y.Z` artifact and review the SBOM, build manifest, and security report.
 - Verify the attestation with `gh attestation verify AmazonMusicRPC_Setup.exe -R eripum9/Amazon-Music-Discord-RPC`.
 - Confirm the release notes state that the installer is unsigned and explain checksum and provenance verification.

@@ -146,7 +146,7 @@ Official installers are created only by the manually triggered **Build Draft Rel
 
 ### macOS beta DMG
 
-The macOS build tooling produces `Amazon-Music-RPC.dmg` with `Amazon Music RPC.app` and an Applications shortcut. Mount the DMG, drag the app onto **Applications**, eject the DMG, and launch the installed copy. This is currently a local beta development artifact, not a published release. The v5.0.1 release remains Windows-only and does not include a macOS DMG. This repository does not claim that a macOS artifact has been Developer ID signed or notarized; verify the provenance of any DMG before opening it.
+The macOS build tooling produces `Amazon-Music-RPC.dmg` with `Amazon Music RPC.app` and an Applications shortcut. Mount the DMG, drag the app onto **Applications**, eject the DMG, and launch the installed copy. This is currently a local beta development artifact, not a published release. The release workflow remains Windows-only and does not include a macOS DMG. This repository does not claim that a macOS artifact has been Developer ID signed or notarized; verify the provenance of any DMG before opening it.
 
 ### Windows from source
 

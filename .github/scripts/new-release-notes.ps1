@@ -18,6 +18,10 @@ time directly on your Discord profile.
 
 Enhanced metadata on Windows is built and tested for the Microsoft Store version of Amazon Music. The website installer may reject the metadata launch flag. If that happens, install Amazon Music from the Microsoft Store or disable **Enhanced Amazon metadata** and use fallback mode.
 
+## Platform Status
+
+This release publishes the Windows installer only. macOS is an active beta in the source tree and CI, but no official macOS artifact is included yet.
+
 ## Changes
 
 $generatedText

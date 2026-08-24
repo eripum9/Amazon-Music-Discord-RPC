@@ -21,7 +21,7 @@ import fcntl
 
 APP_NAME = "AmazonMusicRPC"
 APP_DISPLAY_NAME = "Amazon Music RPC"
-APP_VERSION = "5.0.0-macos-beta.1"
+APP_VERSION = "5.0.1-macos-beta.1"
 BUNDLE_IDENTIFIER = "io.github.eripum9.amazon-music-rpc"
 DEFAULT_CLIENT_ID = "1479925587697995857"
 CONFIG_REVISION_KEY = "_revision"
