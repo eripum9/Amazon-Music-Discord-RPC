@@ -1,11 +1,14 @@
 import os
+from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
 project_dir = os.path.dirname(os.path.abspath(SPEC))
+repository_dir = os.path.dirname(project_dir)
+shared_hidden_imports = collect_submodules('Shared')
 
 a = Analysis(
     [os.path.join(project_dir, 'main.py')],
-    pathex=[project_dir],
+    pathex=[repository_dir, project_dir],
     binaries=[],
     datas=[
         (os.path.join(project_dir, 'icon.png'), '.'),
@@ -13,6 +16,7 @@ a = Analysis(
     hiddenimports=[
         'PySide6.QtCore',
         'PySide6.QtGui',
+        'PySide6.QtNetwork',
         'PySide6.QtWidgets',
         'winsdk',
         'winsdk.windows.media.control',
@@ -51,6 +55,7 @@ a = Analysis(
         'amazify_rpc_bridge',
         'winsdk.windows.ui.notifications',
         'winsdk.windows.ui.notifications.management',
+        *shared_hidden_imports,
     ],
     hookspath=[],
     hooksconfig={},

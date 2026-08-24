@@ -75,3 +75,29 @@ def test_devtools_no_track_state_preserves_actionable_statuses():
     assert main._devtools_no_track_state(True, restarting) == restarting
     assert waiting["status"] == "waiting"
     assert main._devtools_no_track_state(False, unavailable) == unavailable
+
+
+def test_private_diagnostics_devtools_state_drops_track_metadata():
+    state = {
+        "enabled": True,
+        "status": "found",
+        "detail": "metadata found",
+        "source": "amazon_devtools",
+        "port": 52856,
+        "title": "Private Song",
+        "artist": "Private Artist",
+        "album": "Private Album",
+        "art_url": "https://example.test/private.jpg",
+        "track_link": "https://music.amazon.com/private",
+        "position": 42,
+        "duration": 180,
+    }
+
+    safe = main._privacy_safe_devtools_state(state)
+    assert safe == {
+        "enabled": True,
+        "status": "found",
+        "detail": "metadata found",
+        "source": "amazon_devtools",
+        "port": 52856,
+    }

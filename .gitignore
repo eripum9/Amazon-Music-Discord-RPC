@@ -5,6 +5,7 @@ Windows/build/
 Windows/dist/
 Windows/installer_output/
 TestBuild/
+.DS_Store
 
 __pycache__/
 *.pyc

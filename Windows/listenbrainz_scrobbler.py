@@ -4,7 +4,10 @@ import traceback
 import threading
 import liblistenbrainz
 
-from task_supervisor import TaskSupervisor
+try:
+    from .task_supervisor import TaskSupervisor
+except ImportError:  # Direct execution and the existing Windows frozen entrypoint.
+    from task_supervisor import TaskSupervisor
 
 
 class ListenBrainzScrobbler:

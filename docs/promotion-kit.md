@@ -2,11 +2,11 @@
 
 ## Main Positioning
 
-Spotify-style Discord Rich Presence for Amazon Music on Windows.
+Spotify-style Discord Rich Presence for Amazon Music on Windows and macOS.
 
 ## Short Description
 
-Amazon Music RPC shows your current Amazon Music song, artist, album art, pause state, and live timer on your Discord profile. It also supports Last.fm, ListenBrainz, privacy mode, keyword filters, and a normal Windows installer.
+Amazon Music RPC shows your current Amazon Music song, artist, album art, pause state, and live timer on your Discord profile. It also supports Last.fm, ListenBrainz, privacy mode, and keyword filters. Windows has a normal stable installer; macOS is an active source-build beta and does not yet have an official release artifact.
 
 ## Reddit Post Template
 
@@ -46,7 +46,7 @@ How to Show Amazon Music on Discord Like Spotify
 
 ## Demo Video Description
 
-Amazon Music RPC is an open-source Windows app that shows your Amazon Music now playing status on Discord, including song title, artist, album art, pause state, and live timer.
+Amazon Music RPC is an open-source Windows and macOS app that shows your Amazon Music now playing status on Discord, including song title, artist, album art, pause state, and live timer. Windows is stable; macOS is currently an active beta.
 
 Download: https://github.com/eripum9/Amazon-Music-Discord-RPC/releases/latest
 

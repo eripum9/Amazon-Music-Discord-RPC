@@ -3,88 +3,38 @@
 import csv
 import os
 import subprocess
+import sys
 import time
 
 
+# ``python Windows/main.py`` puts only ``Windows`` on the import path.  Add the
+# repository root before importing the source-shared package; frozen builds
+# include the same package through their PyInstaller spec.
+_REPOSITORY_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if not getattr(sys, "frozen", False) and _REPOSITORY_ROOT not in sys.path:
+    sys.path.insert(0, _REPOSITORY_ROOT)
+
+from Shared.playback import (  # noqa: E402, F401 -- compatibility re-exports
+    apply_track_mapping,
+    configured_game_mode_processes,
+    duration_value,
+    find_custom_album_art,
+    game_mode_matches_processes,
+    normalise_process_name,
+    normalise_track,
+    normalised_text,
+    privacy_keywords,
+    privacy_match,
+    privacy_reason,
+    remembered_track_mapping,
+    remembered_track_mapping_key,
+    same_track_field,
+    scrobble_eligible,
+    track_info_payload,
+)
+
+
 PLAYBACK_TIME_DRIFT_SECONDS = 1.0
-
-
-def privacy_keywords(config):
-    raw = config.get("privacy_blocked_keywords", "")
-    return [item.strip().lower() for item in raw.replace("\n", ",").split(",") if item.strip()]
-
-
-def privacy_match(config, title="", artist="", album=""):
-    if config.get("privacy_private_session"):
-        return "Private session enabled"
-    haystack = f"{title} {artist} {album}".lower()
-    for keyword in privacy_keywords(config):
-        if keyword in haystack:
-            return f"Matched privacy keyword: {keyword}"
-    return ""
-
-
-def normalised_text(value):
-    return " ".join(str(value or "").strip().lower().split())
-
-
-def same_track_field(left, right):
-    left = normalised_text(left)
-    right = normalised_text(right)
-    return bool(left and right and left == right)
-
-
-def duration_value(value):
-    try:
-        return max(0, int(float(value or 0)))
-    except (TypeError, ValueError):
-        return 0
-
-
-def track_info_payload(track):
-    return {
-        "title": track.get("title", ""),
-        "artist": track.get("artist", ""),
-        "album": track.get("album", ""),
-        "art_url": track.get("art_url", ""),
-        "track_link": track.get("track_link", ""),
-        "duration": duration_value(track.get("duration", 0)),
-    }
-
-
-def normalise_process_name(value):
-    text = str(value or "").strip().strip('"').strip("'").lower()
-    return os.path.basename(text)
-
-
-def configured_game_mode_processes(config):
-    value = config.get("game_mode_processes", "")
-    if isinstance(value, list):
-        parts = value
-    else:
-        parts = str(value or "").replace(";", ",").replace("\n", ",").split(",")
-    return {name for name in (normalise_process_name(part) for part in parts) if name}
-
-
-def game_mode_matches_processes(configured, running_names):
-    running = set()
-    for name in running_names:
-        clean = normalise_process_name(name)
-        if clean:
-            running.add(clean)
-            stem, ext = os.path.splitext(clean)
-            if ext == ".exe" and stem:
-                running.add(stem)
-    for name in configured:
-        clean = normalise_process_name(name)
-        if clean in running:
-            return True
-        stem, ext = os.path.splitext(clean)
-        if ext == ".exe" and stem in running:
-            return True
-        if not ext and f"{clean}.exe" in running:
-            return True
-    return False
 
 
 def _tasklist_executable():

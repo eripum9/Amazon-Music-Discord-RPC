@@ -11,9 +11,9 @@ https://github.com/eripum9/Amazon-Music-Discord-RPC/releases/latest
 For bugs, include:
 
 - Amazon Music RPC version
-- Windows version
-- Install type: installer or source
-- Amazon Music source: Microsoft Store or website installer
+- Platform and OS version
+- Install type: Windows installer, macOS beta DMG, or source
+- Amazon Music app version and source: Microsoft Store/website on Windows or the official macOS app
 - Whether enhanced metadata is enabled
 - Whether fallback metadata or notification enrichment is enabled
 - Exact steps to reproduce
@@ -25,10 +25,10 @@ Do not post Last.fm session keys, ListenBrainz tokens, Discord tokens, config fi
 
 ## Branches
 
-- `master` is the Windows release branch.
+- `master` contains the stable Windows release and the active macOS beta.
 - `fix/*` branches are for focused issue fixes.
-- `beta/*` branches are for experimental work that should not affect stable Windows releases.
-- Android support is discontinued. Linux and macOS are out of scope unless Amazon releases official desktop apps for those platforms.
+- `beta/*` branches are for experimental work that is not ready to merge into `master`.
+- Android support is discontinued and Linux remains out of scope.
 
 ## Windows Development
 
@@ -64,6 +64,40 @@ Build:
 Windows\build.bat
 ```
 
+## macOS Beta Development
+
+The macOS implementation is maintained on `master` as an active beta; do not describe it as a published stable or notarized release. Install and run it from the repository root:
+
+```bash
+git checkout master
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r MacOS/requirements.txt
+python -m pip install -r MacOS/requirements-build.txt
+python -m MacOS.main
+```
+
+Run checks:
+
+```bash
+python -m pytest MacOS/tests Shared/tests
+python -m compileall -q MacOS Shared
+git diff --check
+```
+
+Build the menu-bar app and drag-install DMG:
+
+```bash
+MacOS/scripts/build_app.sh
+MacOS/scripts/create_dmg.sh
+```
+
+The outputs are under `MacOS/dist/`. Mount `Amazon-Music-RPC.dmg`, drag `Amazon Music RPC.app` onto the Applications shortcut in the DMG, eject it, and test the copy in `/Applications`. A build without `MACOS_CODESIGN_IDENTITY` is only ad-hoc signed for local development and is not notarized.
+
+The DevTools integration is primary. If the official Amazon Music app is already open normally, enabling it requires an explicit one-time restart; never add a silent process restart. The Now Playing reader is the read-only fallback. Changes to either path must preserve the validation and permission boundaries in [docs/macos-beta.md](docs/macos-beta.md), [docs/macos-integration-research.md](docs/macos-integration-research.md), and [MacOS/PERMISSIONS.md](MacOS/PERMISSIONS.md).
+
+Discord was not installed during the first macOS development build. Automated RPC mocks are useful regression coverage, but a pull request must identify live Discord, Last.fm, ListenBrainz, menu-bar, and clean-machine checks that were not actually performed.
+
 ## Pull Requests
 
 Keep pull requests focused. A good pull request includes:
@@ -79,3 +113,5 @@ For Windows releases, follow [docs/release-checklist.md](docs/release-checklist.
 For supported platform scope, follow [docs/platform-roadmap.md](docs/platform-roadmap.md).
 
 Architecture changes must preserve the controller boundaries in [docs/architecture.md](docs/architecture.md), and security-sensitive changes must update [docs/threat-model.md](docs/threat-model.md) or [docs/network-endpoints.md](docs/network-endpoints.md) when their trust boundaries change.
+
+Platform-neutral playback behavior belongs in `Shared/`. Privacy rules, track normalization/corrections, custom-art matching, process-name matching, and scrobble eligibility must not silently diverge between Windows and macOS. A fundamental behavior change must update the shared implementation or both platform paths, with tests for both builds.
