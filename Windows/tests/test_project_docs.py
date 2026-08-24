@@ -71,10 +71,12 @@ def test_trust_documents_cover_v5_boundaries():
     assert {"api.deezer.com", "itunes.apple.com", "api.github.com"}.issubset(destinations)
 
 
-def test_platform_roadmap_keeps_windows_stable_and_tracks_macos_beta():
+def test_platform_roadmap_keeps_windows_stable_and_macos_active_beta():
     roadmap = (ROOT / "docs/platform-roadmap.md").read_text(encoding="utf-8")
-    assert "Windows is stable; macOS is an experimental beta" in roadmap
-    assert "| macOS | Beta prototype | `beta/MacOS` |" in roadmap
+    assert "Windows is the published stable platform" in roadmap
+    assert "macOS is an active beta development target" in roadmap
+    assert "| macOS | Active beta | `master` |" in roadmap
+    assert "not yet a published stable or notarized release" in roadmap
     assert "Fundamental user-visible behavior must be implemented and tested for both platforms" in roadmap
     assert "Android support is discontinued" in roadmap
     assert "Linux remains out of scope" in roadmap
