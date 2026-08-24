@@ -1,6 +1,6 @@
 # Architecture
 
-Amazon Music RPC v5 keeps platform entry points small and separates native metadata, startup, and packaging from platform-neutral playback decisions. Windows remains the stable architecture; the macOS implementation is a beta prototype.
+Amazon Music RPC v5 keeps platform entry points small and separates native metadata, startup, and packaging from platform-neutral playback decisions. Windows remains the published stable platform; the macOS implementation is an active beta maintained alongside it on `master`.
 
 ## Windows Runtime Boundaries
 
@@ -59,7 +59,7 @@ If Amazon Music is already running without a DevTools listener, the runtime repo
 
 On Windows, the tray and playback loop live in the main process. Settings and Diagnostics are separate WebView2 subprocesses so a UI failure does not terminate playback. The updater reuses the frozen executable in a dedicated helper mode after the main process exits. Amazify communication uses a token-authenticated loopback bridge.
 
-On macOS, the menu bar and playback runtime share one process. The prototype can start the validated Amazon Music executable with loopback metadata flags when Amazon Music is not running; replacing an already-running normal session requires an explicit enhanced-metadata restart. It invokes `/usr/bin/osascript` as a bounded fallback probe and never attaches to or injects into Amazon Music. A mode-`0600` Unix socket accepts only a small allowlist of same-user single-instance commands.
+On macOS, the menu bar and playback runtime share one process. The beta runtime can start the validated Amazon Music executable with loopback metadata flags when Amazon Music is not running; replacing an already-running normal session requires an explicit enhanced-metadata restart. It invokes `/usr/bin/osascript` as a bounded fallback probe and never attaches to or injects into Amazon Music. A mode-`0600` Unix socket accepts only a small allowlist of same-user single-instance commands.
 
 ## Shutdown
 

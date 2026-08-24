@@ -1,6 +1,6 @@
-# macOS Beta Prototype
+# macOS Beta
 
-The `beta/MacOS` branch contains the first native macOS prototype of Amazon Music RPC. Windows on `master` remains the stable release. The macOS build is a menu-bar app for Amazon's official `/Applications/Amazon Music.app`; it is not a browser wrapper and does not alter the Amazon application bundle.
+macOS is an active beta development target maintained on `master`. Windows remains the only published stable release, and v5.0.1 does not include a macOS artifact. The macOS build is a menu-bar app for Amazon's official `/Applications/Amazon Music.app`; it is not a browser wrapper and does not alter the Amazon application bundle.
 
 ## Implemented Beta Features
 
@@ -68,7 +68,7 @@ Conditional system interaction is limited to:
 - **File pickers:** settings import/export and diagnostics export access only the file or destination the user selects. macOS may show a Files and Folders prompt if the chosen location is TCC-protected.
 - **Outbound Internet:** enabled update checks, artwork providers, and scrobblers make HTTPS requests; a non-sandboxed direct-download app does not need a separate network entitlement.
 
-The prototype requests no special entitlements and is not App Sandbox enabled. See [MacOS/PERMISSIONS.md](../MacOS/PERMISSIONS.md) for the complete signing and permission analysis.
+The beta requests no special entitlements and is not App Sandbox enabled. See [MacOS/PERMISSIONS.md](../MacOS/PERMISSIONS.md) for the complete signing and permission analysis.
 
 ## Local Data
 
@@ -102,7 +102,7 @@ Python 3.12 is the development baseline:
 ```bash
 git clone https://github.com/eripum9/Amazon-Music-Discord-RPC.git
 cd Amazon-Music-Discord-RPC
-git checkout beta/MacOS
+git checkout master
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
@@ -141,7 +141,7 @@ To install, open the DMG, drag **Amazon Music RPC** onto the **Applications** sh
 
 The target architecture is inherited from the Python interpreter and installed binary wheels. The declared deployment target is macOS 12.0, while the first development host was Intel macOS 15.7.7; Apple-silicon and older-system compatibility require separate tests.
 
-With no `MACOS_CODESIGN_IDENTITY`, the build is ad-hoc signed for local testing. This repository does not claim that a beta DMG has been Developer ID signed or notarized. Do not redistribute a local prototype as an official release.
+With no `MACOS_CODESIGN_IDENTITY`, the build is ad-hoc signed for local testing. This repository does not claim that a beta DMG has been Developer ID signed or notarized. Do not redistribute a local beta build as an official release.
 
 ## Shared Windows/macOS Behavior
 

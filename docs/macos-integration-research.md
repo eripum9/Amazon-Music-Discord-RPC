@@ -1,12 +1,12 @@
 # macOS Integration Research
 
-Status: bundle research and a read-only Now Playing proof of concept are complete. A native beta runtime, validated DevTools transport, settings/diagnostics UI, shared playback behavior, `.app`, and drag-install DMG pipeline are implemented on `beta/MacOS`. Live Discord Rich Presence and live Last.fm/ListenBrainz submissions have not yet been tested end to end.
+Status: bundle research and a read-only Now Playing proof of concept are complete. A native beta runtime, validated DevTools transport, settings/diagnostics UI, shared playback behavior, `.app`, and drag-install DMG pipeline are maintained on `master`. Live Discord Rich Presence and live Last.fm/ListenBrainz submissions have not yet been tested end to end.
 
 ## Scope And Safety
 
 Amazon now provides an official macOS desktop app. The installed application was found at `/Applications/Amazon Music.app`. A read-only working copy was made in a uniquely named directory under `/tmp` for bundle and binary inspection; neither that copy nor extracted Amazon binaries are stored in this repository.
 
-The research avoided retaining current-track values, account data, cookies, tokens, browser storage, or authenticated application files. The prototype does not modify or inject code into Amazon Music.
+The research avoided retaining current-track values, account data, cookies, tokens, browser storage, or authenticated application files. The macOS implementation does not modify or inject code into Amazon Music.
 
 ## Verified Bundle Findings
 

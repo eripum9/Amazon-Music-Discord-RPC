@@ -25,10 +25,9 @@ Do not post Last.fm session keys, ListenBrainz tokens, Discord tokens, config fi
 
 ## Branches
 
-- `master` is the Windows release branch.
+- `master` contains the stable Windows release and the active macOS beta.
 - `fix/*` branches are for focused issue fixes.
-- `beta/*` branches are for experimental work that should not affect stable Windows releases.
-- `beta/MacOS` contains the experimental prototype for Amazon's official macOS desktop app.
+- `beta/*` branches are for experimental work that is not ready to merge into `master`.
 - Android support is discontinued and Linux remains out of scope.
 
 ## Windows Development
@@ -67,10 +66,10 @@ Windows\build.bat
 
 ## macOS Beta Development
 
-The macOS prototype is developed on `beta/MacOS`; do not describe it as a stable or notarized release. Install and run it from the repository root:
+The macOS implementation is maintained on `master` as an active beta; do not describe it as a published stable or notarized release. Install and run it from the repository root:
 
 ```bash
-git checkout beta/MacOS
+git checkout master
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r MacOS/requirements.txt
@@ -97,7 +96,7 @@ The outputs are under `MacOS/dist/`. Mount `Amazon-Music-RPC.dmg`, drag `Amazon 
 
 The DevTools integration is primary. If the official Amazon Music app is already open normally, enabling it requires an explicit one-time restart; never add a silent process restart. The Now Playing reader is the read-only fallback. Changes to either path must preserve the validation and permission boundaries in [docs/macos-beta.md](docs/macos-beta.md), [docs/macos-integration-research.md](docs/macos-integration-research.md), and [MacOS/PERMISSIONS.md](MacOS/PERMISSIONS.md).
 
-Discord was not installed during the first prototype build. Automated RPC mocks are useful regression coverage, but a pull request must identify live Discord, Last.fm, ListenBrainz, menu-bar, and clean-machine checks that were not actually performed.
+Discord was not installed during the first macOS development build. Automated RPC mocks are useful regression coverage, but a pull request must identify live Discord, Last.fm, ListenBrainz, menu-bar, and clean-machine checks that were not actually performed.
 
 ## Pull Requests
 

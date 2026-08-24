@@ -1,6 +1,6 @@
 # Amazon Music RPC
 
-Spotify-style Discord Rich Presence for Amazon Music on Windows, with a macOS beta prototype.
+Spotify-style Discord Rich Presence for Amazon Music on Windows and macOS.
 
 Show your Amazon Music songs, album art, pause state, and live timer on Discord.
 
@@ -12,7 +12,7 @@ Show your Amazon Music songs, album art, pause state, and live timer on Discord.
 
 - ✅ Shows current song, artist, album art, and timer on Discord
 - ✅ Lets you display the artist, album, track, or app name after Discord's “Listening to” label
-- ✅ Stable on Amazon Music for Windows; beta prototype for the official Amazon Music macOS app
+- ✅ Stable on Amazon Music for Windows; active beta for the official Amazon Music macOS app
 - ✅ Includes Last.fm and ListenBrainz scrobbling
 - ✅ Privacy mode and keyword filters
 - ✅ No Python needed for the stable Windows installer
@@ -41,7 +41,7 @@ Show your Amazon Music songs, album art, pause state, and live timer on Discord.
 - **Report issue shortcut** — opens the GitHub issue page from Settings or Diagnostics
 - **Auto-updater** — checks for updates on startup and via the Settings window
 - **System tray app** — runs quietly in the background
-- **Modern settings UI** — WebView2 on Windows and a native PySide menu-bar/settings prototype on macOS
+- **Modern settings UI** — WebView2 on Windows and a native PySide menu-bar/settings experience on macOS
 - **Start at login** — optional Windows startup entry or per-user macOS LaunchAgent
 - **Custom Discord Application ID** — use your own if you want custom assets
 - **Network controls** — independently control automatic update checks, Deezer lookup, and iTunes artwork fallback
@@ -59,7 +59,7 @@ If enhanced Amazon metadata is unavailable, the app falls back to Windows' Syste
 
 ### macOS beta
 
-The official Amazon Music app is available on macOS. The beta uses a validated Chromium DevTools target as its primary metadata source because it provides the richest title, artist, album, artwork, playback-state, link, and timing data. If Amazon Music is already running normally when enhanced metadata is first enabled, the user must explicitly approve a one-time restart so Amazon Music can reopen with its loopback debugging flag. The beta does not modify the Amazon Music bundle or its account files.
+macOS is an active development target maintained alongside Windows on `master`. The official Amazon Music app is available on macOS, and the beta uses a validated Chromium DevTools target as its primary metadata source because it provides the richest title, artist, album, artwork, playback-state, link, and timing data. If Amazon Music is already running normally when enhanced metadata is first enabled, the user must explicitly approve a one-time restart so Amazon Music can reopen with its loopback debugging flag. The beta does not modify the Amazon Music bundle or its account files.
 
 When DevTools metadata is disabled or unavailable, the beta falls back to the local macOS Now Playing state and accepts data only when the owning bundle identifier is `com.amazon.music`. The fallback is read-only and does not control playback. See [the macOS beta guide](docs/macos-beta.md) and [the integration research](docs/macos-integration-research.md).
 
@@ -146,7 +146,7 @@ Official installers are created only by the manually triggered **Build Draft Rel
 
 ### macOS beta DMG
 
-The macOS prototype produces `Amazon-Music-RPC.dmg` with `Amazon Music RPC.app` and an Applications shortcut. Mount the DMG, drag the app onto **Applications**, eject the DMG, and launch the installed copy. This is currently a beta development artifact, not the stable release linked above. This repository does not claim that a published macOS artifact has been Developer ID signed or notarized; verify the provenance of any DMG before opening it.
+The macOS build tooling produces `Amazon-Music-RPC.dmg` with `Amazon Music RPC.app` and an Applications shortcut. Mount the DMG, drag the app onto **Applications**, eject the DMG, and launch the installed copy. This is currently a local beta development artifact, not a published release. The v5.0.1 release remains Windows-only and does not include a macOS DMG. This repository does not claim that a macOS artifact has been Developer ID signed or notarized; verify the provenance of any DMG before opening it.
 
 ### Windows from source
 
@@ -162,7 +162,7 @@ python Windows/main.py
 ```bash
 git clone https://github.com/eripum9/Amazon-Music-Discord-RPC.git
 cd Amazon-Music-Discord-RPC
-git checkout beta/MacOS
+git checkout master
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r MacOS/requirements.txt
@@ -182,13 +182,13 @@ No Python installation is needed when using the stable Windows installer.
 ## Platform Status
 
 - Windows is the stable supported platform on `master`.
-- macOS is an experimental beta prototype on `beta/MacOS`, enabled by Amazon's official macOS desktop app. It is not yet a stable release.
+- macOS is an active beta target maintained on `master`, enabled by Amazon's official macOS desktop app and tested in macOS CI. It is not yet a published stable release.
 - Android support has been discontinued because the mobile integration was too unstable to support responsibly.
 - Linux remains out of scope because it has no official Amazon Music desktop app surface suitable for this integration. Supported platform scope is tracked in [docs/platform-roadmap.md](docs/platform-roadmap.md).
 
 ## Building
 
-Windows app source, dependencies, icons, and packaging files live in `Windows/`. The macOS beta lives in `MacOS/`; platform-neutral playback rules live in `Shared/` and must remain behaviorally identical across both builds.
+Windows app source, dependencies, icons, and packaging files live in `Windows/`. The active macOS beta lives in `MacOS/`; platform-neutral playback rules live in `Shared/` and must remain behaviorally identical across both builds.
 
 The commands below create local development builds. They are not official release artifacts. Official releases must use the manual GitHub Actions workflow described in [docs/release-process.md](docs/release-process.md).
 
@@ -235,7 +235,7 @@ MacOS/scripts/build_app.sh
 MacOS/scripts/create_dmg.sh
 ```
 
-Outputs are `MacOS/dist/Amazon Music RPC.app`, `MacOS/dist/Amazon-Music-RPC.dmg`, and its `.sha256` file. The build architecture follows the selected Python environment. Without a configured Developer ID identity the script creates an ad-hoc-signed local prototype; it is not a notarized distribution. See [MacOS/PERMISSIONS.md](MacOS/PERMISSIONS.md) for the separate release-signing workflow and limitations.
+Outputs are `MacOS/dist/Amazon Music RPC.app`, `MacOS/dist/Amazon-Music-RPC.dmg`, and its `.sha256` file. The build architecture follows the selected Python environment. Without a configured Developer ID identity the script creates an ad-hoc-signed local beta build; it is not a notarized distribution or official release. See [MacOS/PERMISSIONS.md](MacOS/PERMISSIONS.md) for the separate release-signing workflow and limitations.
 
 ## Configuration
 
