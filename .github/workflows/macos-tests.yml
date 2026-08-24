@@ -1,0 +1,36 @@
+name: macOS Tests
+
+on:
+  push:
+    branches:
+      - master
+      - "beta/**"
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  macos-tests:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12.10"
+          cache: pip
+          cache-dependency-path: |
+            MacOS/requirements.txt
+            MacOS/requirements-build.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r MacOS/requirements.txt pytest
+      - name: Compile
+        run: python -m compileall -q MacOS Shared
+      - name: Test
+        run: python -m pytest

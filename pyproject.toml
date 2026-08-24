@@ -1,5 +1,6 @@
 [tool.pytest.ini_options]
-testpaths = ["Windows/tests", "MacOS/tests"]
+testpaths = ["Windows/tests", "MacOS/tests", "Shared/tests"]
+addopts = ["--import-mode=importlib"]
 
 [tool.coverage.run]
 source = ["Windows"]
