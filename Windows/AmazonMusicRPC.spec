@@ -1,15 +1,21 @@
 import os
+import PySide6
 from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
 project_dir = os.path.dirname(os.path.abspath(SPEC))
 repository_dir = os.path.dirname(project_dir)
 shared_hidden_imports = collect_submodules('Shared')
+pyside_dir = os.path.dirname(PySide6.__file__)
+qt_runtime_binaries = [
+    (os.path.join(pyside_dir, name), '.')
+    for name in ('VCRUNTIME140.dll', 'VCRUNTIME140_1.dll')
+]
 
 a = Analysis(
     [os.path.join(project_dir, 'main.py')],
     pathex=[repository_dir, project_dir],
-    binaries=[],
+    binaries=qt_runtime_binaries,
     datas=[
         (os.path.join(project_dir, 'icon.png'), '.'),
     ],
@@ -103,6 +109,14 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
+a.binaries = [
+    binary
+    for binary in a.binaries
+    if not (
+        os.path.basename(binary[0]).lower() == 'icuuc.dll'
+        or os.path.basename(binary[0]).lower().startswith('icudt')
+    )
+]
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(

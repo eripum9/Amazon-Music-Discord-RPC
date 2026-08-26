@@ -2,6 +2,7 @@
 
 import inspect
 import os
+from types import SimpleNamespace
 
 import amazon_devtools
 
@@ -82,6 +83,7 @@ def test_devtools_launcher_candidate_ordering_and_fallbacks():
     exists = lambda path: path == existing_path
     start_apps = [
         {"Name": "Amazon Music", "AppID": "Website.Package!AmazonMusic"},
+        {"Name": "Amazon Music", "AppID": "Amazon.Music"},
         {"Name": "Amazon Music", "AppID": existing_path},
         {"Name": "Amazon Music", "AppID": r"C:\Missing\Amazon Music.exe"},
         {"Name": "Amazon Music RPC", "AppID": r"C:\Amazon Music RPC\AmazonMusicRPC.exe"},
@@ -104,6 +106,7 @@ def test_devtools_launcher_candidate_ordering_and_fallbacks():
     ]
     assert candidates[-1]["method"] == "hardcoded-store"
     assert candidates[-1]["value"] == amazon_devtools.APP_USER_MODEL_ID
+    assert all(candidate["value"] != "Amazon.Music" for candidate in candidates)
     assert not amazon_devtools._start_app_candidates(
         [{"Name": "Amazon Music", "AppID": r"C:\Missing\Amazon Music.exe"}],
         lambda path: False,
@@ -113,6 +116,262 @@ def test_devtools_launcher_candidate_ordering_and_fallbacks():
         "Package was not found. 0x80073CF1",
     )
     assert "package was not found" in failure.lower()
+
+
+def test_devtools_aumid_launch_prefers_native_activation(monkeypatch):
+    monkeypatch.setattr(amazon_devtools, "_activate_aumid_native", lambda app_id, args: 4321)
+    monkeypatch.setattr(
+        amazon_devtools,
+        "_run_powershell",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("PowerShell fallback should not run")),
+    )
+    result = amazon_devtools._launch_aumid("Package.Family!AmazonMusic", 52856)
+    assert result == {"ok": True, "pid": "4321", "activation": "native"}
+
+
+def test_devtools_aumid_launch_uses_powershell_fallback(monkeypatch):
+    monkeypatch.setattr(
+        amazon_devtools,
+        "_activate_aumid_native",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("native activation failed")),
+    )
+    monkeypatch.setattr(
+        amazon_devtools,
+        "_run_powershell",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="4321\n", stderr=""),
+    )
+    result = amazon_devtools._launch_aumid("Package.Family!AmazonMusic", 52856)
+    assert result == {"ok": True, "pid": "4321", "activation": "powershell-fallback"}
+
+
+def test_devtools_stop_waits_for_respawned_helper():
+    main = {"Pid": 10, "Name": "Amazon Music.exe", "Kind": "main"}
+    helper = {"Pid": 11, "Name": "Amazon Music Helper.exe", "Kind": "helper"}
+    respawned = {"Pid": 12, "Name": "Amazon Music Helper.exe", "Kind": "helper"}
+    states = [[main, helper], [helper], [respawned], [], []]
+    calls = []
+
+    def entries():
+        return states.pop(0) if states else []
+
+    def terminate(items, force):
+        calls.append((force, [_entry["Pid"] for _entry in items]))
+        return {"ok": True, "stopped": [str(_entry["Pid"]) for _entry in items], "errors": []}
+
+    result = amazon_devtools.stop_amazon_music(
+        timeout=2,
+        poll_interval=0.1,
+        process_entries_fn=entries,
+        terminate_fn=terminate,
+        sleep_fn=lambda delay: None,
+    )
+    assert result["ok"] is True
+    assert result["remaining"] == []
+    assert (False, [10, 11]) in calls
+    assert (True, [11]) in calls
+    assert (True, [12]) in calls
+
+
+def test_devtools_restart_closes_main_processes_and_preserves_helper():
+    root = {"Pid": 20, "ParentPid": 1, "Name": "Amazon Music.exe", "Kind": "main"}
+    child = {"Pid": 21, "ParentPid": 20, "Name": "Amazon Music.exe", "Kind": "main"}
+    helper = {"Pid": 22, "ParentPid": 20, "Name": "Amazon Music Helper.exe", "Kind": "helper"}
+    states = [[root, child, helper], [root, child, helper], [helper], [helper]]
+    calls = []
+
+    def entries():
+        return states.pop(0) if states else [helper]
+
+    def terminate(items, force):
+        calls.append((force, [entry["Pid"] for entry in items]))
+        return {"ok": True, "stopped": [str(entry["Pid"]) for entry in items], "errors": []}
+
+    result = amazon_devtools.stop_amazon_music_for_restart(
+        timeout=2,
+        poll_interval=0.1,
+        process_entries_fn=entries,
+        terminate_fn=terminate,
+        sleep_fn=lambda delay: None,
+    )
+    assert result["ok"] is True
+    assert result["preserved_helpers"] == ["22"]
+    assert calls == [(False, [20])]
+
+
+def test_devtools_restart_refuses_to_force_a_running_main_process():
+    main = {"Pid": 20, "ParentPid": 1, "Name": "Amazon Music.exe", "Kind": "main"}
+    calls = []
+
+    def terminate(items, force):
+        calls.append(force)
+        return {"ok": True, "stopped": [], "errors": []}
+
+    result = amazon_devtools.stop_amazon_music_for_restart(
+        timeout=0.2,
+        poll_interval=0.1,
+        process_entries_fn=lambda: [main],
+        terminate_fn=terminate,
+        sleep_fn=lambda delay: None,
+    )
+    assert result["ok"] is False
+    assert result["remaining"] == ["20"]
+    assert calls == [False]
+
+
+def test_devtools_extracts_exact_store_package_identity():
+    valid = "AmazonMobileLLC.AmazonMusic_9.5.2.0_x86__kc6t79cpj4tp0"
+    entries = [
+        {"Path": rf"C:\Program Files\WindowsApps\{valid}\Amazon Music Helper.exe"},
+        {"Path": r"C:\Users\user\AppData\Local\Amazon Music\Amazon Music.exe"},
+        {"Path": r"C:\Program Files\WindowsApps\AmazonMobileLLC.AmazonMusic_bad\Amazon Music.exe"},
+    ]
+    assert amazon_devtools._store_package_full_names(entries) == [valid]
+
+
+def test_devtools_store_package_stop_waits_for_full_exit():
+    package = "AmazonMobileLLC.AmazonMusic_9.5.2.0_x86__kc6t79cpj4tp0"
+    helper = {"Pid": 30, "Path": rf"C:\Program Files\WindowsApps\{package}\Amazon Music Helper.exe", "Kind": "helper"}
+    states = [[helper], [], []]
+    terminated = []
+
+    result = amazon_devtools.stop_amazon_store_packages(
+        [package],
+        timeout=2,
+        poll_interval=0.1,
+        process_entries_fn=lambda: states.pop(0) if states else [],
+        terminate_package_fn=terminated.append,
+        sleep_fn=lambda delay: None,
+    )
+    assert result["ok"] is True
+    assert result["stopped"] == ["30"]
+    assert result["packages"] == [package]
+    assert terminated == [package]
+
+
+def test_devtools_restart_uses_store_package_lifecycle_reset(monkeypatch):
+    package = "AmazonMobileLLC.AmazonMusic_9.5.2.0_x86__kc6t79cpj4tp0"
+    entry = {"Pid": 30, "Path": rf"C:\Program Files\WindowsApps\{package}\Amazon Music.exe", "Kind": "main"}
+    reset_calls = []
+    monkeypatch.setattr(amazon_devtools, "_amazon_process_entries", lambda: [entry])
+    monkeypatch.setattr(amazon_devtools, "stop_amazon_music_for_restart", lambda: {"ok": True, "stopped": ["30"]})
+    monkeypatch.setattr(
+        amazon_devtools,
+        "stop_amazon_store_packages",
+        lambda packages: reset_calls.append(packages) or {"ok": True, "stopped": ["31"], "packages": packages},
+    )
+    monkeypatch.setattr(
+        amazon_devtools,
+        "stop_amazon_helpers",
+        lambda: (_ for _ in ()).throw(AssertionError("Store restart must use package lifecycle reset")),
+    )
+    monkeypatch.setattr(amazon_devtools.time, "sleep", lambda delay: None)
+    monkeypatch.setattr(amazon_devtools, "launch_amazon_music_devtools", lambda: {"ok": True, "method": "auto-aumid"})
+    result = amazon_devtools.restart_amazon_music_devtools()
+    assert result["ok"] is True
+    assert result["reset_packages"] == [package]
+    assert reset_calls == [[package]]
+
+
+def test_devtools_helper_stop_handles_respawn_before_launch():
+    helper = {"Pid": 30, "Name": "Amazon Music Helper.exe", "Kind": "helper"}
+    respawned = {"Pid": 31, "Name": "Amazon Music Helper.exe", "Kind": "helper"}
+    states = [[helper], [respawned], [], []]
+    calls = []
+
+    def entries():
+        return states.pop(0) if states else []
+
+    def terminate(items, force):
+        calls.append((force, [entry["Pid"] for entry in items]))
+        return {"ok": True, "stopped": [str(entry["Pid"]) for entry in items], "errors": []}
+
+    result = amazon_devtools.stop_amazon_helpers(
+        timeout=2,
+        poll_interval=0.1,
+        process_entries_fn=entries,
+        terminate_fn=terminate,
+        sleep_fn=lambda delay: None,
+    )
+    assert result["ok"] is True
+    assert result["stopped"] == ["30", "31"]
+    assert calls == [(True, [30]), (True, [31])]
+
+
+def test_devtools_launch_preparation_retires_existing_helpers():
+    main = {"Pid": 20, "Name": "Amazon Music.exe", "Kind": "main"}
+    helper = {"Pid": 21, "Name": "Amazon Music Helper.exe", "Kind": "helper"}
+    running = amazon_devtools._prepare_amazon_launch(process_entries_fn=lambda: [main, helper])
+    delays = []
+    prepared = amazon_devtools._prepare_amazon_launch(
+        process_entries_fn=lambda: [helper],
+        helper_stop_fn=lambda: {"ok": True, "stopped": ["21"], "remaining": [], "errors": []},
+        sleep_fn=delays.append,
+    )
+    assert running["ok"] is False
+    assert running["main_processes"] == ["20"]
+    assert prepared["ok"] is True
+    assert prepared["stale_helpers"] == ["21"]
+    assert prepared["retired_helpers"] == ["21"]
+    assert delays == [amazon_devtools.HELPER_SETTLE_SECONDS]
+
+
+def test_devtools_waits_for_splash_screen_to_clear():
+    states = iter(
+        [
+            {"ready": False, "status": "loading", "detail": "loading"},
+            {"ready": False, "status": "loading", "detail": "loading"},
+            {"ready": True, "status": "ready", "detail": "ready"},
+        ]
+    )
+    result = amazon_devtools._wait_for_app_ready(
+        52856,
+        timeout=1,
+        poll_interval=0.2,
+        boot_state_fn=lambda port: next(states),
+        sleep_fn=lambda delay: None,
+    )
+    assert result["ok"] is True
+    assert result["status"] == "ready"
+
+
+def test_devtools_failed_splash_launch_is_cleaned_up(monkeypatch):
+    class Reservation:
+        def close(self):
+            return None
+
+    amazon_devtools.set_devtools_port(52856)
+    monkeypatch.setattr(amazon_devtools, "_is_local_port_open", lambda port: False)
+    monkeypatch.setattr(amazon_devtools, "_prepare_amazon_launch", lambda: {"ok": True, "stale_helpers": []})
+    monkeypatch.setattr(amazon_devtools, "_reserve_devtools_port", lambda port=None: (52856, Reservation()))
+    monkeypatch.setattr(
+        amazon_devtools,
+        "_launcher_candidates",
+        lambda launcher_override=None: [{"kind": "aumid", "value": "Package.Family!AmazonMusic", "method": "auto-aumid"}],
+    )
+    monkeypatch.setattr(amazon_devtools, "_launch_candidate", lambda candidate, port: {"ok": True, "pid": "44", "activation": "native"})
+    monkeypatch.setattr(amazon_devtools, "_wait_for_page_target", lambda port: True)
+    monkeypatch.setattr(amazon_devtools, "_devtools_owner_trust", lambda *args, **kwargs: {"trusted": True})
+    monkeypatch.setattr(
+        amazon_devtools,
+        "_wait_for_app_ready",
+        lambda port, timeout=amazon_devtools.LAUNCH_READY_TIMEOUT_SECONDS: {
+            "ok": False,
+            "ready": False,
+            "status": "loading",
+            "detail": "Amazon Music remained on its loading screen",
+        },
+    )
+    cleanup_calls = []
+    monkeypatch.setattr(
+        amazon_devtools,
+        "stop_amazon_music",
+        lambda timeout=amazon_devtools.PROCESS_STOP_TIMEOUT_SECONDS: cleanup_calls.append(timeout) or {"ok": True, "stopped": ["44"]},
+    )
+    result = amazon_devtools.launch_amazon_music_devtools()
+    assert result["ok"] is False
+    assert cleanup_calls == [6]
+    assert "loading screen" in result["error"]
+    amazon_devtools.reset_devtools_port()
 
 
 def test_devtools_port_and_powershell_hardening():

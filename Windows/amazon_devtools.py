@@ -1,6 +1,7 @@
 # MIT License - Copyright (c) 2026 eripum9
 
 import base64
+import ctypes
 import hashlib
 import json
 import os
@@ -11,6 +12,8 @@ import struct
 import subprocess
 import sys
 import time
+import uuid
+from ctypes import wintypes
 from urllib.parse import quote, urlparse, urlunparse
 import requests
 from config import load_config, normalize_amazon_music_link_region
@@ -26,7 +29,11 @@ DEVTOOLS_PORT_MAX = 60999
 AMAZON_PACKAGE_NAME = "AmazonMobileLLC.AmazonMusic"
 AMAZON_PACKAGE_PUBLISHER_ID = "kc6t79cpj4tp0"
 AMAZON_EXECUTABLE_NAMES = frozenset({"amazon music.exe", "amazonmusic.exe"})
+AMAZON_HELPER_EXECUTABLE_NAMES = frozenset({"amazon music helper.exe", "amazonmusichelper.exe"})
 LAUNCH_FAILURE_HELP = "Could not launch Amazon Music with enhanced metadata. Open Diagnostics and check the Amazon Music launcher entry, or paste the launcher ID from Get-StartApps."
+LAUNCH_READY_TIMEOUT_SECONDS = 45
+PROCESS_STOP_TIMEOUT_SECONDS = 8
+HELPER_SETTLE_SECONDS = 3
 SHORTCUT_NAME = "Amazon Music Metadata.lnk"
 OLD_SHORTCUT_NAMES = ("Amazon Music Beta Metadata.lnk",)
 SHORTCUT_DIR_NAME = "Amazon Music RPC"
@@ -35,6 +42,10 @@ _EXPLICIT_RE = re.compile(r"\s*\[Explicit\]\s*$", re.IGNORECASE)
 _TIME_RE = re.compile(r"^-?\d{1,2}:\d{2}(?::\d{2})?$")
 _ASIN_RE = re.compile(r"^[A-Z0-9]{10}$", re.IGNORECASE)
 _DEVTOOLS_PAGE_PATH_RE = re.compile(r"^/devtools/page/([A-Za-z0-9._:-]+)$")
+_STORE_PACKAGE_FULL_NAME_RE = re.compile(
+    rf"^{re.escape(AMAZON_PACKAGE_NAME)}_\d+(?:\.\d+){{3}}_(?:x86|x64|arm|arm64|neutral)_[A-Za-z0-9]*_{re.escape(AMAZON_PACKAGE_PUBLISHER_ID)}$",
+    re.IGNORECASE,
+)
 _DEVTOOLS_PORT = None
 _LAST_LAUNCH = {}
 _PORT_OWNER_CACHE = {"port": 0, "expires": 0.0, "value": None}
@@ -180,6 +191,309 @@ def _powershell_json(script, timeout=8):
         return []
 
 
+def _amazon_process_entries():
+    script = rf"""
+$storePattern = '\WindowsApps\{AMAZON_PACKAGE_NAME}_*__{AMAZON_PACKAGE_PUBLISHER_ID}\'
+$desktopRoot = Join-Path $env:LOCALAPPDATA 'Amazon Music'
+$items = @()
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object {{
+    $path = [string]$_.ExecutablePath
+    $name = [string]$_.Name
+    $parent = if ($path) {{ Split-Path -Parent $path }} else {{ '' }}
+    $storeMatch = $path -and $path -like "*$storePattern*"
+    $desktopMatch = $path -and $parent -and $parent.Equals($desktopRoot, [System.StringComparison]::OrdinalIgnoreCase)
+    $mainMatch = $name -ieq 'Amazon Music.exe' -or $name -ieq 'AmazonMusic.exe'
+    $helperMatch = $name -ieq 'Amazon Music Helper.exe' -or $name -ieq 'AmazonMusicHelper.exe'
+    if (($storeMatch -or $desktopMatch) -and ($mainMatch -or $helperMatch)) {{
+        $items += [PSCustomObject]@{{
+            Pid = [int]$_.ProcessId
+            ParentPid = [int]$_.ParentProcessId
+            Name = $name
+            Path = $path
+            Kind = if ($helperMatch) {{ 'helper' }} else {{ 'main' }}
+        }}
+    }}
+}}
+$items | ConvertTo-Json -Compress
+"""
+    return _powershell_json(script, timeout=8)
+
+
+def _process_id(entry):
+    try:
+        value = int(entry.get("Pid") or entry.get("ProcessId"))
+    except (AttributeError, TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
+def _is_helper_process(entry):
+    kind = _clean(entry.get("Kind")).lower() if isinstance(entry, dict) else ""
+    name = _clean(entry.get("Name")).lower() if isinstance(entry, dict) else ""
+    return kind == "helper" or name in AMAZON_HELPER_EXECUTABLE_NAMES
+
+
+def _is_main_process(entry):
+    return bool(_process_id(entry)) and not _is_helper_process(entry)
+
+
+def _store_package_full_names(entries):
+    names = []
+    seen = set()
+    for entry in entries or []:
+        path = _clean(entry.get("Path")) if isinstance(entry, dict) else ""
+        for part in re.split(r"[\\/]", path):
+            if not _STORE_PACKAGE_FULL_NAME_RE.fullmatch(part):
+                continue
+            key = part.lower()
+            if key not in seen:
+                names.append(part)
+                seen.add(key)
+            break
+    return names
+
+
+def _terminate_amazon_processes(entries, force=False):
+    ids = sorted({_process_id(entry) for entry in entries if _process_id(entry)})
+    if not ids:
+        return {"ok": True, "stopped": [], "errors": []}
+    id_list = ",".join(str(pid) for pid in ids)
+    force_text = "$true" if force else "$false"
+    script = rf"""
+$ids = @({id_list})
+$force = {force_text}
+$storePattern = '\WindowsApps\{AMAZON_PACKAGE_NAME}_*__{AMAZON_PACKAGE_PUBLISHER_ID}\'
+$desktopRoot = Join-Path $env:LOCALAPPDATA 'Amazon Music'
+$results = @()
+foreach ($id in $ids) {{
+    try {{
+        $item = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction Stop
+        $path = [string]$item.ExecutablePath
+        $name = [string]$item.Name
+        $parent = if ($path) {{ Split-Path -Parent $path }} else {{ '' }}
+        $storeMatch = $path -and $path -like "*$storePattern*"
+        $desktopMatch = $path -and $parent -and $parent.Equals($desktopRoot, [System.StringComparison]::OrdinalIgnoreCase)
+        $nameMatch = $name -ieq 'Amazon Music.exe' -or $name -ieq 'AmazonMusic.exe' -or $name -ieq 'Amazon Music Helper.exe' -or $name -ieq 'AmazonMusicHelper.exe'
+        if (-not (($storeMatch -or $desktopMatch) -and $nameMatch)) {{
+            $results += [PSCustomObject]@{{ Pid = $id; Stopped = $false; Error = 'Process identity changed' }}
+            continue
+        }}
+        $process = Get-Process -Id $id -ErrorAction Stop
+        if ($force) {{
+            Stop-Process -Id $id -Force -ErrorAction Stop
+            $results += [PSCustomObject]@{{ Pid = $id; Stopped = $true; Error = '' }}
+        }} else {{
+            $closed = $process.CloseMainWindow()
+            $results += [PSCustomObject]@{{ Pid = $id; Stopped = [bool]$closed; Error = '' }}
+        }}
+    }} catch {{
+        $results += [PSCustomObject]@{{ Pid = $id; Stopped = $false; Error = [string]$_.Exception.Message }}
+    }}
+}}
+$results | ConvertTo-Json -Compress
+"""
+    rows = _powershell_json(script, timeout=10)
+    stopped = [str(_process_id(row)) for row in rows if row.get("Stopped") and _process_id(row)]
+    errors = [_clean(row.get("Error")) for row in rows if row.get("Error")]
+    return {"ok": not errors, "stopped": stopped, "errors": errors}
+
+
+def stop_amazon_music(
+    timeout=PROCESS_STOP_TIMEOUT_SECONDS,
+    poll_interval=0.35,
+    process_entries_fn=None,
+    terminate_fn=None,
+    sleep_fn=None,
+):
+    entries_fn = process_entries_fn or _amazon_process_entries
+    stop_fn = terminate_fn or _terminate_amazon_processes
+    sleeper = sleep_fn or time.sleep
+    initial = entries_fn()
+    if not initial:
+        return {"ok": True, "stopped": [], "remaining": [], "errors": []}
+    seen = {_process_id(entry) for entry in initial if _process_id(entry)}
+    errors = []
+    graceful = stop_fn(initial, False)
+    errors.extend(graceful.get("errors", []))
+    sleeper(min(1.2, max(0.0, timeout)))
+    attempts = max(2, int(max(0.1, timeout) / max(0.05, poll_interval)))
+    empty_polls = 0
+    remaining = initial
+    for _ in range(attempts):
+        remaining = entries_fn()
+        if not remaining:
+            empty_polls += 1
+            if empty_polls >= 2:
+                return {
+                    "ok": True,
+                    "stopped": [str(pid) for pid in sorted(seen)],
+                    "remaining": [],
+                    "errors": errors,
+                }
+        else:
+            empty_polls = 0
+            seen.update(_process_id(entry) for entry in remaining if _process_id(entry))
+            forced = stop_fn(remaining, True)
+            errors.extend(forced.get("errors", []))
+        sleeper(poll_interval)
+    remaining = entries_fn()
+    remaining_ids = [str(_process_id(entry)) for entry in remaining if _process_id(entry)]
+    return {
+        "ok": not remaining_ids,
+        "stopped": [str(pid) for pid in sorted(seen) if str(pid) not in remaining_ids],
+        "remaining": remaining_ids,
+        "errors": errors,
+        "error": "Amazon Music processes did not exit" if remaining_ids else "",
+    }
+
+
+def stop_amazon_music_for_restart(
+    timeout=15,
+    poll_interval=0.5,
+    process_entries_fn=None,
+    terminate_fn=None,
+    sleep_fn=None,
+):
+    entries_fn = process_entries_fn or _amazon_process_entries
+    stop_fn = terminate_fn or _terminate_amazon_processes
+    sleeper = sleep_fn or time.sleep
+    initial = entries_fn()
+    mains = [entry for entry in initial if _is_main_process(entry)]
+    helpers = [entry for entry in initial if _is_helper_process(entry)]
+    helper_ids = [str(_process_id(entry)) for entry in helpers if _process_id(entry)]
+    if not mains:
+        return {
+            "ok": True,
+            "stopped": [],
+            "remaining": [],
+            "preserved_helpers": helper_ids,
+            "errors": [],
+        }
+    main_ids = {_process_id(entry) for entry in mains if _process_id(entry)}
+    roots = [
+        entry
+        for entry in mains
+        if int(entry.get("ParentPid") or 0) not in main_ids
+    ] or mains
+    graceful = stop_fn(roots, False)
+    errors = list(graceful.get("errors", []))
+    attempts = max(2, int(max(0.1, timeout) / max(0.05, poll_interval)))
+    empty_polls = 0
+    for _ in range(attempts):
+        remaining = [entry for entry in entries_fn() if _is_main_process(entry)]
+        if not remaining:
+            empty_polls += 1
+            if empty_polls >= 2:
+                return {
+                    "ok": True,
+                    "stopped": [str(pid) for pid in sorted(main_ids)],
+                    "remaining": [],
+                    "preserved_helpers": helper_ids,
+                    "errors": errors,
+                }
+        else:
+            empty_polls = 0
+        sleeper(poll_interval)
+    remaining = [entry for entry in entries_fn() if _is_main_process(entry)]
+    remaining_ids = [str(_process_id(entry)) for entry in remaining if _process_id(entry)]
+    return {
+        "ok": False,
+        "stopped": [str(pid) for pid in sorted(main_ids) if str(pid) not in remaining_ids],
+        "remaining": remaining_ids,
+        "preserved_helpers": helper_ids,
+        "errors": errors,
+        "error": "Amazon Music did not close cleanly. Close it normally, then try enhanced metadata again.",
+    }
+
+
+def stop_amazon_helpers(
+    timeout=6,
+    poll_interval=0.35,
+    process_entries_fn=None,
+    terminate_fn=None,
+    sleep_fn=None,
+):
+    entries_fn = process_entries_fn or _amazon_process_entries
+    stop_fn = terminate_fn or _terminate_amazon_processes
+    sleeper = sleep_fn or time.sleep
+    initial = [entry for entry in entries_fn() if _is_helper_process(entry)]
+    if not initial:
+        return {"ok": True, "stopped": [], "remaining": [], "errors": []}
+    seen = {_process_id(entry) for entry in initial if _process_id(entry)}
+    forced = stop_fn(initial, True)
+    errors = list(forced.get("errors", []))
+    attempts = max(2, int(max(0.1, timeout) / max(0.05, poll_interval)))
+    empty_polls = 0
+    for _ in range(attempts):
+        remaining = [entry for entry in entries_fn() if _is_helper_process(entry)]
+        if not remaining:
+            empty_polls += 1
+            if empty_polls >= 2:
+                return {
+                    "ok": True,
+                    "stopped": [str(pid) for pid in sorted(seen)],
+                    "remaining": [],
+                    "errors": errors,
+                }
+        else:
+            empty_polls = 0
+            seen.update(_process_id(entry) for entry in remaining if _process_id(entry))
+            retried = stop_fn(remaining, True)
+            errors.extend(retried.get("errors", []))
+        sleeper(poll_interval)
+    remaining = [entry for entry in entries_fn() if _is_helper_process(entry)]
+    remaining_ids = [str(_process_id(entry)) for entry in remaining if _process_id(entry)]
+    return {
+        "ok": not remaining_ids,
+        "stopped": [str(pid) for pid in sorted(seen) if str(pid) not in remaining_ids],
+        "remaining": remaining_ids,
+        "errors": errors,
+        "error": "Amazon Music Helper did not exit" if remaining_ids else "",
+    }
+
+
+def _prepare_amazon_launch(process_entries_fn=None, helper_stop_fn=None, package_stop_fn=None, sleep_fn=None):
+    entries_fn = process_entries_fn or _amazon_process_entries
+    sleeper = sleep_fn or time.sleep
+    entries = entries_fn()
+    mains = [entry for entry in entries if _is_main_process(entry)]
+    if mains:
+        return {
+            "ok": False,
+            "error": "Amazon Music is already running without enhanced metadata. Close it or use metadata restart repair before launching it again.",
+            "main_processes": [str(_process_id(entry)) for entry in mains],
+        }
+    helpers = [entry for entry in entries if _is_helper_process(entry)]
+    helper_ids = [str(_process_id(entry)) for entry in helpers if _process_id(entry)]
+    if not helpers:
+        return {"ok": True, "stale_helpers": [], "retired_helpers": []}
+    package_names = _store_package_full_names(helpers)
+    if package_names and package_stop_fn is None:
+        cleanup = stop_amazon_store_packages(package_names, process_entries_fn=entries_fn)
+    elif package_names:
+        cleanup = package_stop_fn(package_names)
+    elif helper_stop_fn is None:
+        cleanup = stop_amazon_helpers(process_entries_fn=entries_fn)
+    else:
+        cleanup = helper_stop_fn()
+    if not cleanup.get("ok"):
+        return {
+            "ok": False,
+            "error": "Amazon Music Helper could not be prepared for enhanced metadata. End it in Task Manager and try again.",
+            "stale_helpers": helper_ids,
+            "retired_helpers": cleanup.get("stopped", []),
+            "cleanup": cleanup,
+        }
+    sleeper(HELPER_SETTLE_SECONDS)
+    return {
+        "ok": True,
+        "stale_helpers": helper_ids,
+        "retired_helpers": cleanup.get("stopped", helper_ids),
+        "reset_packages": cleanup.get("packages", []),
+        "cleanup": cleanup,
+    }
+
+
 def _looks_like_path(value):
     text = _clean(value)
     return bool(
@@ -191,6 +505,14 @@ def _looks_like_path(value):
             or "/" in text
         )
     )
+
+
+def _looks_like_aumid(value):
+    text = _clean(value)
+    if _looks_like_path(text) or text.count("!") != 1:
+        return False
+    family, app_id = text.split("!", 1)
+    return bool(family.strip() and app_id.strip())
 
 
 def _is_local_absolute_path(value):
@@ -238,6 +560,8 @@ def validate_launcher_override(value, exists_fn=os.path.exists):
         return ""
     if _looks_like_path(text) and not _is_allowed_amazon_exe(text, exists_fn):
         raise ValueError("Executable launcher overrides must point to an existing local Amazon Music .exe.")
+    if not _looks_like_path(text) and not _looks_like_aumid(text):
+        raise ValueError("Launcher IDs must use the PackageFamily!Application format shown by Get-StartApps.")
     return text
 
 
@@ -254,7 +578,7 @@ def _launcher_candidate_from_value(value, aumid_method, exe_method, source, exis
         return None
     if _looks_like_path(text):
         return _launcher_candidate("exe", text, exe_method, source) if _is_allowed_amazon_exe(text, exists_fn) else None
-    return _launcher_candidate("aumid", text, aumid_method, source)
+    return _launcher_candidate("aumid", text, aumid_method, source) if _looks_like_aumid(text) else None
 
 
 def _build_aumid(package_family, app_id):
@@ -366,6 +690,203 @@ def _wait_for_page_target(port, timeout=9):
     return False
 
 
+class _GUID(ctypes.Structure):
+    _fields_ = [
+        ("Data1", wintypes.DWORD),
+        ("Data2", wintypes.WORD),
+        ("Data3", wintypes.WORD),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+    @classmethod
+    def from_string(cls, value):
+        return cls.from_buffer_copy(uuid.UUID(value).bytes_le)
+
+
+def _activate_aumid_native(app_id, args):
+    if os.name != "nt":
+        raise OSError("Native application activation is only available on Windows")
+    ole32 = ctypes.windll.ole32
+    ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+    ole32.CoInitializeEx.restype = ctypes.c_long
+    ole32.CoCreateInstance.argtypes = [
+        ctypes.POINTER(_GUID),
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(_GUID),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    ole32.CoCreateInstance.restype = ctypes.c_long
+    ole32.CoUninitialize.argtypes = []
+    ole32.CoUninitialize.restype = None
+    clsid = _GUID.from_string("45BA127D-10A8-46EA-8AB7-56EA9078943C")
+    iid = _GUID.from_string("2E941141-7F97-4756-BA1D-9DECDE894A3D")
+    instance = ctypes.c_void_p()
+    coinit_hr = ole32.CoInitializeEx(None, 0x2)
+    should_uninitialize = coinit_hr >= 0
+    if coinit_hr < 0 and coinit_hr != -2147417850:
+        raise OSError(f"CoInitializeEx failed: 0x{coinit_hr & 0xFFFFFFFF:08X}")
+    try:
+        hr = ole32.CoCreateInstance(
+            ctypes.byref(clsid),
+            None,
+            0x1,
+            ctypes.byref(iid),
+            ctypes.byref(instance),
+        )
+        if hr < 0 or not instance.value:
+            raise OSError(f"CoCreateInstance failed: 0x{hr & 0xFFFFFFFF:08X}")
+        interface = ctypes.cast(instance, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)))
+        activate = ctypes.WINFUNCTYPE(
+            ctypes.c_long,
+            ctypes.c_void_p,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+        )(interface.contents[3])
+        process_id = wintypes.DWORD()
+        hr = activate(instance, app_id, args, 0, ctypes.byref(process_id))
+        if hr < 0:
+            raise OSError(f"ActivateApplication failed: 0x{hr & 0xFFFFFFFF:08X}")
+        return int(process_id.value)
+    finally:
+        if instance.value:
+            interface = ctypes.cast(instance, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)))
+            release = ctypes.WINFUNCTYPE(wintypes.ULONG, ctypes.c_void_p)(interface.contents[2])
+            release(instance)
+        if should_uninitialize:
+            ole32.CoUninitialize()
+
+
+def _terminate_store_package_native(package_full_name):
+    if os.name != "nt":
+        raise OSError("Package lifecycle control is only available on Windows")
+    if not _STORE_PACKAGE_FULL_NAME_RE.fullmatch(_clean(package_full_name)):
+        raise ValueError("Amazon Music package identity was invalid")
+    ole32 = ctypes.windll.ole32
+    ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+    ole32.CoInitializeEx.restype = ctypes.c_long
+    ole32.CoCreateInstance.argtypes = [
+        ctypes.POINTER(_GUID),
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(_GUID),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    ole32.CoCreateInstance.restype = ctypes.c_long
+    ole32.CoUninitialize.argtypes = []
+    ole32.CoUninitialize.restype = None
+    clsid = _GUID.from_string("B1AEC16F-2383-4852-B0E9-8F0B1DC66B4D")
+    iid = _GUID.from_string("F27C3930-8029-4AD1-94E3-3DBA417810C1")
+    instance = ctypes.c_void_p()
+    coinit_hr = ole32.CoInitializeEx(None, 0x2)
+    should_uninitialize = coinit_hr >= 0
+    if coinit_hr < 0 and coinit_hr != -2147417850:
+        raise OSError(f"CoInitializeEx failed: 0x{coinit_hr & 0xFFFFFFFF:08X}")
+    try:
+        hr = ole32.CoCreateInstance(
+            ctypes.byref(clsid),
+            None,
+            0x1,
+            ctypes.byref(iid),
+            ctypes.byref(instance),
+        )
+        if hr < 0 or not instance.value:
+            raise OSError(f"CoCreateInstance failed: 0x{hr & 0xFFFFFFFF:08X}")
+        interface = ctypes.cast(instance, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)))
+        terminate = ctypes.WINFUNCTYPE(
+            ctypes.c_long,
+            ctypes.c_void_p,
+            wintypes.LPCWSTR,
+        )(interface.contents[7])
+        hr = terminate(instance, package_full_name)
+        if hr < 0:
+            raise OSError(f"TerminateAllProcesses failed: 0x{hr & 0xFFFFFFFF:08X}")
+    finally:
+        if instance.value:
+            interface = ctypes.cast(instance, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)))
+            release = ctypes.WINFUNCTYPE(wintypes.ULONG, ctypes.c_void_p)(interface.contents[2])
+            release(instance)
+        if should_uninitialize:
+            ole32.CoUninitialize()
+
+
+def stop_amazon_store_packages(
+    package_full_names,
+    timeout=8,
+    poll_interval=0.35,
+    process_entries_fn=None,
+    terminate_package_fn=None,
+    sleep_fn=None,
+):
+    entries_fn = process_entries_fn or _amazon_process_entries
+    terminate_fn = terminate_package_fn or _terminate_store_package_native
+    sleeper = sleep_fn or time.sleep
+    packages = []
+    seen_packages = set()
+    for value in package_full_names or []:
+        name = _clean(value)
+        key = name.lower()
+        if _STORE_PACKAGE_FULL_NAME_RE.fullmatch(name) and key not in seen_packages:
+            packages.append(name)
+            seen_packages.add(key)
+    if not packages:
+        return {
+            "ok": False,
+            "stopped": [],
+            "remaining": [],
+            "packages": [],
+            "errors": ["Amazon Music package identity was unavailable"],
+            "error": "Amazon Music package identity was unavailable",
+        }
+    initial = entries_fn()
+    seen = {_process_id(entry) for entry in initial if _process_id(entry)}
+    errors = []
+    for package in packages:
+        try:
+            terminate_fn(package)
+        except Exception as error:
+            errors.append(_clean(error))
+    if errors:
+        return {
+            "ok": False,
+            "stopped": [],
+            "remaining": [str(pid) for pid in sorted(seen)],
+            "packages": packages,
+            "errors": errors,
+            "error": "Windows could not reset the Amazon Music package lifecycle",
+        }
+    attempts = max(2, int(max(0.1, timeout) / max(0.05, poll_interval)))
+    empty_polls = 0
+    remaining = initial
+    for _ in range(attempts):
+        remaining = entries_fn()
+        if not remaining:
+            empty_polls += 1
+            if empty_polls >= 2:
+                return {
+                    "ok": True,
+                    "stopped": [str(pid) for pid in sorted(seen)],
+                    "remaining": [],
+                    "packages": packages,
+                    "errors": [],
+                }
+        else:
+            empty_polls = 0
+            seen.update(_process_id(entry) for entry in remaining if _process_id(entry))
+        sleeper(poll_interval)
+    remaining_ids = [str(_process_id(entry)) for entry in remaining if _process_id(entry)]
+    return {
+        "ok": False,
+        "stopped": [str(pid) for pid in sorted(seen) if str(pid) not in remaining_ids],
+        "remaining": remaining_ids,
+        "packages": packages,
+        "errors": [],
+        "error": "Amazon Music package processes did not exit",
+    }
+
+
 def _launch_aumid(app_id, port):
     args = f"--remote-debugging-port={port}"
     script = f"""
@@ -406,12 +927,30 @@ Add-Type -TypeDefinition $code
 [AppActivator]::Activate({_ps_literal(app_id)}, {_ps_literal(args)})
 """
     try:
+        pid = _activate_aumid_native(app_id, args)
+        return {"ok": True, "pid": str(pid), "activation": "native"}
+    except Exception as error:
+        native_error = _clean(error)
+    try:
         completed = _run_powershell(script, 15)
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    except Exception as error:
+        return {
+            "ok": False,
+            "error": f"Native activation failed: {native_error}; PowerShell activation failed: {_clean(error)}",
+        }
     if completed.returncode != 0:
-        return {"ok": False, "error": _clean(completed.stderr) or "Could not launch Amazon Music"}
-    return {"ok": True, "pid": _clean(completed.stdout)}
+        powershell_error = _clean(completed.stderr) or "Could not launch Amazon Music"
+        return {
+            "ok": False,
+            "error": f"Native activation failed: {native_error}; PowerShell activation failed: {powershell_error}",
+        }
+    pid = ""
+    for line in reversed(completed.stdout.splitlines()):
+        value = _clean(line)
+        if value.isdigit() and int(value) > 0:
+            pid = value
+            break
+    return {"ok": True, "pid": pid, "activation": "powershell-fallback"}
 
 
 def _launch_exe(path, port):
@@ -830,6 +1369,83 @@ class _CdpSocket:
                 return message
 
 
+_BOOT_STATE_EXPRESSION = r"""
+(() => {
+  const transport = document.querySelector('#transportContainer.hasTrackLoaded') || document.querySelector('#transportContainer') || document.querySelector('#transport');
+  const splash = document.querySelector('.splashScreen');
+  let splashVisible = false;
+  if (splash) {
+    const style = getComputedStyle(splash);
+    const rect = splash.getBoundingClientRect();
+    const opacity = Number.parseFloat(style.opacity || '1');
+    splashVisible = style.display !== 'none' && style.visibility !== 'hidden' && (!Number.isFinite(opacity) || opacity > 0) && rect.width > 0 && rect.height > 0;
+  }
+  return {
+    readyState: document.readyState,
+    transport: Boolean(transport),
+    splashVisible,
+    bodyChildren: document.body ? document.body.children.length : 0
+  };
+})()
+"""
+
+
+def _page_boot_state(port):
+    target = _page_target(port=port)
+    if not target:
+        return {"ready": False, "status": "target-missing", "detail": "Enhanced metadata page was not available"}
+    client = None
+    try:
+        client = _CdpSocket(
+            target["webSocketDebuggerUrl"],
+            expected_port=port,
+            expected_target_id=target.get("id", ""),
+        )
+        response = client.request(
+            "Runtime.evaluate",
+            {"expression": _BOOT_STATE_EXPRESSION, "returnByValue": True},
+        )
+        value = response.get("result", {}).get("result", {}).get("value")
+        if not isinstance(value, dict):
+            return {"ready": False, "status": "unknown", "detail": "Amazon Music startup state was unavailable"}
+        transport = bool(value.get("transport"))
+        splash_visible = bool(value.get("splashVisible"))
+        document_ready = value.get("readyState") == "complete"
+        body_ready = int(value.get("bodyChildren") or 0) > 0
+        ready = transport or (document_ready and body_ready and not splash_visible)
+        return {
+            "ready": ready,
+            "status": "ready" if ready else "loading",
+            "detail": "Amazon Music interface is ready" if ready else "Amazon Music remained on its loading screen",
+            "transport": transport,
+            "splash_visible": splash_visible,
+        }
+    except Exception as error:
+        return {"ready": False, "status": "error", "detail": _clean(error)}
+    finally:
+        if client:
+            client.close()
+
+
+def _wait_for_app_ready(
+    port,
+    timeout=LAUNCH_READY_TIMEOUT_SECONDS,
+    poll_interval=0.5,
+    boot_state_fn=None,
+    sleep_fn=None,
+):
+    state_fn = boot_state_fn or _page_boot_state
+    sleeper = sleep_fn or time.sleep
+    attempts = max(1, int(max(0.1, timeout) / max(0.05, poll_interval)))
+    state = {"ready": False, "status": "loading", "detail": "Amazon Music is loading"}
+    for _ in range(attempts):
+        state = state_fn(port)
+        if state.get("ready"):
+            return {"ok": True, **state}
+        sleeper(poll_interval)
+    return {"ok": False, **state, "detail": "Amazon Music remained on its loading screen"}
+
+
 _TRANSPORT_EXPRESSION = r"""
 (async () => {
   const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
@@ -1055,8 +1671,25 @@ def launch_amazon_music_devtools(launcher_override=None):
             owner = _devtools_owner_trust(port, force=True)
             if not owner.get("trusted"):
                 return {"ok": False, "error": owner.get("detail"), "port": port, "owner": owner}
+            readiness = _wait_for_app_ready(port, timeout=8)
+            if not readiness.get("ok"):
+                return {
+                    "ok": False,
+                    "error": readiness.get("detail"),
+                    "port": port,
+                    "owner": owner,
+                    "readiness": readiness,
+                }
             _remember_launch("existing", "", port, owner=owner)
-            return {"ok": True, "pid": "", "port": port, "already_running": True, "method": "existing", "owner": owner}
+            return {
+                "ok": True,
+                "pid": "",
+                "port": port,
+                "already_running": True,
+                "method": "existing",
+                "owner": owner,
+                "readiness": readiness,
+            }
         if _valid_devtools_port(os.environ.get(DEVTOOLS_PORT_ENV)) == port:
             return {"ok": False, "error": f"Shared metadata port {port} is already in use", "port": port}
         for _ in range(8):
@@ -1066,6 +1699,9 @@ def launch_amazon_music_devtools(launcher_override=None):
                 break
         else:
             return {"ok": False, "error": "Could not find a free local metadata port"}
+    preparation = _prepare_amazon_launch()
+    if not preparation.get("ok"):
+        return {"ok": False, "error": preparation.get("error"), "port": port, "preparation": preparation}
     try:
         port, reservation = _reserve_devtools_port(port)
     except RuntimeError:
@@ -1092,7 +1728,27 @@ def launch_amazon_music_devtools(launcher_override=None):
                 )
                 if not owner.get("trusted"):
                     attempts.append(f"{_candidate_label(candidate)}: {owner.get('detail')}")
-                    continue
+                    cleanup = stop_amazon_music(timeout=6)
+                    return {
+                        "ok": False,
+                        "error": _format_launcher_failure(attempts),
+                        "port": port,
+                        "attempts": attempts,
+                        "cleanup": cleanup,
+                    }
+                readiness = _wait_for_app_ready(port)
+                if not readiness.get("ok"):
+                    attempts.append(f"{_candidate_label(candidate)}: Amazon Music remained on its loading screen")
+                    cleanup = stop_amazon_music(timeout=6)
+                    _clear_cache()
+                    return {
+                        "ok": False,
+                        "error": _format_launcher_failure(attempts),
+                        "port": port,
+                        "attempts": attempts,
+                        "cleanup": cleanup,
+                        "readiness": readiness,
+                    }
                 _remember_launch(candidate.get("method", ""), candidate.get("value", ""), port, result.get("pid", ""), owner)
                 return {
                     "ok": True,
@@ -1101,8 +1757,20 @@ def launch_amazon_music_devtools(launcher_override=None):
                     "method": candidate.get("method", ""),
                     "launcher": candidate.get("value", ""),
                     "owner": owner,
+                    "activation": result.get("activation", ""),
+                    "preparation": preparation,
+                    "readiness": readiness,
                 }
             attempts.append(f"{_candidate_label(candidate)}: metadata target did not appear")
+            cleanup = stop_amazon_music(timeout=6)
+            if not cleanup.get("ok"):
+                return {
+                    "ok": False,
+                    "error": f"{_format_launcher_failure(attempts)} Failed launch cleanup did not finish.",
+                    "port": port,
+                    "attempts": attempts,
+                    "cleanup": cleanup,
+                }
         else:
             attempts.append(_attempt_failure(candidate, result.get("error", "")))
     return {"ok": False, "error": _format_launcher_failure(attempts), "port": port, "attempts": attempts}
@@ -1129,50 +1797,26 @@ if ($targets.Count -gt 0) {{ "true" }} else {{ "false" }}
     return completed.returncode == 0 and _clean(completed.stdout).lower() == "true"
 
 
-def stop_amazon_music():
-    script = rf"""
-$package = '{AMAZON_PACKAGE_NAME}'
-$targets = @(Get-Process | Where-Object {{
-    $path = ""
-    try {{ $path = $_.Path }} catch {{ }}
-    ($path -and $path -like "*$package*") -or
-    ($_.ProcessName -eq "AmazonMusic") -or
-    ($_.ProcessName -eq "Amazon Music") -or
-    ($_.ProcessName -eq "Amazon Music Helper")
-}})
-$ids = @($targets | Select-Object -ExpandProperty Id)
-foreach ($proc in $targets) {{
-    try {{ $proc.CloseMainWindow() | Out-Null }} catch {{ }}
-}}
-Start-Sleep -Milliseconds 1200
-foreach ($id in $ids) {{
-    try {{
-        $proc = Get-Process -Id $id -ErrorAction Stop
-        if (-not $proc.HasExited) {{
-            Stop-Process -Id $id -Force -ErrorAction Stop
-        }}
-    }} catch {{ }}
-}}
-($ids -join ',')
-"""
-    try:
-        completed = _run_powershell(script, 15)
-    except Exception as e:
-        return {"ok": False, "error": str(e), "stopped": []}
-    stopped = [item for item in _clean(completed.stdout).split(",") if item]
-    if completed.returncode != 0:
-        return {"ok": False, "error": _clean(completed.stderr) or "Could not stop Amazon Music", "stopped": stopped}
-    return {"ok": True, "stopped": stopped}
-
-
 def restart_amazon_music_devtools():
-    stop_result = stop_amazon_music()
+    package_names = _store_package_full_names(_amazon_process_entries())
+    stop_result = stop_amazon_music_for_restart()
     if not stop_result.get("ok"):
         return stop_result
+    if package_names:
+        cleanup_result = stop_amazon_store_packages(package_names)
+    else:
+        cleanup_result = stop_amazon_helpers()
+    if not cleanup_result.get("ok"):
+        return cleanup_result
     _clear_cache()
-    time.sleep(1)
+    time.sleep(HELPER_SETTLE_SECONDS)
     launch_result = launch_amazon_music_devtools()
-    return {**launch_result, "stopped": stop_result.get("stopped", [])}
+    return {
+        **launch_result,
+        "stopped": stop_result.get("stopped", []),
+        "retired_helpers": cleanup_result.get("stopped", []),
+        "reset_packages": cleanup_result.get("packages", []),
+    }
 
 
 def _start_menu_shortcut_path():

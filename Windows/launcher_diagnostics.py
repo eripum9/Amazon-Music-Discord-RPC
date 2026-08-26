@@ -30,6 +30,8 @@ def classify_launcher_error(error):
         return "unsupported_debug_flag"
     if "metadata target did not appear" in text:
         return "metadata_target_missing"
+    if "remained on its loading screen" in text:
+        return "loading_screen_stuck"
     if "python" in text and ("_mei" in text or "python314.dll" in text):
         return "stale_pyinstaller_temp"
     if "system cannot find the file specified" in text or "指定されたファイルが見つかりません" in text:
@@ -64,6 +66,8 @@ def launcher_failure_advice(attempts):
         return "Windows PowerShell could not be started, so launcher discovery cannot run."
     if "metadata_target_missing" in categories:
         return "Amazon Music opened, but the enhanced metadata page did not appear on the selected port."
+    if "loading_screen_stuck" in categories:
+        return "Amazon Music did not finish starting in metadata mode. The failed helper was closed so normal launches remain available."
     return ""
 
 
