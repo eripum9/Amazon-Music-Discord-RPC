@@ -24,6 +24,12 @@ def test_launcher_failure_advice_prioritises_actionable_next_step():
     assert "does not accept enhanced metadata flags" in message
     assert "Last attempts:" in message
 
+    loading = launcher_diagnostics.format_launcher_failure(
+        ["auto-aumid Package!App: Amazon Music remained on its loading screen"],
+        "Could not launch Amazon Music with enhanced metadata.",
+    )
+    assert "failed helper was closed" in loading
+
 
 def test_pyinstaller_environment_diagnostics_match_updater_cleanup():
     env = {

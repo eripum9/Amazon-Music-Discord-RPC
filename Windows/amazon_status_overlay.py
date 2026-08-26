@@ -4,7 +4,7 @@ import base64
 import json
 import threading
 
-from amazon_devtools import _CdpSocket, _page_target, get_devtools_port
+from amazon_devtools import _CdpSocket, _page_boot_state, _page_target, get_devtools_port
 
 
 OVERLAY_VERSION = "2026.07.16.1"
@@ -142,13 +142,19 @@ class AmazonStatusOverlay:
                     self._close_client()
                     self._stop_event.wait(2)
                     continue
+                port = get_devtools_port(False)
+                readiness = _page_boot_state(port) if port else {"ready": False}
+                if not readiness.get("ready"):
+                    self._close_client()
+                    self._stop_event.wait(1)
+                    continue
                 target_id = target.get("id") or target.get("webSocketDebuggerUrl")
                 if not self._client or target_id != last_target:
                     self._close_client()
                     self._client = _CdpSocket(
                         target["webSocketDebuggerUrl"],
                         timeout=5,
-                        expected_port=get_devtools_port(False),
+                        expected_port=port,
                         expected_target_id=target.get("id", ""),
                     )
                     self._context_id = None

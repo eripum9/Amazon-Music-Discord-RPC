@@ -66,7 +66,7 @@ async def get_current_track():
 def get_track_sync(timeout=2.5):
     try:
         return asyncio.run(asyncio.wait_for(get_current_track(), timeout))
-    except asyncio.TimeoutError:
+    except (asyncio.TimeoutError, OSError, RuntimeError):
         return None
 
 
