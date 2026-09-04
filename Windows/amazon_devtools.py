@@ -32,8 +32,8 @@ AMAZON_EXECUTABLE_NAMES = frozenset({"amazon music.exe", "amazonmusic.exe"})
 AMAZON_HELPER_EXECUTABLE_NAMES = frozenset({"amazon music helper.exe", "amazonmusichelper.exe"})
 LAUNCH_FAILURE_HELP = "Could not launch Amazon Music with enhanced metadata. Open Diagnostics and check the Amazon Music launcher entry, or paste the launcher ID from Get-StartApps."
 LAUNCH_READY_TIMEOUT_SECONDS = 45
+APP_READY_STABLE_POLLS = 3
 PROCESS_STOP_TIMEOUT_SECONDS = 8
-HELPER_SETTLE_SECONDS = 3
 SHORTCUT_NAME = "Amazon Music Metadata.lnk"
 OLD_SHORTCUT_NAMES = ("Amazon Music Beta Metadata.lnk",)
 SHORTCUT_DIR_NAME = "Amazon Music RPC"
@@ -452,9 +452,8 @@ def stop_amazon_helpers(
     }
 
 
-def _prepare_amazon_launch(process_entries_fn=None, helper_stop_fn=None, package_stop_fn=None, sleep_fn=None):
+def _prepare_amazon_launch(process_entries_fn=None):
     entries_fn = process_entries_fn or _amazon_process_entries
-    sleeper = sleep_fn or time.sleep
     entries = entries_fn()
     mains = [entry for entry in entries if _is_main_process(entry)]
     if mains:
@@ -465,32 +464,11 @@ def _prepare_amazon_launch(process_entries_fn=None, helper_stop_fn=None, package
         }
     helpers = [entry for entry in entries if _is_helper_process(entry)]
     helper_ids = [str(_process_id(entry)) for entry in helpers if _process_id(entry)]
-    if not helpers:
-        return {"ok": True, "stale_helpers": [], "retired_helpers": []}
-    package_names = _store_package_full_names(helpers)
-    if package_names and package_stop_fn is None:
-        cleanup = stop_amazon_store_packages(package_names, process_entries_fn=entries_fn)
-    elif package_names:
-        cleanup = package_stop_fn(package_names)
-    elif helper_stop_fn is None:
-        cleanup = stop_amazon_helpers(process_entries_fn=entries_fn)
-    else:
-        cleanup = helper_stop_fn()
-    if not cleanup.get("ok"):
-        return {
-            "ok": False,
-            "error": "Amazon Music Helper could not be prepared for enhanced metadata. End it in Task Manager and try again.",
-            "stale_helpers": helper_ids,
-            "retired_helpers": cleanup.get("stopped", []),
-            "cleanup": cleanup,
-        }
-    sleeper(HELPER_SETTLE_SECONDS)
     return {
         "ok": True,
-        "stale_helpers": helper_ids,
-        "retired_helpers": cleanup.get("stopped", helper_ids),
-        "reset_packages": cleanup.get("packages", []),
-        "cleanup": cleanup,
+        "preserved_helpers": helper_ids,
+        "retired_helpers": [],
+        "reset_packages": [],
     }
 
 
@@ -1372,6 +1350,8 @@ class _CdpSocket:
 _BOOT_STATE_EXPRESSION = r"""
 (() => {
   const transport = document.querySelector('#transportContainer.hasTrackLoaded') || document.querySelector('#transportContainer') || document.querySelector('#transport');
+  const navigation = document.querySelector('#appchrome');
+  const main = document.querySelector('main#main-content');
   const splash = document.querySelector('.splashScreen');
   let splashVisible = false;
   if (splash) {
@@ -1380,14 +1360,52 @@ _BOOT_STATE_EXPRESSION = r"""
     const opacity = Number.parseFloat(style.opacity || '1');
     splashVisible = style.display !== 'none' && style.visibility !== 'hidden' && (!Number.isFinite(opacity) || opacity > 0) && rect.width > 0 && rect.height > 0;
   }
+  let mainContentReady = false;
+  let mainTextLength = 0;
+  let mainChildren = 0;
+  if (main) {
+    const style = getComputedStyle(main);
+    const rect = main.getBoundingClientRect();
+    mainTextLength = String(main.innerText || '').replace(/\s+/g, ' ').trim().length;
+    mainChildren = main.children.length;
+    const visible = style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    mainContentReady = visible && mainChildren > 0 && mainTextLength > 0;
+  }
   return {
     readyState: document.readyState,
     transport: Boolean(transport),
+    navigationReady: Boolean(navigation),
+    mainContentReady,
+    mainTextLength,
+    mainChildren,
     splashVisible,
     bodyChildren: document.body ? document.body.children.length : 0
   };
 })()
 """
+
+
+def _boot_state_result(value):
+    if not isinstance(value, dict):
+        return {"ready": False, "status": "unknown", "detail": "Amazon Music startup state was unavailable"}
+    transport = bool(value.get("transport"))
+    navigation_ready = bool(value.get("navigationReady"))
+    main_content_ready = bool(value.get("mainContentReady"))
+    splash_visible = bool(value.get("splashVisible"))
+    document_ready = value.get("readyState") == "complete"
+    body_ready = int(value.get("bodyChildren") or 0) > 0
+    ready = document_ready and body_ready and navigation_ready and main_content_ready and not splash_visible
+    return {
+        "ready": ready,
+        "status": "ready" if ready else "loading",
+        "detail": "Amazon Music interface is ready" if ready else "Amazon Music remained on its loading screen",
+        "transport": transport,
+        "navigation_ready": navigation_ready,
+        "main_content_ready": main_content_ready,
+        "main_text_length": int(value.get("mainTextLength") or 0),
+        "main_children": int(value.get("mainChildren") or 0),
+        "splash_visible": splash_visible,
+    }
 
 
 def _page_boot_state(port):
@@ -1406,20 +1424,7 @@ def _page_boot_state(port):
             {"expression": _BOOT_STATE_EXPRESSION, "returnByValue": True},
         )
         value = response.get("result", {}).get("result", {}).get("value")
-        if not isinstance(value, dict):
-            return {"ready": False, "status": "unknown", "detail": "Amazon Music startup state was unavailable"}
-        transport = bool(value.get("transport"))
-        splash_visible = bool(value.get("splashVisible"))
-        document_ready = value.get("readyState") == "complete"
-        body_ready = int(value.get("bodyChildren") or 0) > 0
-        ready = transport or (document_ready and body_ready and not splash_visible)
-        return {
-            "ready": ready,
-            "status": "ready" if ready else "loading",
-            "detail": "Amazon Music interface is ready" if ready else "Amazon Music remained on its loading screen",
-            "transport": transport,
-            "splash_visible": splash_visible,
-        }
+        return _boot_state_result(value)
     except Exception as error:
         return {"ready": False, "status": "error", "detail": _clean(error)}
     finally:
@@ -1433,21 +1438,27 @@ def _wait_for_app_ready(
     poll_interval=0.5,
     boot_state_fn=None,
     sleep_fn=None,
+    stable_polls=APP_READY_STABLE_POLLS,
 ):
     state_fn = boot_state_fn or _page_boot_state
     sleeper = sleep_fn or time.sleep
     attempts = max(1, int(max(0.1, timeout) / max(0.05, poll_interval)))
     state = {"ready": False, "status": "loading", "detail": "Amazon Music is loading"}
+    ready_polls = 0
     for _ in range(attempts):
         state = state_fn(port)
         if state.get("ready"):
-            return {"ok": True, **state}
+            ready_polls += 1
+            if ready_polls >= max(1, int(stable_polls)):
+                return {"ok": True, **state, "stable_polls": ready_polls}
+        else:
+            ready_polls = 0
         sleeper(poll_interval)
-    return {"ok": False, **state, "detail": "Amazon Music remained on its loading screen"}
+    return {"ok": False, **state, "stable_polls": ready_polls, "detail": "Amazon Music remained on its loading screen"}
 
 
 _TRANSPORT_EXPRESSION = r"""
-(async () => {
+(() => {
   const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
   const asin = (value) => {
     const text = clean(value).toUpperCase();
@@ -1462,48 +1473,6 @@ _TRANSPORT_EXPRESSION = r"""
     const text = `${location.hash || ''} ${location.search || ''}`;
     const match = text.match(/\/album\/detail\/([A-Z0-9]{10})/i) || text.match(/[?&](?:asin|id)=([A-Z0-9]{10})/i);
     return match ? asin(match[1]) : '';
-  };
-  const queueTrackAsin = async () => {
-    try {
-      const openDb = (name) => new Promise((resolve, reject) => {
-        const request = indexedDB.open(name);
-        request.onerror = () => reject(request.error);
-        request.onsuccess = () => resolve(request.result);
-      });
-      const getAll = (store) => new Promise((resolve, reject) => {
-        const request = store.getAll();
-        request.onerror = () => reject(request.error);
-        request.onsuccess = () => resolve(request.result || []);
-      });
-      const db = await openDb('amplify-datastore');
-      try {
-        if (!db.objectStoreNames.contains('user_DevicePlaybackState') || !db.objectStoreNames.contains('user_QueueSequenceSlice')) {
-          return '';
-        }
-        const transaction = db.transaction(['user_DevicePlaybackState', 'user_QueueSequenceSlice'], 'readonly');
-        const states = await getAll(transaction.objectStore('user_DevicePlaybackState'));
-        const active = states.find((state) => state.playbackState === 'PLAYING') || states.find((state) => state.playbackState === 'PAUSED') || states[0];
-        const reference = asin(active && active.deviceCurrentPlaybackState && active.deviceCurrentPlaybackState.referenceId);
-        if (reference) {
-          return reference;
-        }
-        const queueId = active && active.queueId;
-        const sequenceName = active && active.sequenceName;
-        const sequenceVersion = active && active.sequenceVersion;
-        if (!queueId) {
-          return '';
-        }
-        const slices = (await getAll(transaction.objectStore('user_QueueSequenceSlice')))
-          .filter((slice) => slice.queueId === queueId && (!sequenceName || slice.sequenceName === sequenceName) && (!sequenceVersion || slice.sequenceVersion === sequenceVersion))
-          .sort((left, right) => (left.sliceOrdinal || 0) - (right.sliceOrdinal || 0));
-        const firstReference = slices.flatMap((slice) => slice.entityReferences || []).map((item) => asin(item.identifier)).find(Boolean);
-        return firstReference || '';
-      } finally {
-        db.close();
-      }
-    } catch (_) {
-      return '';
-    }
   };
   const root = document.querySelector('#transportContainer.hasTrackLoaded') || document.querySelector('#transportContainer') || document.querySelector('#transport');
   if (!root) {
@@ -1526,7 +1495,8 @@ _TRANSPORT_EXPRESSION = r"""
   }
   const title = clean((titleEl && (titleEl.getAttribute('title') || titleEl.innerText || titleEl.textContent)) || '');
   const secondary = clean((secondaryEl && (secondaryEl.getAttribute('title') || secondaryEl.innerText || secondaryEl.textContent)) || '');
-  const trackAsin = await queueTrackAsin();
+  const trackMatch = titleLink ? clean(titleLink.href).match(/\/tracks\/([A-Z0-9]{10})(?:[/?#]|$)/i) : null;
+  const trackAsin = trackMatch ? asin(trackMatch[1]) : '';
   return {
     status: title && (secondaryParts[0] || secondary) ? 'found' : 'no_match',
     detail: title ? 'Amazon Music transport found' : 'Amazon Music transport had no title',
@@ -1601,7 +1571,6 @@ def get_devtools_track_sync(link_region=None, port=None, method=""):
         response = client.request("Runtime.evaluate", {
             "expression": _TRANSPORT_EXPRESSION,
             "returnByValue": True,
-            "awaitPromise": True,
             "timeout": 3000,
         })
         result = response.get("result", {}).get("result", {}).get("value")
@@ -1728,7 +1697,7 @@ def launch_amazon_music_devtools(launcher_override=None):
                 )
                 if not owner.get("trusted"):
                     attempts.append(f"{_candidate_label(candidate)}: {owner.get('detail')}")
-                    cleanup = stop_amazon_music(timeout=6)
+                    cleanup = stop_amazon_music_for_restart(timeout=6)
                     return {
                         "ok": False,
                         "error": _format_launcher_failure(attempts),
@@ -1739,7 +1708,7 @@ def launch_amazon_music_devtools(launcher_override=None):
                 readiness = _wait_for_app_ready(port)
                 if not readiness.get("ok"):
                     attempts.append(f"{_candidate_label(candidate)}: Amazon Music remained on its loading screen")
-                    cleanup = stop_amazon_music(timeout=6)
+                    cleanup = stop_amazon_music_for_restart(timeout=6)
                     _clear_cache()
                     return {
                         "ok": False,
@@ -1762,7 +1731,7 @@ def launch_amazon_music_devtools(launcher_override=None):
                     "readiness": readiness,
                 }
             attempts.append(f"{_candidate_label(candidate)}: metadata target did not appear")
-            cleanup = stop_amazon_music(timeout=6)
+            cleanup = stop_amazon_music_for_restart(timeout=6)
             if not cleanup.get("ok"):
                 return {
                     "ok": False,
@@ -1798,24 +1767,17 @@ if ($targets.Count -gt 0) {{ "true" }} else {{ "false" }}
 
 
 def restart_amazon_music_devtools():
-    package_names = _store_package_full_names(_amazon_process_entries())
     stop_result = stop_amazon_music_for_restart()
     if not stop_result.get("ok"):
         return stop_result
-    if package_names:
-        cleanup_result = stop_amazon_store_packages(package_names)
-    else:
-        cleanup_result = stop_amazon_helpers()
-    if not cleanup_result.get("ok"):
-        return cleanup_result
     _clear_cache()
-    time.sleep(HELPER_SETTLE_SECONDS)
     launch_result = launch_amazon_music_devtools()
     return {
         **launch_result,
         "stopped": stop_result.get("stopped", []),
-        "retired_helpers": cleanup_result.get("stopped", []),
-        "reset_packages": cleanup_result.get("packages", []),
+        "preserved_helpers": stop_result.get("preserved_helpers", []),
+        "retired_helpers": [],
+        "reset_packages": [],
     }
 
 
