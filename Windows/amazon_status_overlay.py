@@ -7,8 +7,7 @@ import threading
 from amazon_devtools import _CdpSocket, _page_boot_state, _page_target, get_devtools_port
 
 
-OVERLAY_VERSION = "2026.09.04.1"
-OVERLAY_WORLD_NAME = "AmazonMusicRPC.StatusOverlay"
+OVERLAY_VERSION = "2026.09.04.2"
 OVERLAY_READY_STABLE_POLLS = 3
 
 
@@ -90,7 +89,7 @@ class AmazonStatusOverlay:
         self._inject_thread = None
         self._stop_event = threading.Event()
         self._client = None
-        self._context_id = None
+        self._api_object_id = None
         self._lock = threading.Lock()
         self._last_error = ""
 
@@ -111,6 +110,7 @@ class AmazonStatusOverlay:
         except Exception:
             pass
         self._client = None
+        self._api_object_id = None
         if self._inject_thread and self._inject_thread is not threading.current_thread():
             self._inject_thread.join(timeout=5)
         self._inject_thread = None
@@ -172,8 +172,7 @@ class AmazonStatusOverlay:
                         expected_port=port,
                         expected_target_id=target.get("id", ""),
                     )
-                    self._context_id = None
-                    self._ensure_isolated_context(self._client)
+                    self._api_object_id = None
                     last_target = target_id
                 if not self._ui_present(self._client):
                     self._inject(self._client)
@@ -190,88 +189,95 @@ class AmazonStatusOverlay:
     def _close_client(self):
         if self._client:
             try:
+                if self._api_object_id:
+                    self._client.request("Runtime.releaseObject", {"objectId": self._api_object_id})
+            except Exception:
+                pass
+            try:
                 self._client.close()
             except Exception:
                 pass
         self._client = None
-        self._context_id = None
+        self._api_object_id = None
 
-    def _ensure_isolated_context(self, client):
-        if self._context_id:
-            return self._context_id
-        client.request("Page.enable")
-        tree = client.request("Page.getFrameTree")
-        frame_id = (
-            tree.get("result", {})
-            .get("frameTree", {})
-            .get("frame", {})
-            .get("id")
-        )
-        if not frame_id:
-            raise RuntimeError("Amazon status overlay could not resolve the main frame")
-        created = client.request(
-            "Page.createIsolatedWorld",
-            {
-                "frameId": frame_id,
-                "worldName": OVERLAY_WORLD_NAME,
-                "grantUniveralAccess": False,
-            },
-        )
-        self._context_id = created.get("result", {}).get("executionContextId")
-        if not self._context_id:
-            raise RuntimeError("Amazon status overlay could not create an isolated world")
-        return self._context_id
-
-    def _evaluate(self, client, expression, await_promise=False):
+    def _evaluate(self, client, expression, await_promise=False, return_by_value=True):
         params = {
             "expression": expression,
-            "returnByValue": True,
-            "contextId": self._ensure_isolated_context(client),
+            "returnByValue": return_by_value,
         }
         if await_promise:
             params["awaitPromise"] = True
         return client.request("Runtime.evaluate", params)
 
-    def _ui_present(self, client):
-        expression = (
-            "Boolean(document.getElementById('amrpc-status-button') "
-            "&& window.__amrpcStatusOverlay "
-            f"&& window.__amrpcStatusOverlay.version === {json.dumps(OVERLAY_VERSION)})"
+    def _call_api(self, client, function_declaration, arguments=None):
+        if not self._api_object_id:
+            raise RuntimeError("Amazon status overlay API is unavailable")
+        return client.request(
+            "Runtime.callFunctionOn",
+            {
+                "objectId": self._api_object_id,
+                "functionDeclaration": function_declaration,
+                "arguments": arguments or [],
+                "returnByValue": True,
+            },
         )
-        response = self._evaluate(client, expression)
+
+    def _ui_present(self, client):
+        if not self._api_object_id:
+            return False
+        response = self._call_api(
+            client,
+            "function(expectedVersion){return Boolean(this.version===expectedVersion && document.getElementById('amrpc-status-button') && document.getElementById('amrpc-status-menu'));}",
+            [{"value": OVERLAY_VERSION}],
+        )
         return bool(response.get("result", {}).get("result", {}).get("value"))
 
     def _remove_ui(self, client):
-        self._evaluate(
-            client,
-            "if(window.__amrpcStatusOverlay&&window.__amrpcStatusOverlay.stop)window.__amrpcStatusOverlay.stop();['amrpc-status-button','amrpc-status-menu','amrpc-status-style'].forEach(function(id){var node=document.getElementById(id);if(node&&node.parentElement)node.parentElement.removeChild(node);});delete window.__amrpcStatusOverlay;",
-        )
+        if self._api_object_id:
+            try:
+                self._call_api(client, "function(){if(this.stop)this.stop();return true;}")
+            except Exception:
+                pass
+        self._evaluate(client, "['amrpc-status-button','amrpc-status-menu','amrpc-status-style'].forEach(function(id){var node=document.getElementById(id);if(node&&node.parentElement)node.parentElement.removeChild(node);});")
 
     def _consume_action(self, client):
-        response = self._evaluate(
-            client,
-            "(function(){var api=window.__amrpcStatusOverlay;return api&&api.consume?api.consume():null;})()",
-        )
+        response = self._call_api(client, "function(){return this.consume?this.consume():null;}")
         action = response.get("result", {}).get("result", {}).get("value")
         if isinstance(action, dict) and action.get("type") == "privacy":
             self.apply_privacy(bool(action.get("enabled")))
 
     def _push_payload(self, client):
-        payload = json.dumps(self.payload())
-        self._evaluate(
+        self._call_api(
             client,
-            f"(function(data){{if(window.__amrpcStatusOverlay&&window.__amrpcStatusOverlay.render)window.__amrpcStatusOverlay.render(data);}})({payload})",
+            "function(data){if(this.render)this.render(data);return true;}",
+            [{"value": self.payload()}],
         )
 
     def _inject(self, client):
+        # Amazon Music 9.5.2 freezes playback when CDP creates an isolated world.
+        # Keep the API private by retaining only its remote object handle here.
+        if self._api_object_id:
+            self._remove_ui(client)
+            try:
+                client.request("Runtime.releaseObject", {"objectId": self._api_object_id})
+            except Exception:
+                pass
+            self._api_object_id = None
         script = self._script()
-        response = self._evaluate(client, script, await_promise=True)
+        response = self._evaluate(client, script, await_promise=True, return_by_value=False)
         result = response.get("result", {}).get("result", {})
         if result.get("subtype") == "error":
             raise RuntimeError(result.get("description") or "Amazon status overlay injection failed")
-        value = result.get("value")
-        if isinstance(value, dict) and not value.get("ok", False):
-            raise RuntimeError(value.get("reason") or "Amazon status overlay injection failed")
+        self._api_object_id = result.get("objectId")
+        if not self._api_object_id:
+            raise RuntimeError("Amazon status overlay did not return a private API handle")
+        probe = self._call_api(
+            client,
+            "function(){return {ok:Boolean(this.ok),reason:this.reason||'',version:this.version||''};}",
+        )
+        value = probe.get("result", {}).get("result", {}).get("value")
+        if not isinstance(value, dict) or not value.get("ok", False):
+            raise RuntimeError((value or {}).get("reason") or "Amazon status overlay injection failed")
 
     def _script(self):
         icon_src = _image_data_url(self.icon_path)
@@ -434,24 +440,36 @@ class AmazonStatusOverlay:
     nextAction = {{ type: 'privacy', enabled: !!toggle.checked, at: Date.now() }};
   }}, true);
   menu.addEventListener('click', function (event) {{ event.stopPropagation(); }});
-  document.addEventListener('click', function (event) {{
+  var closeMenuOnOutsideClick = function (event) {{
     if (!menu.hidden && !menu.contains(event.target) && !button.contains(event.target)) closeMenu();
-  }});
-  window.addEventListener('resize', function () {{
+  }};
+  var repositionOverlay = function () {{
     if (menu.hidden) positionButton();
     else positionMenu();
-  }});
-  window.__amrpcStatusOverlay = {{
+  }};
+  document.addEventListener('click', closeMenuOnOutsideClick);
+  window.addEventListener('resize', repositionOverlay);
+  var api = {{
+    ok: true,
     version: overlayVersion,
     render: render,
     open: openMenu,
     close: closeMenu,
-    stop: closeMenu,
+    stop: function () {{
+      closeMenu();
+      document.removeEventListener('click', closeMenuOnOutsideClick);
+      window.removeEventListener('resize', repositionOverlay);
+      [button, menu, style].forEach(function (node) {{
+        if (node && node.parentElement) node.parentElement.removeChild(node);
+      }});
+    }},
     consume: function () {{ var action = nextAction; nextAction = null; return action; }}
   }};
   positionButton();
   render(initialData);
   var rect = button.getBoundingClientRect();
-  return {{ ok: true, text: label.textContent, rect: {{ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }} }};
+  api.text = label.textContent;
+  api.rect = {{ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }};
+  return api;
 }})()
 """

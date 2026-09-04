@@ -1,7 +1,5 @@
 # MIT License - Copyright (c) 2026 eripum9
 
-import inspect
-
 import amazon_status_overlay
 
 
@@ -11,14 +9,14 @@ class FakeClient:
 
     def request(self, method, params=None):
         self.calls.append((method, params or {}))
-        if method == "Page.getFrameTree":
-            return {"result": {"frameTree": {"frame": {"id": "main-frame"}}}}
-        if method == "Page.createIsolatedWorld":
-            return {"result": {"executionContextId": 73}}
+        if method == "Runtime.evaluate" and not (params or {}).get("returnByValue", True):
+            return {"result": {"result": {"objectId": "overlay-api"}}}
+        if method == "Runtime.callFunctionOn" and "Boolean(this.ok)" in (params or {}).get("functionDeclaration", ""):
+            return {"result": {"result": {"value": {"ok": True, "version": amazon_status_overlay.OVERLAY_VERSION}}}}
         return {"result": {"result": {"value": True}}}
 
 
-def test_overlay_evaluates_only_in_isolated_world(tmp_path):
+def test_overlay_uses_private_main_world_object_without_isolated_world(tmp_path):
     icon = tmp_path / "icon.png"
     icon.write_bytes(b"icon")
     overlay = amazon_status_overlay.AmazonStatusOverlay(
@@ -29,15 +27,13 @@ def test_overlay_evaluates_only_in_isolated_world(tmp_path):
         lambda enabled: None,
     )
     client = FakeClient()
-    overlay._evaluate(client, "1 + 1")
-    create = next(params for method, params in client.calls if method == "Page.createIsolatedWorld")
+    overlay._inject(client)
     evaluate = next(params for method, params in client.calls if method == "Runtime.evaluate")
-    assert create == {
-        "frameId": "main-frame",
-        "worldName": amazon_status_overlay.OVERLAY_WORLD_NAME,
-        "grantUniveralAccess": False,
-    }
-    assert evaluate["contextId"] == 73
+    assert evaluate["returnByValue"] is False
+    assert "contextId" not in evaluate
+    assert overlay._api_object_id == "overlay-api"
+    assert all(method not in {"Page.enable", "Page.createIsolatedWorld"} for method, _ in client.calls)
+    assert any(method == "Runtime.callFunctionOn" for method, _ in client.calls)
 
 
 def test_overlay_privacy_action_requires_trusted_user_event(tmp_path):
@@ -52,9 +48,7 @@ def test_overlay_privacy_action_requires_trusted_user_event(tmp_path):
     )
     script = overlay._script()
     assert "event.isTrusted" in script
-    assert "Page.createIsolatedWorld" in inspect.getsource(
-        amazon_status_overlay.AmazonStatusOverlay._ensure_isolated_context
-    )
+    assert "window.__amrpcStatusOverlay" not in script
     assert "api.nextAction" not in script
     assert "consume: function" in script
 
