@@ -44,6 +44,14 @@ def test_devtools_single_secondary_label_populates_artist():
     assert payload["album"] == ""
 
 
+def test_devtools_transport_probe_is_dom_only():
+    expression = amazon_devtools._TRANSPORT_EXPRESSION
+    assert "indexedDB" not in expression
+    assert "user_DevicePlaybackState" not in expression
+    assert "user_QueueSequenceSlice" not in expression
+    assert "titleLink.href" in expression
+
+
 def test_devtools_target_validation_and_search_links():
     good_target = {
         "type": "page",

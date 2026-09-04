@@ -886,6 +886,9 @@ def run_self_tests(log_dir, diagnostics_path):
             and incomplete.get("status") == "no_match"
             and all(fragment in sample_html for fragment in ("trackMetadataWrapper", "secondaryInnerText", "artImage", "currentPlaybackPosition", "currentRemainingPosition", "playPause"))
             and all(selector in _TRANSPORT_EXPRESSION for selector in selectors)
+            and "indexedDB" not in _TRANSPORT_EXPRESSION
+            and "user_DevicePlaybackState" not in _TRANSPORT_EXPRESSION
+            and "user_QueueSequenceSlice" not in _TRANSPORT_EXPRESSION
         )
         results.append(_result("Amazon DevTools fragile payloads", ok, "Sample DOM shape, selectors, explicit cleanup, pause state, missing art, and one-letter album cases are covered"))
     except Exception as e:

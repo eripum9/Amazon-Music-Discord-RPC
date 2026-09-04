@@ -1458,7 +1458,7 @@ def _wait_for_app_ready(
 
 
 _TRANSPORT_EXPRESSION = r"""
-(async () => {
+(() => {
   const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
   const asin = (value) => {
     const text = clean(value).toUpperCase();
@@ -1473,48 +1473,6 @@ _TRANSPORT_EXPRESSION = r"""
     const text = `${location.hash || ''} ${location.search || ''}`;
     const match = text.match(/\/album\/detail\/([A-Z0-9]{10})/i) || text.match(/[?&](?:asin|id)=([A-Z0-9]{10})/i);
     return match ? asin(match[1]) : '';
-  };
-  const queueTrackAsin = async () => {
-    try {
-      const openDb = (name) => new Promise((resolve, reject) => {
-        const request = indexedDB.open(name);
-        request.onerror = () => reject(request.error);
-        request.onsuccess = () => resolve(request.result);
-      });
-      const getAll = (store) => new Promise((resolve, reject) => {
-        const request = store.getAll();
-        request.onerror = () => reject(request.error);
-        request.onsuccess = () => resolve(request.result || []);
-      });
-      const db = await openDb('amplify-datastore');
-      try {
-        if (!db.objectStoreNames.contains('user_DevicePlaybackState') || !db.objectStoreNames.contains('user_QueueSequenceSlice')) {
-          return '';
-        }
-        const transaction = db.transaction(['user_DevicePlaybackState', 'user_QueueSequenceSlice'], 'readonly');
-        const states = await getAll(transaction.objectStore('user_DevicePlaybackState'));
-        const active = states.find((state) => state.playbackState === 'PLAYING') || states.find((state) => state.playbackState === 'PAUSED') || states[0];
-        const reference = asin(active && active.deviceCurrentPlaybackState && active.deviceCurrentPlaybackState.referenceId);
-        if (reference) {
-          return reference;
-        }
-        const queueId = active && active.queueId;
-        const sequenceName = active && active.sequenceName;
-        const sequenceVersion = active && active.sequenceVersion;
-        if (!queueId) {
-          return '';
-        }
-        const slices = (await getAll(transaction.objectStore('user_QueueSequenceSlice')))
-          .filter((slice) => slice.queueId === queueId && (!sequenceName || slice.sequenceName === sequenceName) && (!sequenceVersion || slice.sequenceVersion === sequenceVersion))
-          .sort((left, right) => (left.sliceOrdinal || 0) - (right.sliceOrdinal || 0));
-        const firstReference = slices.flatMap((slice) => slice.entityReferences || []).map((item) => asin(item.identifier)).find(Boolean);
-        return firstReference || '';
-      } finally {
-        db.close();
-      }
-    } catch (_) {
-      return '';
-    }
   };
   const root = document.querySelector('#transportContainer.hasTrackLoaded') || document.querySelector('#transportContainer') || document.querySelector('#transport');
   if (!root) {
@@ -1537,7 +1495,8 @@ _TRANSPORT_EXPRESSION = r"""
   }
   const title = clean((titleEl && (titleEl.getAttribute('title') || titleEl.innerText || titleEl.textContent)) || '');
   const secondary = clean((secondaryEl && (secondaryEl.getAttribute('title') || secondaryEl.innerText || secondaryEl.textContent)) || '');
-  const trackAsin = await queueTrackAsin();
+  const trackMatch = titleLink ? clean(titleLink.href).match(/\/tracks\/([A-Z0-9]{10})(?:[/?#]|$)/i) : null;
+  const trackAsin = trackMatch ? asin(trackMatch[1]) : '';
   return {
     status: title && (secondaryParts[0] || secondary) ? 'found' : 'no_match',
     detail: title ? 'Amazon Music transport found' : 'Amazon Music transport had no title',
@@ -1612,7 +1571,6 @@ def get_devtools_track_sync(link_region=None, port=None, method=""):
         response = client.request("Runtime.evaluate", {
             "expression": _TRANSPORT_EXPRESSION,
             "returnByValue": True,
-            "awaitPromise": True,
             "timeout": 3000,
         })
         result = response.get("result", {}).get("result", {}).get("value")
