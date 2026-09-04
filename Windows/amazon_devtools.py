@@ -32,6 +32,7 @@ AMAZON_EXECUTABLE_NAMES = frozenset({"amazon music.exe", "amazonmusic.exe"})
 AMAZON_HELPER_EXECUTABLE_NAMES = frozenset({"amazon music helper.exe", "amazonmusichelper.exe"})
 LAUNCH_FAILURE_HELP = "Could not launch Amazon Music with enhanced metadata. Open Diagnostics and check the Amazon Music launcher entry, or paste the launcher ID from Get-StartApps."
 LAUNCH_READY_TIMEOUT_SECONDS = 45
+APP_READY_STABLE_POLLS = 3
 PROCESS_STOP_TIMEOUT_SECONDS = 8
 HELPER_SETTLE_SECONDS = 3
 SHORTCUT_NAME = "Amazon Music Metadata.lnk"
@@ -1372,6 +1373,8 @@ class _CdpSocket:
 _BOOT_STATE_EXPRESSION = r"""
 (() => {
   const transport = document.querySelector('#transportContainer.hasTrackLoaded') || document.querySelector('#transportContainer') || document.querySelector('#transport');
+  const navigation = document.querySelector('#appchrome');
+  const main = document.querySelector('main#main-content');
   const splash = document.querySelector('.splashScreen');
   let splashVisible = false;
   if (splash) {
@@ -1380,14 +1383,52 @@ _BOOT_STATE_EXPRESSION = r"""
     const opacity = Number.parseFloat(style.opacity || '1');
     splashVisible = style.display !== 'none' && style.visibility !== 'hidden' && (!Number.isFinite(opacity) || opacity > 0) && rect.width > 0 && rect.height > 0;
   }
+  let mainContentReady = false;
+  let mainTextLength = 0;
+  let mainChildren = 0;
+  if (main) {
+    const style = getComputedStyle(main);
+    const rect = main.getBoundingClientRect();
+    mainTextLength = String(main.innerText || '').replace(/\s+/g, ' ').trim().length;
+    mainChildren = main.children.length;
+    const visible = style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    mainContentReady = visible && mainChildren > 0 && mainTextLength > 0;
+  }
   return {
     readyState: document.readyState,
     transport: Boolean(transport),
+    navigationReady: Boolean(navigation),
+    mainContentReady,
+    mainTextLength,
+    mainChildren,
     splashVisible,
     bodyChildren: document.body ? document.body.children.length : 0
   };
 })()
 """
+
+
+def _boot_state_result(value):
+    if not isinstance(value, dict):
+        return {"ready": False, "status": "unknown", "detail": "Amazon Music startup state was unavailable"}
+    transport = bool(value.get("transport"))
+    navigation_ready = bool(value.get("navigationReady"))
+    main_content_ready = bool(value.get("mainContentReady"))
+    splash_visible = bool(value.get("splashVisible"))
+    document_ready = value.get("readyState") == "complete"
+    body_ready = int(value.get("bodyChildren") or 0) > 0
+    ready = document_ready and body_ready and navigation_ready and main_content_ready and not splash_visible
+    return {
+        "ready": ready,
+        "status": "ready" if ready else "loading",
+        "detail": "Amazon Music interface is ready" if ready else "Amazon Music remained on its loading screen",
+        "transport": transport,
+        "navigation_ready": navigation_ready,
+        "main_content_ready": main_content_ready,
+        "main_text_length": int(value.get("mainTextLength") or 0),
+        "main_children": int(value.get("mainChildren") or 0),
+        "splash_visible": splash_visible,
+    }
 
 
 def _page_boot_state(port):
@@ -1406,20 +1447,7 @@ def _page_boot_state(port):
             {"expression": _BOOT_STATE_EXPRESSION, "returnByValue": True},
         )
         value = response.get("result", {}).get("result", {}).get("value")
-        if not isinstance(value, dict):
-            return {"ready": False, "status": "unknown", "detail": "Amazon Music startup state was unavailable"}
-        transport = bool(value.get("transport"))
-        splash_visible = bool(value.get("splashVisible"))
-        document_ready = value.get("readyState") == "complete"
-        body_ready = int(value.get("bodyChildren") or 0) > 0
-        ready = transport or (document_ready and body_ready and not splash_visible)
-        return {
-            "ready": ready,
-            "status": "ready" if ready else "loading",
-            "detail": "Amazon Music interface is ready" if ready else "Amazon Music remained on its loading screen",
-            "transport": transport,
-            "splash_visible": splash_visible,
-        }
+        return _boot_state_result(value)
     except Exception as error:
         return {"ready": False, "status": "error", "detail": _clean(error)}
     finally:
@@ -1433,17 +1461,23 @@ def _wait_for_app_ready(
     poll_interval=0.5,
     boot_state_fn=None,
     sleep_fn=None,
+    stable_polls=APP_READY_STABLE_POLLS,
 ):
     state_fn = boot_state_fn or _page_boot_state
     sleeper = sleep_fn or time.sleep
     attempts = max(1, int(max(0.1, timeout) / max(0.05, poll_interval)))
     state = {"ready": False, "status": "loading", "detail": "Amazon Music is loading"}
+    ready_polls = 0
     for _ in range(attempts):
         state = state_fn(port)
         if state.get("ready"):
-            return {"ok": True, **state}
+            ready_polls += 1
+            if ready_polls >= max(1, int(stable_polls)):
+                return {"ok": True, **state, "stable_polls": ready_polls}
+        else:
+            ready_polls = 0
         sleeper(poll_interval)
-    return {"ok": False, **state, "detail": "Amazon Music remained on its loading screen"}
+    return {"ok": False, **state, "stable_polls": ready_polls, "detail": "Amazon Music remained on its loading screen"}
 
 
 _TRANSPORT_EXPRESSION = r"""

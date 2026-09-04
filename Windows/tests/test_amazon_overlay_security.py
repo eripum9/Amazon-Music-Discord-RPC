@@ -59,6 +59,23 @@ def test_overlay_privacy_action_requires_trusted_user_event(tmp_path):
     assert "consume: function" in script
 
 
+def test_overlay_mounts_outside_amazon_owned_layout(tmp_path):
+    icon = tmp_path / "icon.png"
+    icon.write_bytes(b"icon")
+    overlay = amazon_status_overlay.AmazonStatusOverlay(
+        str(icon),
+        lambda: {},
+        lambda: {},
+        lambda: True,
+        lambda enabled: None,
+    )
+    script = overlay._script()
+    assert "document.body.appendChild(button)" in script
+    assert "position: fixed" in script
+    assert "parent.style" not in script
+    assert "parent.insertBefore" not in script
+
+
 def test_overlay_does_not_attach_during_amazon_splash(monkeypatch, tmp_path):
     icon = tmp_path / "icon.png"
     icon.write_bytes(b"icon")
@@ -102,3 +119,54 @@ def test_overlay_does_not_attach_during_amazon_splash(monkeypatch, tmp_path):
     )
     overlay._run()
     assert overlay._client is None
+
+
+def test_overlay_requires_stable_ready_page_before_attach(monkeypatch, tmp_path):
+    icon = tmp_path / "icon.png"
+    icon.write_bytes(b"icon")
+    overlay = amazon_status_overlay.AmazonStatusOverlay(
+        str(icon),
+        lambda: {},
+        lambda: {},
+        lambda: True,
+        lambda enabled: None,
+    )
+
+    class StopAfterWaits:
+        def __init__(self, limit):
+            self.limit = limit
+            self.waits = 0
+
+        def is_set(self):
+            return self.waits >= self.limit
+
+        def wait(self, timeout):
+            self.waits += 1
+
+        def set(self):
+            self.waits = self.limit
+
+    created = []
+
+    def create_client(*args, **kwargs):
+        client = FakeClient()
+        created.append((overlay._stop_event.waits, client))
+        return client
+
+    overlay._stop_event = StopAfterWaits(amazon_status_overlay.OVERLAY_READY_STABLE_POLLS)
+    monkeypatch.setattr(
+        amazon_status_overlay,
+        "_page_target",
+        lambda: {"id": "page", "webSocketDebuggerUrl": "ws://127.0.0.1:52856/devtools/page/page"},
+    )
+    monkeypatch.setattr(amazon_status_overlay, "get_devtools_port", lambda create=False: 52856)
+    monkeypatch.setattr(
+        amazon_status_overlay,
+        "_page_boot_state",
+        lambda port: {"ready": True, "status": "ready", "splash_visible": False},
+    )
+    monkeypatch.setattr(amazon_status_overlay, "_CdpSocket", create_client)
+    overlay._run()
+    assert len(created) == 1
+    assert created[0][0] == amazon_status_overlay.OVERLAY_READY_STABLE_POLLS - 1
+    assert overlay._client is created[0][1]

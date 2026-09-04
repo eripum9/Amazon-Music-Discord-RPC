@@ -7,8 +7,9 @@ import threading
 from amazon_devtools import _CdpSocket, _page_boot_state, _page_target, get_devtools_port
 
 
-OVERLAY_VERSION = "2026.07.16.1"
+OVERLAY_VERSION = "2026.09.04.1"
 OVERLAY_WORLD_NAME = "AmazonMusicRPC.StatusOverlay"
+OVERLAY_READY_STABLE_POLLS = 3
 
 
 def _clean(value):
@@ -135,20 +136,34 @@ class AmazonStatusOverlay:
 
     def _run(self):
         last_target = None
+        ready_target = None
+        ready_polls = 0
         while not self._stop_event.is_set():
             try:
                 target = _page_target()
                 if not target:
                     self._close_client()
+                    ready_target = None
+                    ready_polls = 0
                     self._stop_event.wait(2)
                     continue
                 port = get_devtools_port(False)
                 readiness = _page_boot_state(port) if port else {"ready": False}
+                target_id = target.get("id") or target.get("webSocketDebuggerUrl")
                 if not readiness.get("ready"):
                     self._close_client()
+                    ready_target = None
+                    ready_polls = 0
                     self._stop_event.wait(1)
                     continue
-                target_id = target.get("id") or target.get("webSocketDebuggerUrl")
+                if target_id != ready_target:
+                    ready_target = target_id
+                    ready_polls = 1
+                else:
+                    ready_polls += 1
+                if ready_polls < OVERLAY_READY_STABLE_POLLS:
+                    self._stop_event.wait(1)
+                    continue
                 if not self._client or target_id != last_target:
                     self._close_client()
                     self._client = _CdpSocket(
@@ -168,6 +183,8 @@ class AmazonStatusOverlay:
             except Exception as e:
                 self._last_error = str(e)
                 self._close_client()
+                ready_target = None
+                ready_polls = 0
                 self._stop_event.wait(3)
 
     def _close_client(self):
@@ -273,8 +290,7 @@ class AmazonStatusOverlay:
   }}
   if (!input) return {{ ok: false, reason: 'search input not found' }};
   var searchContainer = input.closest('.searchBarContainer') || input.closest('.searchBar') || input.parentElement;
-  var parent = searchContainer && searchContainer.parentElement;
-  if (!searchContainer || !parent) return {{ ok: false, reason: 'search container not found' }};
+  if (!searchContainer) return {{ ok: false, reason: 'search container not found' }};
   ['amrpc-status-button', 'amrpc-status-menu', 'amrpc-status-style'].forEach(function (id) {{
     var node = document.getElementById(id);
     if (node && node.parentElement) node.parentElement.removeChild(node);
@@ -287,7 +303,7 @@ class AmazonStatusOverlay:
       background: rgba(30, 215, 96, .95); color: #08120c; display: inline-flex; align-items: center;
       justify-content: center; gap: 7px; font: 800 12px/1 "Segoe UI", sans-serif; letter-spacing: 0;
       white-space: nowrap; cursor: pointer; box-shadow: 0 0 0 1px rgba(255,255,255,.16), 0 8px 22px rgba(0,0,0,.28);
-      position: relative; z-index: 80;
+      position: fixed; z-index: 1000000;
     }}
     #amrpc-status-button[data-tone="private"] {{ background: rgba(88, 101, 242, .96); color: #fff; }}
     #amrpc-status-button[data-tone="paused"] {{ background: rgba(255, 209, 102, .96); color: #17110a; }}
@@ -338,10 +354,8 @@ class AmazonStatusOverlay:
     </div>
     <div class="amrpc-diag"><div class="amrpc-diag-title">Mini diagnostics</div><div id="amrpc-diag-list"></div></div>
   `;
+  document.body.appendChild(button);
   document.body.appendChild(menu);
-  parent.style.display = 'flex';
-  parent.style.alignItems = 'center';
-  parent.insertBefore(button, searchContainer);
   var label = button.querySelector('#amrpc-status-label');
   var pill = menu.querySelector('#amrpc-menu-pill');
   var toggle = menu.querySelector('#amrpc-privacy-toggle');
@@ -359,7 +373,15 @@ class AmazonStatusOverlay:
     toggle.disabled = privacyBusy;
     toggleShell.dataset.busy = privacyBusy ? '1' : '0';
   }};
+  var positionButton = function () {{
+    var searchRect = searchContainer.getBoundingClientRect();
+    var width = button.offsetWidth || 98;
+    var top = searchRect.top + Math.max(0, (searchRect.height - 36) / 2);
+    button.style.top = Math.max(8, Math.round(top)) + 'px';
+    button.style.left = Math.max(12, Math.round(searchRect.left - width - 10)) + 'px';
+  }};
   var positionMenu = function () {{
+    positionButton();
     var rect = button.getBoundingClientRect();
     menu.style.top = Math.round(rect.bottom + 8) + 'px';
     menu.style.right = Math.max(12, Math.round(window.innerWidth - rect.right)) + 'px';
@@ -374,6 +396,7 @@ class AmazonStatusOverlay:
     diagList.innerHTML = (data.diagnostics || []).map(function (row) {{
       return '<div class="amrpc-diag-row" data-state="' + escapeHtml(row.state || 'ok') + '"><span><i class="amrpc-dot"></i>' + escapeHtml(row.label) + '</span><strong>' + escapeHtml(row.value) + '</strong></div>';
     }}).join('');
+    positionButton();
   }};
   var openMenu = function () {{
     positionMenu();
@@ -414,7 +437,10 @@ class AmazonStatusOverlay:
   document.addEventListener('click', function (event) {{
     if (!menu.hidden && !menu.contains(event.target) && !button.contains(event.target)) closeMenu();
   }});
-  window.addEventListener('resize', positionMenu);
+  window.addEventListener('resize', function () {{
+    if (menu.hidden) positionButton();
+    else positionMenu();
+  }});
   window.__amrpcStatusOverlay = {{
     version: overlayVersion,
     render: render,
@@ -423,6 +449,7 @@ class AmazonStatusOverlay:
     stop: closeMenu,
     consume: function () {{ var action = nextAction; nextAction = null; return action; }}
   }};
+  positionButton();
   render(initialData);
   var rect = button.getBoundingClientRect();
   return {{ ok: true, text: label.textContent, rect: {{ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }} }};

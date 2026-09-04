@@ -321,6 +321,8 @@ def test_devtools_waits_for_splash_screen_to_clear():
             {"ready": False, "status": "loading", "detail": "loading"},
             {"ready": False, "status": "loading", "detail": "loading"},
             {"ready": True, "status": "ready", "detail": "ready"},
+            {"ready": True, "status": "ready", "detail": "ready"},
+            {"ready": True, "status": "ready", "detail": "ready"},
         ]
     )
     result = amazon_devtools._wait_for_app_ready(
@@ -332,6 +334,58 @@ def test_devtools_waits_for_splash_screen_to_clear():
     )
     assert result["ok"] is True
     assert result["status"] == "ready"
+    assert result["stable_polls"] == amazon_devtools.APP_READY_STABLE_POLLS
+
+
+def test_devtools_transport_shell_is_not_enough_for_app_readiness():
+    loading = amazon_devtools._boot_state_result(
+        {
+            "readyState": "complete",
+            "transport": True,
+            "navigationReady": True,
+            "mainContentReady": False,
+            "mainTextLength": 0,
+            "mainChildren": 0,
+            "splashVisible": False,
+            "bodyChildren": 4,
+        }
+    )
+    ready = amazon_devtools._boot_state_result(
+        {
+            "readyState": "complete",
+            "transport": True,
+            "navigationReady": True,
+            "mainContentReady": True,
+            "mainTextLength": 120,
+            "mainChildren": 2,
+            "splashVisible": False,
+            "bodyChildren": 4,
+        }
+    )
+    assert loading["ready"] is False
+    assert ready["ready"] is True
+
+
+def test_devtools_readiness_stability_resets_after_loading_state():
+    states = iter(
+        [
+            {"ready": True, "status": "ready", "detail": "ready"},
+            {"ready": True, "status": "ready", "detail": "ready"},
+            {"ready": False, "status": "loading", "detail": "loading"},
+            {"ready": True, "status": "ready", "detail": "ready"},
+            {"ready": True, "status": "ready", "detail": "ready"},
+            {"ready": True, "status": "ready", "detail": "ready"},
+        ]
+    )
+    result = amazon_devtools._wait_for_app_ready(
+        52856,
+        timeout=2,
+        poll_interval=0.2,
+        boot_state_fn=lambda port: next(states),
+        sleep_fn=lambda delay: None,
+    )
+    assert result["ok"] is True
+    assert result["stable_polls"] == amazon_devtools.APP_READY_STABLE_POLLS
 
 
 def test_devtools_failed_splash_launch_is_cleaned_up(monkeypatch):
