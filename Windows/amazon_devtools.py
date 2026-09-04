@@ -34,7 +34,6 @@ LAUNCH_FAILURE_HELP = "Could not launch Amazon Music with enhanced metadata. Ope
 LAUNCH_READY_TIMEOUT_SECONDS = 45
 APP_READY_STABLE_POLLS = 3
 PROCESS_STOP_TIMEOUT_SECONDS = 8
-HELPER_SETTLE_SECONDS = 3
 SHORTCUT_NAME = "Amazon Music Metadata.lnk"
 OLD_SHORTCUT_NAMES = ("Amazon Music Beta Metadata.lnk",)
 SHORTCUT_DIR_NAME = "Amazon Music RPC"
@@ -453,9 +452,8 @@ def stop_amazon_helpers(
     }
 
 
-def _prepare_amazon_launch(process_entries_fn=None, helper_stop_fn=None, package_stop_fn=None, sleep_fn=None):
+def _prepare_amazon_launch(process_entries_fn=None):
     entries_fn = process_entries_fn or _amazon_process_entries
-    sleeper = sleep_fn or time.sleep
     entries = entries_fn()
     mains = [entry for entry in entries if _is_main_process(entry)]
     if mains:
@@ -466,32 +464,11 @@ def _prepare_amazon_launch(process_entries_fn=None, helper_stop_fn=None, package
         }
     helpers = [entry for entry in entries if _is_helper_process(entry)]
     helper_ids = [str(_process_id(entry)) for entry in helpers if _process_id(entry)]
-    if not helpers:
-        return {"ok": True, "stale_helpers": [], "retired_helpers": []}
-    package_names = _store_package_full_names(helpers)
-    if package_names and package_stop_fn is None:
-        cleanup = stop_amazon_store_packages(package_names, process_entries_fn=entries_fn)
-    elif package_names:
-        cleanup = package_stop_fn(package_names)
-    elif helper_stop_fn is None:
-        cleanup = stop_amazon_helpers(process_entries_fn=entries_fn)
-    else:
-        cleanup = helper_stop_fn()
-    if not cleanup.get("ok"):
-        return {
-            "ok": False,
-            "error": "Amazon Music Helper could not be prepared for enhanced metadata. End it in Task Manager and try again.",
-            "stale_helpers": helper_ids,
-            "retired_helpers": cleanup.get("stopped", []),
-            "cleanup": cleanup,
-        }
-    sleeper(HELPER_SETTLE_SECONDS)
     return {
         "ok": True,
-        "stale_helpers": helper_ids,
-        "retired_helpers": cleanup.get("stopped", helper_ids),
-        "reset_packages": cleanup.get("packages", []),
-        "cleanup": cleanup,
+        "preserved_helpers": helper_ids,
+        "retired_helpers": [],
+        "reset_packages": [],
     }
 
 
@@ -1762,7 +1739,7 @@ def launch_amazon_music_devtools(launcher_override=None):
                 )
                 if not owner.get("trusted"):
                     attempts.append(f"{_candidate_label(candidate)}: {owner.get('detail')}")
-                    cleanup = stop_amazon_music(timeout=6)
+                    cleanup = stop_amazon_music_for_restart(timeout=6)
                     return {
                         "ok": False,
                         "error": _format_launcher_failure(attempts),
@@ -1773,7 +1750,7 @@ def launch_amazon_music_devtools(launcher_override=None):
                 readiness = _wait_for_app_ready(port)
                 if not readiness.get("ok"):
                     attempts.append(f"{_candidate_label(candidate)}: Amazon Music remained on its loading screen")
-                    cleanup = stop_amazon_music(timeout=6)
+                    cleanup = stop_amazon_music_for_restart(timeout=6)
                     _clear_cache()
                     return {
                         "ok": False,
@@ -1796,7 +1773,7 @@ def launch_amazon_music_devtools(launcher_override=None):
                     "readiness": readiness,
                 }
             attempts.append(f"{_candidate_label(candidate)}: metadata target did not appear")
-            cleanup = stop_amazon_music(timeout=6)
+            cleanup = stop_amazon_music_for_restart(timeout=6)
             if not cleanup.get("ok"):
                 return {
                     "ok": False,
@@ -1832,24 +1809,17 @@ if ($targets.Count -gt 0) {{ "true" }} else {{ "false" }}
 
 
 def restart_amazon_music_devtools():
-    package_names = _store_package_full_names(_amazon_process_entries())
     stop_result = stop_amazon_music_for_restart()
     if not stop_result.get("ok"):
         return stop_result
-    if package_names:
-        cleanup_result = stop_amazon_store_packages(package_names)
-    else:
-        cleanup_result = stop_amazon_helpers()
-    if not cleanup_result.get("ok"):
-        return cleanup_result
     _clear_cache()
-    time.sleep(HELPER_SETTLE_SECONDS)
     launch_result = launch_amazon_music_devtools()
     return {
         **launch_result,
         "stopped": stop_result.get("stopped", []),
-        "retired_helpers": cleanup_result.get("stopped", []),
-        "reset_packages": cleanup_result.get("packages", []),
+        "preserved_helpers": stop_result.get("preserved_helpers", []),
+        "retired_helpers": [],
+        "reset_packages": [],
     }
 
 

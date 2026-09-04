@@ -248,28 +248,30 @@ def test_devtools_store_package_stop_waits_for_full_exit():
     assert terminated == [package]
 
 
-def test_devtools_restart_uses_store_package_lifecycle_reset(monkeypatch):
+def test_devtools_restart_preserves_helper_and_skips_package_reset(monkeypatch):
     package = "AmazonMobileLLC.AmazonMusic_9.5.2.0_x86__kc6t79cpj4tp0"
-    entry = {"Pid": 30, "Path": rf"C:\Program Files\WindowsApps\{package}\Amazon Music.exe", "Kind": "main"}
-    reset_calls = []
-    monkeypatch.setattr(amazon_devtools, "_amazon_process_entries", lambda: [entry])
-    monkeypatch.setattr(amazon_devtools, "stop_amazon_music_for_restart", lambda: {"ok": True, "stopped": ["30"]})
+    helper = {"Pid": 31, "Path": rf"C:\Program Files\WindowsApps\{package}\Amazon Music Helper.exe", "Kind": "helper"}
+    monkeypatch.setattr(
+        amazon_devtools,
+        "stop_amazon_music_for_restart",
+        lambda: {"ok": True, "stopped": ["30"], "preserved_helpers": ["31"]},
+    )
     monkeypatch.setattr(
         amazon_devtools,
         "stop_amazon_store_packages",
-        lambda packages: reset_calls.append(packages) or {"ok": True, "stopped": ["31"], "packages": packages},
+        lambda packages: (_ for _ in ()).throw(AssertionError("Restart must preserve the Store package lifecycle")),
     )
     monkeypatch.setattr(
         amazon_devtools,
         "stop_amazon_helpers",
-        lambda: (_ for _ in ()).throw(AssertionError("Store restart must use package lifecycle reset")),
+        lambda: (_ for _ in ()).throw(AssertionError("Restart must preserve Amazon Music Helper")),
     )
-    monkeypatch.setattr(amazon_devtools.time, "sleep", lambda delay: None)
     monkeypatch.setattr(amazon_devtools, "launch_amazon_music_devtools", lambda: {"ok": True, "method": "auto-aumid"})
     result = amazon_devtools.restart_amazon_music_devtools()
     assert result["ok"] is True
-    assert result["reset_packages"] == [package]
-    assert reset_calls == [[package]]
+    assert result["preserved_helpers"] == [str(helper["Pid"])]
+    assert result["retired_helpers"] == []
+    assert result["reset_packages"] == []
 
 
 def test_devtools_helper_stop_handles_respawn_before_launch():
@@ -297,22 +299,17 @@ def test_devtools_helper_stop_handles_respawn_before_launch():
     assert calls == [(True, [30]), (True, [31])]
 
 
-def test_devtools_launch_preparation_retires_existing_helpers():
+def test_devtools_launch_preparation_preserves_existing_helpers():
     main = {"Pid": 20, "Name": "Amazon Music.exe", "Kind": "main"}
     helper = {"Pid": 21, "Name": "Amazon Music Helper.exe", "Kind": "helper"}
     running = amazon_devtools._prepare_amazon_launch(process_entries_fn=lambda: [main, helper])
-    delays = []
-    prepared = amazon_devtools._prepare_amazon_launch(
-        process_entries_fn=lambda: [helper],
-        helper_stop_fn=lambda: {"ok": True, "stopped": ["21"], "remaining": [], "errors": []},
-        sleep_fn=delays.append,
-    )
+    prepared = amazon_devtools._prepare_amazon_launch(process_entries_fn=lambda: [helper])
     assert running["ok"] is False
     assert running["main_processes"] == ["20"]
     assert prepared["ok"] is True
-    assert prepared["stale_helpers"] == ["21"]
-    assert prepared["retired_helpers"] == ["21"]
-    assert delays == [amazon_devtools.HELPER_SETTLE_SECONDS]
+    assert prepared["preserved_helpers"] == ["21"]
+    assert prepared["retired_helpers"] == []
+    assert prepared["reset_packages"] == []
 
 
 def test_devtools_waits_for_splash_screen_to_clear():
@@ -418,7 +415,7 @@ def test_devtools_failed_splash_launch_is_cleaned_up(monkeypatch):
     cleanup_calls = []
     monkeypatch.setattr(
         amazon_devtools,
-        "stop_amazon_music",
+        "stop_amazon_music_for_restart",
         lambda timeout=amazon_devtools.PROCESS_STOP_TIMEOUT_SECONDS: cleanup_calls.append(timeout) or {"ok": True, "stopped": ["44"]},
     )
     result = amazon_devtools.launch_amazon_music_devtools()
