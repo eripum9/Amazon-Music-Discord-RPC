@@ -253,6 +253,10 @@ Under **Startup & Presence**, the **Discord status display** setting controls wh
 - Use GitHub issues for bugs, enhanced metadata problems, and feature requests.
 - Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and testing instructions. For privately reporting security vulnerabilities, see [SECURITY.md](SECURITY.md). Windows is the stable platform; macOS is currently beta.
+
 ## Credits
 
 - [pypresence](https://github.com/qwertyquerty/pypresence) — Discord RPC library
