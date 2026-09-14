@@ -6,4 +6,4 @@ PySide6-Essentials==6.11.2
 pywebview==6.2.1
 pylast==7.1.0
 liblistenbrainz==0.7.0
-cryptography==50.0.0
+cryptography==50.0.1
