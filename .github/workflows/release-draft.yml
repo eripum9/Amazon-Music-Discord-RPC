@@ -127,7 +127,7 @@ jobs:
           Set-Content -LiteralPath "$installer.sha256" -Value "$hash  AmazonMusicRPC_Setup.exe" -Encoding ascii
 
       - name: Release smoke
-        run: python Windows/release_smoke.py --installer Windows/installer_output/AmazonMusicRPC_Setup.exe --executable Windows/dist/AmazonMusicRPC.exe --expected-pillow 12.3.0
+        run: python Windows/release_smoke.py --installer Windows/installer_output/AmazonMusicRPC_Setup.exe --executable Windows/dist/AmazonMusicRPC.exe --expected-pillow 13.0.0
 
       - name: Packaged window smoke tests
         shell: pwsh

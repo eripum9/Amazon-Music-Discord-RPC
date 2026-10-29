@@ -1,5 +1,6 @@
 # MIT License - Copyright (c) 2026 eripum9
 
+import re
 from pathlib import Path
 
 from packaging.requirements import Requirement
@@ -93,6 +94,7 @@ def test_official_release_workflow_keeps_trust_guards():
     workflow = (ROOT / ".github/workflows/release-draft.yml").read_text(encoding="utf-8")
     spec = (ROOT / "Windows/AmazonMusicRPC.spec").read_text(encoding="utf-8")
     lock = (ROOT / "Windows/requirements-release.lock").read_text(encoding="utf-8")
+    requirements = (ROOT / "Windows/requirements.txt").read_text(encoding="utf-8")
     assert "workflow_dispatch:" in workflow
     assert "refs/heads/master" in workflow
     assert "--require-hashes" in workflow
@@ -111,15 +113,33 @@ def test_official_release_workflow_keeps_trust_guards():
     )
     assert Version(next(iter(crypto_pin.specifier)).version) >= Version("50.0.2")
     assert "cryptography==49.0.0" not in lock
-    assert "pip==26.2.1" in lock
+    pip_pin = next(
+        Requirement(line.rstrip(" \\"))
+        for line in lock.splitlines()
+        if line.startswith("pip==")
+    )
+    assert Version(next(iter(pip_pin.specifier)).version) >= Version("26.2.1")
     assert "pip==26.1.2" not in lock
-    assert "pillow==12.3.0" in lock
+    pillow_pin = next(
+        Requirement(line.rstrip(" \\"))
+        for line in lock.splitlines()
+        if line.lower().startswith("pillow==")
+    )
+    assert Version(next(iter(pillow_pin.specifier)).version) >= Version("13.0.0")
     assert "pillow==12.2.0" not in lock
     assert "pytest-cov==7.1.0" in lock
     assert "--hash=sha256:" in lock
     assert "WINDOWS_SIGNING" not in workflow
     assert "signtool" not in workflow.lower()
-    assert "--expected-pillow 12.3.0" in workflow
+    declared_pillow = next(
+        Requirement(line)
+        for line in requirements.splitlines()
+        if line.lower().startswith("pillow==")
+    )
+    workflow_pillow_version = re.search(r"--expected-pillow\s+(\S+)", workflow)
+    assert workflow_pillow_version is not None
+    workflow_pillow = Requirement(f"Pillow=={workflow_pillow_version.group(1)}")
+    assert workflow_pillow.specifier == declared_pillow.specifier
 
 
 def test_release_lock_matches_all_declared_dependency_pins():

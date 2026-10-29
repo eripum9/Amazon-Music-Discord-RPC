@@ -83,7 +83,7 @@ jobs:
             installer = $installerName
             sha256 = $hash
           } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outputDir 'build-info.json') -Encoding utf8NoBOM
-          python Windows/release_smoke.py --installer $installer --executable Windows/dist/AmazonMusicRPC.exe --expected-pillow 12.3.0
+          python Windows/release_smoke.py --installer $installer --executable Windows/dist/AmazonMusicRPC.exe --expected-pillow 13.0.0
           if ($LASTEXITCODE -ne 0) {
             throw 'Diagnostic artifact smoke check failed.'
           }
