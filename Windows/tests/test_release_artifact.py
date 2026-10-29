@@ -5,13 +5,14 @@ import pytest
 import release_artifact
 
 
-def test_embedded_pillow_version_finds_semantic_version(monkeypatch):
+@pytest.mark.parametrize("version", ["12.3.0", "13.0.0"])
+def test_embedded_pillow_version_finds_semantic_version(monkeypatch, version):
     monkeypatch.setattr(
         release_artifact,
         "embedded_module_constants",
-        lambda executable, module_name: (0, ("annotations",), "12.3.0", None),
+        lambda executable, module_name: (0, ("annotations",), version, None),
     )
-    assert release_artifact.embedded_pillow_version("app.exe") == "12.3.0"
+    assert release_artifact.embedded_pillow_version("app.exe") == version
 
 
 def test_embedded_pillow_version_rejects_missing_version(monkeypatch):
