@@ -1,5 +1,5 @@
 -r requirements-dev.txt
-pip==26.2.1
+pip==26.2.2
 build==1.6.1
 PyInstaller==6.22.3
 cyclonedx-bom==7.5.0
