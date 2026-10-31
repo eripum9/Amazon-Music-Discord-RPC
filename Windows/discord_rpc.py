@@ -129,7 +129,7 @@ class DiscordRPC:
             self.connect()
         return self.connected
 
-    def update(self, title, artist, album_art_url=None, album_name=None, start_ts=None, duration=0, buttons=None, small_image=None, small_text=None, status_display="artist"):
+    def update(self, title, artist, album_art_url=None, album_name=None, start_ts=None, duration=0, buttons=None, small_image=None, small_text=None, status_display="artist", large_text=None):
         if not self._ensure_connected():
             return
 
@@ -149,7 +149,7 @@ class DiscordRPC:
             "state": state,
             "status_display_type": status_display_type,
             "assets": {
-                "large_text": _discord_asset_text(album_name, title),
+                "large_text": (str(large_text)[:128] if large_text else _discord_asset_text(album_name, title)),
             },
             "instance": True,
         }

@@ -19,7 +19,7 @@ from config import load_config, update_config_fields, mutate_config_fields, DEFA
 from amazify_compat import amazify_compat_state, ensure_amazify_compat, push_rpc_state_to_amazify
 from amazify_rpc_bridge import start_amazify_rpc_bridge
 from metadata_pipeline import apply_art_result, apply_devtools_source, base_track_for_devtools, diagnostics_track_link, link_buttons, merge_notification_metadata, should_lookup_deezer_button
-from rpc_state import GameModeState, ResolvedTrackStore, TrackTimingState, apply_track_mapping, configured_game_mode_processes, devtools_no_track_state, duration_value, find_custom_album_art, game_mode_matches_processes, hidden_privacy_track, normalise_process_name, normalise_track, normalised_text, privacy_keywords, privacy_match, remembered_track_mapping, running_process_names, same_track_field, scrobble_eligible, track_info_payload, track_position
+from rpc_state import GameModeState, paused_album_line, paused_presence_text, ResolvedTrackStore, TrackTimingState, apply_track_mapping, configured_game_mode_processes, devtools_no_track_state, duration_value, find_custom_album_art, game_mode_matches_processes, hidden_privacy_track, normalise_process_name, normalise_track, normalised_text, privacy_keywords, privacy_match, remembered_track_mapping, running_process_names, same_track_field, scrobble_eligible, track_info_payload, track_position
 from status_summary import metadata_source_summary
 from tray_state import build_snapshot as build_tray_snapshot, icon_title as _tray_icon_title, signature as _tray_signature
 from updater import check_for_update, prompt_for_update, run_update_helper
@@ -957,21 +957,20 @@ def rpc_loop():
                     paused_title = title_parts[0]
                     paused_artist = title_parts[1] if len(title_parts) > 1 else ""
                     buttons = _link_buttons(paused_title, paused_artist)
-                    pause_start_ts = None
-                    pause_duration = 0
-                    if paused_position is not None:
-                        pause_start_ts = int(time.time() - paused_position)
-                        pause_duration = last_deezer_duration or (track["duration"] if track["duration"] else 0)
+                    pause_duration = last_deezer_duration or (track["duration"] if track["duration"] else 0)
+                    # No timestamps while paused: Discord would keep the clock
+                    # running and it would jump back on every 3 s refresh.
                     rpc.update(
                         title=paused_title,
                         artist=paused_artist,
                         album_art_url=last_art_url,
                         album_name=last_album_name,
-                        start_ts=pause_start_ts,
-                        duration=pause_duration,
+                        start_ts=None,
+                        duration=0,
                         buttons=buttons,
                         small_image="https://raw.githubusercontent.com/eripum9/Amazon-Music-Discord-RPC/master/Images/pause_icon.png",
-                        small_text="Paused",
+                        small_text=paused_presence_text(paused_position, pause_duration),
+                        large_text=paused_album_line(paused_position, pause_duration, last_album_name),
                         status_display=discord_status_display,
                     )
                     presence_visible = True

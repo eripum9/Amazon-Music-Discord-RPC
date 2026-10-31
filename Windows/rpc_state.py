@@ -135,6 +135,43 @@ class GameModeState:
         return True
 
 
+def paused_presence_text(position, duration=0):
+    """Hover text for the pause badge.
+
+    Discord can only render a timer that keeps running, so a paused presence
+    must not carry timestamps (re-sending ``start = now - position`` makes the
+    clock tick forward and then snap back on every refresh).  The frozen
+    position is shown in the badge tooltip instead.
+    """
+    from tray_state import format_seconds
+
+    current = format_seconds(position) if position is not None else ""
+    total = format_seconds(duration) if duration else ""
+    if current and total:
+        return f"Paused at {current} / {total}"
+    if current:
+        return f"Paused at {current}"
+    return "Paused"
+
+
+def paused_album_line(position, duration=0, album_name=""):
+    """Visible album line while paused, e.g. ``"<pause> 0:09 / 3:20 - Album"``.
+
+    Without timestamps Discord renders its own ``0:00`` clock, so the frozen
+    position has to live in text the card always shows.
+    """
+    from tray_state import format_seconds
+
+    current = format_seconds(position) if position is not None else ""
+    total = format_seconds(duration) if duration else ""
+    clock = f"{current} / {total}" if current and total else current
+    album = str(album_name or "").strip()
+    if not clock:
+        return None
+    text = f"\u23f8 {clock}"
+    return f"{text} \u00b7 {album}"[:128] if album else text
+
+
 class TrackTimingState:
     def __init__(self):
         self.cache = {}
