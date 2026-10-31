@@ -57,6 +57,14 @@ def test_existing_user_enhanced_metadata_migration():
     assert fresh["setup_wizard_seen"] is False
 
 
+def test_new_installs_hide_presence_while_paused_existing_configs_keep_it():
+    assert config.DEFAULTS["show_paused"] is False
+    assert config._complete_config({})["show_paused"] is False
+    assert config._complete_config({"discord_client_id": config.DEFAULT_CLIENT_ID})["show_paused"] is True
+    assert config._complete_config({"show_paused": False})["show_paused"] is False
+    assert config._complete_config({"show_paused": True})["show_paused"] is True
+
+
 def test_config_save_is_atomic_and_update_reads_stay_strict(tmp_path, monkeypatch):
     path = tmp_path / "config.json"
     monkeypatch.setattr(config, "CONFIG_DIR", str(tmp_path))
