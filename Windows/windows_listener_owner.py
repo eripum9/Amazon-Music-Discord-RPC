@@ -143,8 +143,10 @@ def _table_pids(api, family, port):
         pids = set()
         for index in range(count):
             row = row_type.from_buffer_copy(buffer, 4 + index * row_size)
-            if (row.dwState == _MIB_TCP_STATE_LISTEN
-                    and socket.ntohs(row.dwLocalPort & 0xFFFF) == port):
+            # The LISTENER table class only returns listening sockets.  Some
+            # Windows builds leave dwState unreliable in this table (observed
+            # 0/1/6 for real listeners), so filtering on it hides the owner.
+            if socket.ntohs(row.dwLocalPort & 0xFFFF) == port:
                 if not row.dwOwningPid:
                     raise _DiscoveryFailure("identity_unavailable", "invalid_listener_pid")
                 pids.add(row.dwOwningPid)
