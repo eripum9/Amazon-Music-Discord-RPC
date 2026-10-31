@@ -143,12 +143,12 @@ def test_layouts_are_fixed_width_and_match_native_offsets():
     assert owner._MibTcp6RowOwnerPid.dwOwningPid.offset == 52
 
 
-def test_dual_stack_port_order_state_filter_dedup_and_multiple_owners(api):
+def test_dual_stack_port_order_dedup_and_multiple_owners(api):
     api.tables = {
         2: [_table(_row4(11, upper=0xABCD0000), _row4(11),
-                   _row4(99, port=PORT + 1), _row4(98, state=5))],
+                   _row4(99, port=PORT + 1), _row4(98, port=PORT + 2, state=5))],
         23: [_table(_row6(22, upper=0xDEAD0000), _row6(11),
-                    _row6(97, port=PORT + 1), _row6(96, state=5))],
+                    _row6(97, port=PORT + 1), _row6(96, port=PORT + 2, state=5))],
     }
     api.paths[22] = r"D:\Other\other.exe"
     result = owner.query_listener_owners(PORT)
@@ -478,3 +478,13 @@ def test_native_temporary_listener_belongs_to_current_python(family, address):
         interpreters = (sys.executable, getattr(sys, "_base_executable", sys.executable))
         assert any(os.path.samefile(entry["Paths"][0], path) for path in interpreters)
         assert entry["Names"] == [os.path.basename(entry["Paths"][0])]
+
+
+@pytest.mark.parametrize("state", [0, 1, 2, 6])
+def test_listener_table_rows_count_even_when_state_field_is_unreliable(api, state):
+    # Observed on a real Windows 11 machine: the Amazon Music listener row came
+    # back from TCP_TABLE_OWNER_PID_LISTENER with dwState=6.
+    api.tables = {2: [_table(_row4(11, state=state))], 23: [_table()]}
+    result = owner.query_listener_owners(PORT)
+    assert result["status"] == "success"
+    assert [entry["Pid"] for entry in result["entries"]] == [11]
