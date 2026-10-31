@@ -508,3 +508,26 @@ def test_devtools_owner_fails_closed_and_requires_exact_install_identity(monkeyp
         "45",
         str(amazon_exe),
     )
+
+
+def test_package_exe_is_tried_before_store_activation():
+    location = r"C:\Program Files\WindowsApps\AmazonMobileLLC.AmazonMusic_9.5.2.0_x86__kc6t79cpj4tp0"
+    exe_path = location + r"\amazon music.exe"
+    exists = lambda path: path.casefold() == exe_path.casefold()
+    appx_apps = [{
+        "PackageFamilyName": "AmazonMobileLLC.AmazonMusic_kc6t79cpj4tp0",
+        "AppId": "AmazonMobileLLC.AmazonMusic",
+        "InstallLocation": location,
+        "Executable": "amazon music.exe",
+    }]
+    candidates = amazon_devtools._launcher_candidates("", [], appx_apps, exists)
+    assert candidates[0]["kind"] == "exe"
+    assert candidates[0]["method"] == "auto-package-exe"
+    assert candidates[0]["value"].casefold() == exe_path.casefold()
+    assert candidates[1]["kind"] == "aumid"
+
+
+def test_package_exe_candidate_skipped_when_missing_or_outside_package():
+    appx_apps = [{"PackageFamilyName": "X", "AppId": "Y", "InstallLocation": r"C:\Temp\Fake", "Executable": "amazon music.exe"}]
+    candidates = amazon_devtools._launcher_candidates("", [], appx_apps, lambda path: True)
+    assert all(candidate["method"] != "auto-package-exe" for candidate in candidates)
