@@ -4,6 +4,7 @@ import base64
 import ctypes
 import hashlib
 import json
+import ntpath
 import os
 import random
 import re
@@ -596,27 +597,70 @@ def _appx_aumid_candidates(entries):
     return [candidate for candidate in candidates if candidate]
 
 
-def _appx_exe_candidates(entries, exists_fn=os.path.exists):
-    """Direct package executables.
+AMAZON_PACKAGE_FAMILY_NAME = f"{AMAZON_PACKAGE_NAME}_{AMAZON_PACKAGE_PUBLISHER_ID}"
+
+
+def _verified_package_executable(entry, exists_fn=os.path.exists):
+    """Return the Amazon Music executable inside a verified Store installation.
 
     Newer Microsoft Store builds of Amazon Music ignore the arguments passed
     through AUMID activation, so ``--remote-debugging-port`` never reaches the
-    app.  Starting the packaged ``amazon music.exe`` directly keeps the flag.
+    app.  Starting the packaged ``amazon music.exe`` directly keeps the flag,
+    but only when every part of the path is tied to the genuine package:
+
+    * the package family must be exactly ``AmazonMobileLLC.AmazonMusic_<publisher id>``;
+    * the install folder must be ``...\\WindowsApps\\<full name>`` where the
+      full name matches the Amazon package name and publisher id (and the
+      reported ``PackageFullName`` when present);
+    * the manifest executable must be a relative path that stays inside that
+      folder and names a known Amazon Music executable that exists.
     """
+    family = _clean(entry.get("PackageFamilyName") or entry.get("packageFamilyName"))
+    if family.casefold() != AMAZON_PACKAGE_FAMILY_NAME.casefold():
+        return ""
+    location = _clean(entry.get("InstallLocation") or entry.get("installLocation"))
+    if not location or location.startswith(("\\\\", "//")) or not ntpath.splitdrive(location)[0] or not ntpath.isabs(location):
+        return ""
+    location = ntpath.normpath(location)
+    folder = ntpath.basename(location)
+    if not _STORE_PACKAGE_FULL_NAME_RE.fullmatch(folder):
+        return ""
+    full_name = _clean(entry.get("PackageFullName") or entry.get("packageFullName"))
+    if full_name and full_name.casefold() != folder.casefold():
+        return ""
+    if ntpath.basename(ntpath.dirname(location)).casefold() != "windowsapps":
+        return ""
+
+    names = []
+    manifest_exe = _clean(entry.get("Executable") or entry.get("executable")).replace("/", "\\")
+    if manifest_exe:
+        names.append(manifest_exe)
+    names.extend(sorted(AMAZON_EXECUTABLE_NAMES))
+    for name in names:
+        drive, _ = ntpath.splitdrive(name)
+        if drive or name.startswith("\\") or ".." in name.split("\\"):
+            continue
+        candidate = ntpath.normpath(ntpath.join(location, name))
+        try:
+            inside = ntpath.commonpath([candidate.casefold(), location.casefold()]) == location.casefold()
+        except ValueError:
+            inside = False
+        if not inside or candidate.casefold() == location.casefold():
+            continue
+        if ntpath.basename(candidate).casefold() not in AMAZON_EXECUTABLE_NAMES:
+            continue
+        if not exists_fn(candidate):
+            continue
+        return candidate
+    return ""
+
+
+def _appx_exe_candidates(entries, exists_fn=os.path.exists):
     candidates = []
     for entry in _json_items(entries):
-        location = _clean(entry.get("InstallLocation") or entry.get("installLocation"))
-        if not location:
-            continue
-        names = [_clean(entry.get("Executable") or entry.get("executable"))]
-        names.extend(sorted(AMAZON_EXECUTABLE_NAMES))
-        for name in names:
-            if not name or not name.lower().endswith(".exe"):
-                continue
-            path = os.path.join(location, name)
-            if _is_allowed_amazon_exe(path, exists_fn):
-                candidates.append(_launcher_candidate("exe", path, "auto-package-exe", "appx-manifest"))
-                break
+        path = _verified_package_executable(entry, exists_fn)
+        if path:
+            candidates.append(_launcher_candidate("exe", path, "auto-package-exe", "appx-manifest"))
     return candidates
 
 
@@ -661,6 +705,7 @@ Get-AppxPackage *AmazonMusic* | ForEach-Object {
         foreach ($app in @($manifest.Package.Applications.Application)) {
             $items += [PSCustomObject]@{
                 PackageFamilyName = $pkg.PackageFamilyName
+                PackageFullName = $pkg.PackageFullName
                 AppId = $app.Id
                 InstallLocation = $pkg.InstallLocation
                 Executable = $app.Executable
