@@ -80,7 +80,6 @@ class _Win32Backend:
     def __init__(self):
         if os.name != "nt":
             raise _DiscoveryFailure("api_error", "windows_required", 50)
-        # Do not search the working directory, PATH, or an environment-built path.
         self._iphlpapi = ctypes.WinDLL(
             "iphlpapi.dll", use_last_error=True,
             winmode=_LOAD_LIBRARY_SEARCH_SYSTEM32,
@@ -143,9 +142,6 @@ def _table_pids(api, family, port):
         pids = set()
         for index in range(count):
             row = row_type.from_buffer_copy(buffer, 4 + index * row_size)
-            # The LISTENER table class only returns listening sockets.  Some
-            # Windows builds leave dwState unreliable in this table (observed
-            # 0/1/6 for real listeners), so filtering on it hides the owner.
             if socket.ntohs(row.dwLocalPort & 0xFFFF) == port:
                 if not row.dwOwningPid:
                     raise _DiscoveryFailure("identity_unavailable", "invalid_listener_pid")
@@ -159,7 +155,6 @@ def _table_pids(api, family, port):
 
 
 def _listener_pids(api, port):
-    # A partial dual-stack snapshot must never supply identities to the caller.
     pids = _table_pids(api, _AF_INET, port) | _table_pids(api, _AF_INET6, port)
     if len(pids) > _MAX_OWNERS:
         raise _DiscoveryFailure("api_error", "too_many_listener_owners")
@@ -182,7 +177,6 @@ def _image_path(api, handle):
 
 
 def _check_alive(api, handle):
-    # A wait tests the process object, not an exit code that could equal 259.
     state = api.WaitForSingleObject(handle, 0)
     if state == _WAIT_OBJECT_0:
         raise _DiscoveryFailure("listener_changed", "listener_process_exited")
@@ -246,7 +240,6 @@ def query_listener_owners(port):
     except Exception:
         failure = _DiscoveryFailure("api_error", "unexpected_backend_error")
     finally:
-        # Try every close even if one fails. A close failure also invalidates success.
         for handle in reversed(handles):
             try:
                 if not api.CloseHandle(handle) and failure is None:

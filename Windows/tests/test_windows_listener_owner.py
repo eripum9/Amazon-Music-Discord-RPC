@@ -100,7 +100,6 @@ class FakeBackend:
 
     def WaitForSingleObject(self, handle, timeout):
         assert timeout == 0
-        # Every successful process has remained open throughout both snapshots.
         assert self.reads == {2: 2, 23: 2}
         assert not self.closed
         self.waited.append(handle)
@@ -199,7 +198,7 @@ def test_table_buffer_can_grow_between_probe_and_read(api, monkeypatch):
 
     monkeypatch.setattr(api, "GetExtendedTcpTable", growing)
     assert owner.query_listener_owners(PORT)["status"] == "success"
-    assert calls == 5  # Three initial calls, then probe + read for recheck.
+    assert calls == 5
 
 
 @pytest.mark.parametrize("required", [0, 3, owner._MAX_TABLE_BYTES + 1])
@@ -474,7 +473,6 @@ def test_native_temporary_listener_belongs_to_current_python(family, address):
         assert result["status"] == "success", result
         entry = next(item for item in result["entries"] if item["Pid"] == os.getpid())
         assert entry["Pids"] == [os.getpid()]
-        # Windows virtual environments can run the base interpreter via a redirector.
         interpreters = (sys.executable, getattr(sys, "_base_executable", sys.executable))
         assert any(os.path.samefile(entry["Paths"][0], path) for path in interpreters)
         assert entry["Names"] == [os.path.basename(entry["Paths"][0])]
@@ -482,8 +480,6 @@ def test_native_temporary_listener_belongs_to_current_python(family, address):
 
 @pytest.mark.parametrize("state", [0, 1, 2, 6])
 def test_listener_table_rows_count_even_when_state_field_is_unreliable(api, state):
-    # Observed on a real Windows 11 machine: the Amazon Music listener row came
-    # back from TCP_TABLE_OWNER_PID_LISTENER with dwState=6.
     api.tables = {2: [_table(_row4(11, state=state))], 23: [_table()]}
     result = owner.query_listener_owners(PORT)
     assert result["status"] == "success"

@@ -7,9 +7,7 @@ import sys
 import time
 
 
-# ``python Windows/main.py`` puts only ``Windows`` on the import path.  Add the
-# repository root before importing the source-shared package; frozen builds
-# include the same package through their PyInstaller spec.
+
 _REPOSITORY_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if not getattr(sys, "frozen", False) and _REPOSITORY_ROOT not in sys.path:
     sys.path.insert(0, _REPOSITORY_ROOT)
