@@ -141,64 +141,240 @@ def find_custom_album_art(config, *album_names):
     return None
 
 
-def _search_deezer(title, artist):
-    clean = _clean_title(title)
-    primary_artist = artist.split(' feat.')[0].split(' ft.')[0].strip()
-    query = f'artist:"{primary_artist}" track:"{clean}"'
-    url = f"https://api.deezer.com/search?q={quote(query)}&limit=3"
+# ---------------------------------------------------------------------------
+# Artwork matching
+#
+# Amazon Music only reports "title", "artist" and sometimes "album" to Windows.
+# Instead of trusting the first search hit, collect candidates from several
+# queries (Deezer strict, Deezer with album, Deezer free text, iTunes) and
+# score each one against what Amazon reported.  The best scoring candidate
+# above a minimum confidence wins.
+# ---------------------------------------------------------------------------
+
+import re
+import unicodedata
+from difflib import SequenceMatcher
+
+_VERSION_WORDS = (
+    "remaster", "remastered", "remasterizado", "remasterizada", "version", "versión",
+    "edit", "radio edit", "mono", "stereo", "deluxe", "explicit", "clean",
+    "single", "album version", "original mix",
+)
+_FEAT_RE = re.compile(r"\s*[\(\[]\s*(feat\.?|ft\.?|featuring|con|with)\s.*?[\)\]]", re.IGNORECASE)
+_BRACKET_RE = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]")
+_DASH_SUFFIX_RE = re.compile(r"\s+-\s+.*$")
+_ARTIST_SPLIT_RE = re.compile(r"\s*(?:,|&|/|;|\+|\bfeat\.?\b|\bft\.?\b|\bfeaturing\b|\bx\b|\by\b|\band\b|\bwith\b)\s*", re.IGNORECASE)
+
+MIN_MATCH_SCORE = 0.62
+GOOD_MATCH_SCORE = 0.9
+
+
+def _fold(value):
+    """Lowercase, strip accents and punctuation for fuzzy comparisons."""
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.casefold().replace("&", " and ")
+    text = re.sub(r"[^\w\s]", " ", text)
+    return " ".join(text.split())
+
+
+def _core_title(title):
+    """Title without featured artists, brackets or ' - Remastered 2011' style suffixes."""
+    text = _FEAT_RE.sub("", str(title or ""))
+    text = _BRACKET_RE.sub("", text)
+    text = _DASH_SUFFIX_RE.sub("", text)
+    return _fold(text) or _fold(title)
+
+
+def _version_tags(title):
+    """Version words such as 'live', 'acoustic', 'remix' that should match when present."""
+    folded = _fold(title)
+    tags = set()
+    for word in ("live", "en vivo", "acoustic", "acustico", "remix", "instrumental", "sped up", "slowed", "demo", "unplugged"):
+        if re.search(rf"\b{re.escape(word)}\b", folded):
+            tags.add(word)
+    return tags
+
+
+def _artist_parts(artist):
+    parts = [_fold(part) for part in _ARTIST_SPLIT_RE.split(str(artist or ""))]
+    parts = [part for part in parts if part]
+    whole = _fold(artist)
+    if whole and whole not in parts:
+        parts.append(whole)
+    return parts
+
+
+def _primary_artist(artist):
+    parts = [p.strip() for p in re.split(r"\s*(?:,|;|\bfeat\.?\s|\bft\.?\s)\s*", str(artist or ""), flags=re.IGNORECASE) if p.strip()]
+    return parts[0] if parts else str(artist or "").strip()
+
+
+def _ratio(left, right):
+    if not left or not right:
+        return 0.0
+    if left == right:
+        return 1.0
+    ratio = SequenceMatcher(None, left, right).ratio()
+    shorter, longer = sorted((left, right), key=len)
+    if len(shorter) >= 4 and re.search(rf"\b{re.escape(shorter)}\b", longer):
+        ratio = max(ratio, 0.88)
+    return ratio
+
+
+def _artist_score(wanted_artist, candidate_artist):
+    wanted = _artist_parts(wanted_artist)
+    found = _artist_parts(candidate_artist)
+    if not wanted or not found:
+        return 0.0
+    return max(_ratio(w, f) for w in wanted for f in found)
+
+
+def score_candidate(candidate, title, artist, album="", duration=0):
+    """Return 0..1 confidence that ``candidate`` is the track Amazon is playing."""
+    title_score = _ratio(_core_title(title), _core_title(candidate.get("title", "")))
+    artist_score = _artist_score(artist, candidate.get("artist", ""))
+    if title_score < 0.55 or artist_score < 0.5:
+        return 0.0
+
+    score = title_score * 0.55 + artist_score * 0.35
+
+    wanted_album = _core_title(album)
+    if wanted_album:
+        album_score = _ratio(wanted_album, _core_title(candidate.get("album", "")))
+        score += album_score * 0.10
+    else:
+        score += 0.05
+
+    # Prefer the same version (live / remix / acoustic ...).
+    wanted_tags = _version_tags(title)
+    found_tags = _version_tags(f"{candidate.get('title', '')} {candidate.get('album', '')}")
+    if wanted_tags != found_tags:
+        score -= 0.06 * len(wanted_tags.symmetric_difference(found_tags))
+
+    try:
+        wanted_duration = float(duration or 0)
+        found_duration = float(candidate.get("duration") or 0)
+    except (TypeError, ValueError):
+        wanted_duration = found_duration = 0
+    if wanted_duration > 0 and found_duration > 0:
+        gap = abs(wanted_duration - found_duration)
+        if gap <= 3:
+            score += 0.05
+        elif gap > 20:
+            score -= min(0.15, gap / 600)
+
+    if not candidate.get("art_url"):
+        score -= 0.5
+    return max(0.0, min(1.0, score))
+
+
+def _deezer_candidates(query, limit=10):
+    url = f"https://api.deezer.com/search?q={quote(query)}&limit={limit}"
     try:
         resp = requests.get(url, timeout=5)
         resp.raise_for_status()
         data = resp.json()
-        if data.get("data"):
-            for track in data["data"]:
-                album = track.get("album", {})
-                art = album.get("cover_xl") or album.get("cover_big") or album.get("cover_medium")
-                if art:
-                    _network_event("deezer", "artwork-lookup", "success", "match")
-                    return art, album.get("title", ""), track.get("link", ""), track.get("duration", 0)
-        _network_event("deezer", "artwork-lookup", "success", "no match")
-    except (requests.RequestException, KeyError, IndexError, ValueError) as error:
+    except (requests.RequestException, ValueError) as error:
         _network_event("deezer", "artwork-lookup", "error", type(error).__name__)
-    return None, None, None, 0
+        return []
+    candidates = []
+    for track in data.get("data", []) or []:
+        album = track.get("album", {}) or {}
+        candidates.append({
+            "title": track.get("title", "") or "",
+            "artist": (track.get("artist", {}) or {}).get("name", "") or "",
+            "album": album.get("title", "") or "",
+            "art_url": album.get("cover_xl") or album.get("cover_big") or album.get("cover_medium") or "",
+            "track_link": track.get("link", "") or "",
+            "duration": track.get("duration", 0) or 0,
+            "source": "deezer",
+        })
+    return candidates
 
 
-def _search_itunes(title, artist):
-    clean = _clean_title(title)
-    primary_artist = artist.split(' feat.')[0].split(' ft.')[0].strip()
-    query = f"{clean} {primary_artist}"
-    url = f"https://itunes.apple.com/search?term={quote(query)}&media=music&limit=3"
+def _itunes_candidates(query, limit=15):
+    url = f"https://itunes.apple.com/search?term={quote(query)}&media=music&entity=song&limit={limit}"
     try:
         resp = requests.get(url, timeout=5)
         resp.raise_for_status()
         data = resp.json()
-        if data.get("results"):
-            for result in data["results"]:
-                art_url = result.get("artworkUrl100", "")
-                if art_url:
-                    _network_event("itunes", "artwork-lookup", "success", "match")
-                    return art_url.replace("100x100bb", "600x600bb"), result.get("collectionName", "")
-        _network_event("itunes", "artwork-lookup", "success", "no match")
-    except (requests.RequestException, KeyError, IndexError, ValueError) as error:
+    except (requests.RequestException, ValueError) as error:
         _network_event("itunes", "artwork-lookup", "error", type(error).__name__)
-    return None, None
+        return []
+    candidates = []
+    for result in data.get("results", []) or []:
+        art_url = result.get("artworkUrl100", "") or ""
+        if art_url:
+            art_url = art_url.replace("100x100bb", "600x600bb")
+        candidates.append({
+            "title": result.get("trackName", "") or "",
+            "artist": result.get("artistName", "") or "",
+            "album": result.get("collectionName", "") or "",
+            "art_url": art_url,
+            "track_link": "",
+            "duration": round((result.get("trackTimeMillis") or 0) / 1000),
+            "source": "itunes",
+        })
+    return candidates
 
 
-def get_album_art(title, artist, deezer_enabled=None, itunes_enabled=None):
+def find_best_match(title, artist, album="", duration=0, deezer_enabled=None, itunes_enabled=None):
+    """Search every enabled source and return (best_candidate, score)."""
     use_deezer, use_itunes = _lookup_policy(deezer_enabled, itunes_enabled)
-    cache_key = f"{title}|{artist}|{int(use_deezer)}|{int(use_itunes)}".lower()
+    core = _core_title(title) or _fold(title)
+    plain_title = _clean_title(title)
+    primary = _primary_artist(artist)
+
+    queries = []
+    if use_deezer:
+        queries.append(("deezer", f'artist:"{primary}" track:"{plain_title}"'))
+        if album:
+            queries.append(("deezer", f'artist:"{primary}" album:"{_clean_title(album)}" track:"{plain_title}"'))
+        queries.append(("deezer", f"{primary} {core}"))
+    if use_itunes:
+        queries.append(("itunes", f"{plain_title} {primary}"))
+        if core != _fold(plain_title):
+            queries.append(("itunes", f"{core} {primary}"))
+
+    best, best_score, seen = None, 0.0, set()
+    for source, query in queries:
+        fetch = _deezer_candidates if source == "deezer" else _itunes_candidates
+        for candidate in fetch(query):
+            key = (candidate["source"], candidate["title"], candidate["artist"], candidate["album"])
+            if key in seen:
+                continue
+            seen.add(key)
+            score = score_candidate(candidate, title, artist, album, duration)
+            if score > best_score:
+                best, best_score = candidate, score
+        if best_score >= GOOD_MATCH_SCORE:
+            break
+
+    if best is not None and best_score >= MIN_MATCH_SCORE:
+        _network_event(best["source"], "artwork-lookup", "success", f"match {best_score:.2f}")
+        return best, best_score
+    _network_event("deezer" if use_deezer else "itunes", "artwork-lookup", "success", "no confident match")
+    return None, best_score
+
+
+def get_album_art(title, artist, deezer_enabled=None, itunes_enabled=None, album="", duration=0):
+    use_deezer, use_itunes = _lookup_policy(deezer_enabled, itunes_enabled)
+    cache_key = f"{title}|{artist}|{album}|{int(use_deezer)}|{int(use_itunes)}".lower()
     if cache_key in _cache:
         return _cache[cache_key]
+    if not use_deezer and not use_itunes:
+        result = (None, "", "", 0)
+        _cache[cache_key] = result
+        return result
 
-    art_url, album_name, track_link, track_duration = (None, None, None, 0)
-    if use_deezer:
-        art_url, album_name, track_link, track_duration = _search_deezer(title, artist)
-    if not art_url and use_itunes:
-        art_url, album_name = _search_itunes(title, artist)
-        track_link = None
-        track_duration = 0
-
-    result = (art_url, album_name or "", track_link or "", track_duration or 0)
+    best, score = find_best_match(title, artist, album, duration, use_deezer, use_itunes)
+    if best:
+        print(f"[Art] Best match ({best['source']}, score {score:.2f}): '{best['title']}' - '{best['artist']}' [{best['album']}]")
+        result = (best["art_url"] or None, best["album"] or "", best["track_link"] or "", best["duration"] or 0)
+    else:
+        print(f"[Art] No confident match for '{title}' by '{artist}' (best score {score:.2f})")
+        result = (None, "", "", 0)
     _cache[cache_key] = result
     return result
 

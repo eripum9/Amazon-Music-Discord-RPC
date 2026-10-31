@@ -34,7 +34,7 @@ from Shared.playback import (  # noqa: E402, F401 -- compatibility re-exports
 )
 
 
-PLAYBACK_TIME_DRIFT_SECONDS = 1.0
+PLAYBACK_TIME_DRIFT_SECONDS = 3.0
 
 
 def _tasklist_executable():
