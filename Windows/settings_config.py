@@ -137,7 +137,7 @@ def settings_config_from_payload(data, existing):
         "discord_status_display": normalize_discord_status_display(data.get("discord_status_display")),
         "start_on_startup": bool(data.get("start_on_startup")),
         "start_minimized": bool(data.get("start_minimized")),
-        "show_paused": bool(data.get("show_paused", True)),
+        "show_paused": bool(data.get("show_paused", False)),
         "privacy_private_session": bool(data.get("privacy_private_session")),
         "privacy_disable_scrobbling": bool(data.get("privacy_disable_scrobbling", True)),
         "privacy_blocked_keywords": data.get("privacy_blocked_keywords", "").strip(),

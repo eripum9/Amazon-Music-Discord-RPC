@@ -1531,8 +1531,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           ${wizardChoice('Custom app ID', custom, "setWizardSelect('idMode', 'custom')", 'Advanced')}
         </div>
         <div class="wizard-choice">
+          ${wizardChoice('Hide paused', !paused, "setWizardToggle('showPaused', false)", 'Recommended')}
           ${wizardChoice('Show paused', paused, "setWizardToggle('showPaused', true)", 'Keep presence visible')}
-          ${wizardChoice('Hide paused', !paused, "setWizardToggle('showPaused', false)", 'Only active playback')}
         </div>
         <div class="wizard-mini">Discord must be open on this PC for Rich Presence to appear.</div>
       </div>`;
@@ -2033,7 +2033,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     document.getElementById('discordStatusDisplay').value = discordStatusModes.includes(cfg.discord_status_display) ? cfg.discord_status_display : 'artist';
     document.getElementById('startOnStartup').checked = !!cfg.start_on_startup;
     document.getElementById('startMinimized').checked = !!cfg.start_minimized;
-    document.getElementById('showPaused').checked = cfg.show_paused !== false;
+    document.getElementById('showPaused').checked = cfg.show_paused === true;
     document.getElementById('privacyPrivateSession').checked = !!cfg.privacy_private_session;
     document.getElementById('privacyDisableScrobbling').checked = cfg.privacy_disable_scrobbling !== false;
     document.getElementById('privacyBlockedKeywords').value = cfg.privacy_blocked_keywords || '';

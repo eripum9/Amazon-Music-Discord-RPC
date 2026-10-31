@@ -640,7 +640,7 @@ def rpc_loop():
         song_link_provider = "amazon"
     amazon_music_link_region = config.get("amazon_music_link_region", "com")
     discord_status_display = normalize_discord_status_display(config.get("discord_status_display"))
-    show_paused = config.get("show_paused", True)
+    show_paused = config.get("show_paused", False)
     notification_enrichment_enabled = config.get("notification_enrichment_enabled", False)
     amazon_devtools_enabled = config.get("amazon_devtools_enabled", False)
     amazon_devtools_auto_launch = config.get("amazon_devtools_auto_launch", False)

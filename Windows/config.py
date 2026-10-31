@@ -54,7 +54,7 @@ DEFAULTS = {
     "song_link_enabled": True,
     "song_link_provider": "amazon",
     "amazon_music_link_region": "com",
-    "show_paused": True,
+    "show_paused": False,
     "lastfm_enabled": False,
     "lastfm_api_key": "2c2d97048ae5546831b1b1a025a8f9ec",
     "lastfm_api_secret": "5d9fecd9d4836815d5c1f05cde9a611c",
@@ -112,6 +112,10 @@ def _complete_config(saved):
     if saved and "enhanced_metadata_prompt_seen" not in saved and "amazon_devtools_enabled" not in saved:
         config["amazon_devtools_enabled"] = True
         config["amazon_devtools_auto_launch"] = True
+    if saved and "show_paused" not in saved:
+        # Hiding the presence while paused is the default for new installs
+        # only; existing configs keep the behaviour they were created with.
+        config["show_paused"] = True
     if saved and "setup_wizard_seen" not in saved:
         config["setup_wizard_seen"] = True
         config["setup_wizard_version"] = config.get("setup_wizard_version") or APP_VERSION
