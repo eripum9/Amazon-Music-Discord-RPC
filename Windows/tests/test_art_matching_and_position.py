@@ -1,6 +1,9 @@
 # MIT License - Copyright (c) 2026 eripum9
 
 from datetime import datetime, timedelta, timezone
+from urllib.parse import unquote
+
+import requests
 
 import album_art
 import media_reader
@@ -119,6 +122,7 @@ def test_itunes_fallback_used_when_deezer_has_no_match(monkeypatch):
 
 def test_live_position_advances_stale_snapshot_while_playing():
     media_reader._last_snapshot.clear()
+    media_reader._timeline_state.clear()
     now = 1_800_000_000.0
     # Windows says "45 s" but that snapshot was taken 30 s ago.
     position = media_reader.live_position("Song|Artist", "playing", 45.0, 200.0, now - 30, now=now)
@@ -127,6 +131,7 @@ def test_live_position_advances_stale_snapshot_while_playing():
 
 def test_live_position_does_not_advance_when_paused_and_caps_at_duration():
     media_reader._last_snapshot.clear()
+    media_reader._timeline_state.clear()
     now = 1_800_000_000.0
     assert media_reader.live_position("S|A", "paused", 45.0, 200.0, now - 30, now=now) == 45.0
     assert media_reader.live_position("S|A", "playing", 190.0, 200.0, now - 60, now=now) == 200.0
@@ -134,6 +139,7 @@ def test_live_position_does_not_advance_when_paused_and_caps_at_duration():
 
 def test_live_position_without_timestamp_ignores_repeated_stale_snapshot():
     media_reader._last_snapshot.clear()
+    media_reader._timeline_state.clear()
     assert media_reader.live_position("S|A", "playing", 12.0, 200.0, None) == 12.0
     assert media_reader.live_position("S|A", "playing", 12.0, 200.0, None) is None
     assert media_reader.live_position("S|A", "playing", 95.0, 200.0, None) == 95.0  # seek
@@ -141,6 +147,7 @@ def test_live_position_without_timestamp_ignores_repeated_stale_snapshot():
 
 def test_live_position_unknown_when_player_has_no_timeline():
     media_reader._last_snapshot.clear()
+    media_reader._timeline_state.clear()
     assert media_reader.live_position("S|A", "playing", 0.0, 0.0, None) is None
 
 
@@ -151,3 +158,102 @@ def test_winrt_time_conversions():
     assert abs(media_reader._epoch_seconds(past) - past.timestamp()) < 0.01
     assert media_reader._epoch_seconds(datetime(1601, 1, 1, tzinfo=timezone.utc)) is None
     assert media_reader._seconds(timedelta(seconds=83.5)) == 83.5
+
+
+# --- review follow-ups (#62) -------------------------------------------------
+
+def test_pause_resume_without_new_snapshot_excludes_paused_time():
+    media_reader._last_snapshot.clear()
+    media_reader._timeline_state.clear()
+    live = media_reader.live_position
+    # Unchanged snapshot: position 45 s taken at t=1000.
+    assert live("S|A", "playing", 45.0, 300.0, 1000.0, now=1030.0) == 75.0
+    assert live("S|A", "paused", 45.0, 300.0, 1000.0, now=1030.0) == 75.0
+    assert live("S|A", "paused", 45.0, 300.0, 1000.0, now=1060.0) == 75.0
+    assert live("S|A", "playing", 45.0, 300.0, 1000.0, now=1090.0) == 75.0
+    assert live("S|A", "playing", 45.0, 300.0, 1000.0, now=1100.0) == 85.0
+    # A refreshed snapshot resets the pause bookkeeping.
+    assert live("S|A", "playing", 120.0, 300.0, 1200.0, now=1205.0) == 125.0
+
+
+def test_first_paused_observation_does_not_extrapolate():
+    media_reader._timeline_state.clear()
+    assert media_reader.live_position("S|A", "paused", 45.0, 300.0, 1000.0, now=1500.0) == 45.0
+
+
+def _query_of(url):
+    text = unquote(url)
+    return text.split("q=", 1)[1] if "q=" in text else text.split("term=", 1)[1]
+
+
+def test_known_album_is_checked_before_an_early_exit(monkeypatch):
+    album_art._cache.clear()
+    calls = []
+
+    def fake(url, timeout=5):
+        calls.append(_query_of(url))
+        if "deezer" not in url:
+            return _Response({"results": []})
+        if 'album:"XYZ"' in _query_of(url):
+            return _Response({"data": [_deezer("Song", "Artist", "XYZ", 200)]})
+        return _Response({"data": [_deezer("Song", "Artist", "ABC", 200)]})
+
+    monkeypatch.setattr(album_art.requests, "get", fake)
+    art, album, _, _ = album_art.get_album_art("Song", "Artist", deezer_enabled=True, itunes_enabled=False, album="XYZ", duration=200)
+    assert album == "XYZ" and art.endswith("XYZ.jpg")
+    assert 'album:"XYZ"' in calls[0]
+
+
+def test_strong_match_with_wrong_album_is_not_final():
+    candidate = {"title": "Song", "artist": "Artist", "album": "ABC", "duration": 200, "art_url": "x"}
+    score = album_art.score_candidate(candidate, "Song", "Artist", "XYZ", 200)
+    assert score >= album_art.GOOD_MATCH_SCORE - 0.1
+    assert album_art._satisfies_context(candidate, score, "Song", "XYZ") is False
+    assert album_art._satisfies_context(candidate, 0.95, "Song", "") is True
+
+
+def test_lookup_respects_the_total_time_budget(monkeypatch):
+    album_art._cache.clear()
+    clock = {"t": 0.0}
+    timeouts = []
+    monkeypatch.setattr(album_art, "_monotonic", lambda: clock["t"])
+
+    def slow(url, timeout=5):
+        timeouts.append(timeout)
+        clock["t"] += timeout          # every request times out
+        raise requests.Timeout()
+
+    monkeypatch.setattr(album_art.requests, "get", slow)
+    result = album_art.get_album_art("Song", "Artist", deezer_enabled=True, itunes_enabled=True, album="Album")
+    assert result == (None, "", "", 0)
+    assert clock["t"] <= album_art.ARTWORK_LOOKUP_BUDGET_SECONDS
+    assert all(t <= album_art.PER_REQUEST_TIMEOUT_SECONDS for t in timeouts)
+    assert len(timeouts) < 5
+
+
+def test_cache_identity_includes_duration(monkeypatch):
+    album_art._cache.clear()
+    results = [
+        _deezer("Song", "Artist", "Single", 200),
+        _deezer("Song", "Artist", "Extended", 320),
+    ]
+    monkeypatch.setattr(album_art.requests, "get", _fake_get(results))
+    _, short_album, _, _ = album_art.get_album_art("Song", "Artist", deezer_enabled=True, itunes_enabled=False, duration=200)
+    _, long_album, _, _ = album_art.get_album_art("Song", "Artist", deezer_enabled=True, itunes_enabled=False, duration=320)
+    assert (short_album, long_album) == ("Single", "Extended")
+
+
+def test_every_contacted_provider_is_recorded(monkeypatch):
+    album_art._cache.clear()
+    events = []
+    monkeypatch.setattr(album_art, "_network_event", lambda service, operation, status, detail="": events.append((service, operation, status)))
+    itunes = [{
+        "trackName": "La Bachata", "artistName": "Manuel Turizo", "collectionName": "2000",
+        "artworkUrl100": "https://itunes/100x100bb.jpg", "trackTimeMillis": 162000,
+    }]
+    monkeypatch.setattr(album_art.requests, "get", _fake_get([_deezer("Other", "Someone", "X", 100)], itunes))
+    album_art.get_album_art("La Bachata", "Manuel Turizo", deezer_enabled=True, itunes_enabled=True)
+    deezer_calls = [e for e in events if e[0] == "deezer" and e[1] == "artwork-lookup"]
+    itunes_calls = [e for e in events if e[0] == "itunes" and e[1] == "artwork-lookup"]
+    assert len(deezer_calls) >= 2 and itunes_calls
+    assert all(status == "success" for _, _, status in deezer_calls + itunes_calls)
