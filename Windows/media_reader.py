@@ -27,6 +27,7 @@ PLAYBACK_STATUS_MAP = {
 # into the real current position.
 _WINDOWS_EPOCH_OFFSET = 11644473600  # seconds between 1601-01-01 and 1970-01-01
 _last_snapshot = {}
+_timeline_state = {}
 
 
 def _seconds(value):
@@ -73,9 +74,25 @@ def live_position(track_key, status, raw_position, duration=0, updated_at=None, 
         return None
 
     if updated_at is not None:
-        position = raw_position
+        # Extrapolate from the snapshot, but do not count time spent paused
+        # while the snapshot itself was not refreshed (pause/resume without a
+        # new timeline from the player).
+        snapshot = (track_key, round(raw_position, 1), round(updated_at, 3))
+        state = _timeline_state
+        if state.get("snapshot") != snapshot:
+            state.clear()
+            state.update(snapshot=snapshot, paused_total=0.0,
+                         paused_since=(updated_at if status != "playing" else None))
         if status == "playing":
-            position += max(0.0, now - updated_at)
+            if state["paused_since"] is not None:
+                state["paused_total"] += max(0.0, now - state["paused_since"])
+                state["paused_since"] = None
+            elapsed = now - updated_at - state["paused_total"]
+        else:
+            if state["paused_since"] is None:
+                state["paused_since"] = now
+            elapsed = state["paused_since"] - updated_at - state["paused_total"]
+        position = raw_position + max(0.0, elapsed)
         if duration:
             position = min(position, duration)
         return position

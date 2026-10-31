@@ -1,6 +1,7 @@
 # MIT License - Copyright (c) 2026 eripum9
 
 import os
+import time
 import requests
 from urllib.parse import quote
 
@@ -167,6 +168,13 @@ _ARTIST_SPLIT_RE = re.compile(r"\s*(?:,|&|/|;|\+|\bfeat\.?\b|\bft\.?\b|\bfeaturi
 
 MIN_MATCH_SCORE = 0.62
 GOOD_MATCH_SCORE = 0.9
+GOOD_ALBUM_SCORE = 0.8
+# Total time the whole lookup may spend on the network.  The previous lookup
+# could take up to 2 x 5 s; the matcher must never be slower than that.
+ARTWORK_LOOKUP_BUDGET_SECONDS = 8.0
+PER_REQUEST_TIMEOUT_SECONDS = 5.0
+MIN_REQUEST_TIMEOUT_SECONDS = 0.5
+_monotonic = time.monotonic
 
 
 def _fold(value):
@@ -269,10 +277,10 @@ def score_candidate(candidate, title, artist, album="", duration=0):
     return max(0.0, min(1.0, score))
 
 
-def _deezer_candidates(query, limit=10):
+def _deezer_candidates(query, limit=10, timeout=PER_REQUEST_TIMEOUT_SECONDS):
     url = f"https://api.deezer.com/search?q={quote(query)}&limit={limit}"
     try:
-        resp = requests.get(url, timeout=5)
+        resp = requests.get(url, timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
     except (requests.RequestException, ValueError) as error:
@@ -290,13 +298,14 @@ def _deezer_candidates(query, limit=10):
             "duration": track.get("duration", 0) or 0,
             "source": "deezer",
         })
+    _network_event("deezer", "artwork-lookup", "success", f"{len(candidates)} candidates")
     return candidates
 
 
-def _itunes_candidates(query, limit=15):
+def _itunes_candidates(query, limit=15, timeout=PER_REQUEST_TIMEOUT_SECONDS):
     url = f"https://itunes.apple.com/search?term={quote(query)}&media=music&entity=song&limit={limit}"
     try:
-        resp = requests.get(url, timeout=5)
+        resp = requests.get(url, timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
     except (requests.RequestException, ValueError) as error:
@@ -316,11 +325,25 @@ def _itunes_candidates(query, limit=15):
             "duration": round((result.get("trackTimeMillis") or 0) / 1000),
             "source": "itunes",
         })
+    _network_event("itunes", "artwork-lookup", "success", f"{len(candidates)} candidates")
     return candidates
 
 
-def find_best_match(title, artist, album="", duration=0, deezer_enabled=None, itunes_enabled=None):
-    """Search every enabled source and return (best_candidate, score)."""
+def _satisfies_context(candidate, score, title, album):
+    """A strong score is only final when it also agrees with the supplied album/version."""
+    if score < GOOD_MATCH_SCORE:
+        return False
+    if _version_tags(title) != _version_tags(f"{candidate.get('title', '')} {candidate.get('album', '')}"):
+        return False
+    wanted_album = _core_title(album)
+    if wanted_album and _ratio(wanted_album, _core_title(candidate.get("album", ""))) < GOOD_ALBUM_SCORE:
+        return False
+    return True
+
+
+def find_best_match(title, artist, album="", duration=0, deezer_enabled=None, itunes_enabled=None,
+                    budget=ARTWORK_LOOKUP_BUDGET_SECONDS):
+    """Search every enabled source within ``budget`` seconds and return (best_candidate, score)."""
     use_deezer, use_itunes = _lookup_policy(deezer_enabled, itunes_enabled)
     core = _core_title(title) or _fold(title)
     plain_title = _clean_title(title)
@@ -328,19 +351,24 @@ def find_best_match(title, artist, album="", duration=0, deezer_enabled=None, it
 
     queries = []
     if use_deezer:
-        queries.append(("deezer", f'artist:"{primary}" track:"{plain_title}"'))
         if album:
+            # The most specific query first, so a known album is not skipped by an early exit.
             queries.append(("deezer", f'artist:"{primary}" album:"{_clean_title(album)}" track:"{plain_title}"'))
+        queries.append(("deezer", f'artist:"{primary}" track:"{plain_title}"'))
         queries.append(("deezer", f"{primary} {core}"))
     if use_itunes:
         queries.append(("itunes", f"{plain_title} {primary}"))
         if core != _fold(plain_title):
             queries.append(("itunes", f"{core} {primary}"))
 
+    deadline = _monotonic() + max(0.0, float(budget))
     best, best_score, seen = None, 0.0, set()
     for source, query in queries:
+        remaining = deadline - _monotonic()
+        if remaining < MIN_REQUEST_TIMEOUT_SECONDS:
+            break
         fetch = _deezer_candidates if source == "deezer" else _itunes_candidates
-        for candidate in fetch(query):
+        for candidate in fetch(query, timeout=min(PER_REQUEST_TIMEOUT_SECONDS, remaining)):
             key = (candidate["source"], candidate["title"], candidate["artist"], candidate["album"])
             if key in seen:
                 continue
@@ -348,19 +376,21 @@ def find_best_match(title, artist, album="", duration=0, deezer_enabled=None, it
             score = score_candidate(candidate, title, artist, album, duration)
             if score > best_score:
                 best, best_score = candidate, score
-        if best_score >= GOOD_MATCH_SCORE:
+        if best is not None and _satisfies_context(best, best_score, title, album):
             break
 
     if best is not None and best_score >= MIN_MATCH_SCORE:
-        _network_event(best["source"], "artwork-lookup", "success", f"match {best_score:.2f}")
         return best, best_score
-    _network_event("deezer" if use_deezer else "itunes", "artwork-lookup", "success", "no confident match")
     return None, best_score
 
 
 def get_album_art(title, artist, deezer_enabled=None, itunes_enabled=None, album="", duration=0):
     use_deezer, use_itunes = _lookup_policy(deezer_enabled, itunes_enabled)
-    cache_key = f"{title}|{artist}|{album}|{int(use_deezer)}|{int(use_itunes)}".lower()
+    try:
+        duration_key = int(round(float(duration or 0)))
+    except (TypeError, ValueError):
+        duration_key = 0
+    cache_key = f"{title}|{artist}|{album}|{duration_key}|{int(use_deezer)}|{int(use_itunes)}".lower()
     if cache_key in _cache:
         return _cache[cache_key]
     if not use_deezer and not use_itunes:
