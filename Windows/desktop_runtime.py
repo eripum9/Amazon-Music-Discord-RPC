@@ -961,7 +961,7 @@ def rpc_loop():
                     pause_duration = 0
                     if paused_position is not None:
                         pause_start_ts = int(time.time() - paused_position)
-                        pause_duration = last_deezer_duration or (track["duration"] if track["duration"] else 0)
+                        pause_duration = (track["duration"] if track["duration"] else 0) or last_deezer_duration
                     rpc.update(
                         title=paused_title,
                         artist=paused_artist,
@@ -1068,7 +1068,7 @@ def rpc_loop():
                 fetched = (
                     None
                     if privacy_reason or resolved or track.get("_amazon_art_url")
-                    else get_album_art(title, artist)
+                    else get_album_art(title, artist, album=track.get("album", ""), duration=track.get("duration") or 0)
                 )
                 art_state = apply_art_result(track, resolved, fetched, _notif_album, last_album_name)
                 last_art_url = art_state["art_url"]
@@ -1093,7 +1093,7 @@ def rpc_loop():
                     scrobble_track_key = track_art_key
                     scrobble_start_time = time.time()
                     scrobbled = False
-                    scrobble_duration = last_deezer_duration or track["duration"] or 0
+                    scrobble_duration = track["duration"] or last_deezer_duration or 0
                     print(f"[Scrobble] Track duration: {scrobble_duration:.0f}s (deezer={last_deezer_duration}, smtc={track['duration']})")
                     if title:
                         if scrobbler:
@@ -1111,7 +1111,7 @@ def rpc_loop():
                 fetched = (
                     None
                     if privacy_reason or resolved or track.get("_amazon_art_url")
-                    else get_album_art(title, artist)
+                    else get_album_art(title, artist, album=track.get("album", ""), duration=track.get("duration") or 0)
                 )
                 art_state = apply_art_result(track, resolved, fetched, _notif_album, last_album_name)
                 last_art_url = art_state["art_url"]
@@ -1128,7 +1128,7 @@ def rpc_loop():
                 print(f"[Art] Refreshed after resolve: '{last_album_name}' for '{title}'")
                 if (scrobbler or lb_scrobbler) and scrobble_start_time and not scrobbled:
                     scrobble_track_key = track_art_key
-                    scrobble_duration = last_deezer_duration or track["duration"] or scrobble_duration
+                    scrobble_duration = track["duration"] or last_deezer_duration or scrobble_duration
                     print(f"[Scrobble] Updated scrobble key after resolve: {title}")
                     if scrobbler:
                         try:
@@ -1158,7 +1158,7 @@ def rpc_loop():
                 last_album_name = _notif_album
                 notif_art_key = f"{title}|{artist}|{_notif_album}".lower()
                 if not privacy_reason and _notif_art_fetched_for != notif_art_key:
-                    _notif_art, _notif_aname, _notif_link, _notif_dur = get_album_art(title, f"{artist} {_notif_album}")
+                    _notif_art, _notif_aname, _notif_link, _notif_dur = get_album_art(title, artist, album=_notif_album, duration=track.get("duration") or 0)
                     if _notif_art:
                         last_art_url = _notif_art
                         if _notif_link:
@@ -1203,8 +1203,11 @@ def rpc_loop():
                 if _try_scrobble(scrobbler, lb_scrobbler, scrobble_title, scrobble_artist, scrobble_start_time, last_album_name, scrobble_duration):
                     scrobbled = True
 
-            song_duration = last_deezer_duration or (track["duration"] if track["duration"] else 0)
-            if song_duration > 0 and last_start_ts and (time.time() - last_start_ts) >= song_duration:
+            # Trust the duration Amazon reports; the Deezer/iTunes duration can
+            # belong to a different version of the song and would restart the
+            # timer in the middle of the track.
+            song_duration = (track["duration"] if track["duration"] else 0) or last_deezer_duration
+            if song_duration > 0 and last_start_ts and (time.time() - last_start_ts) >= song_duration + 2:
                 if track["position"] is not None:
                     last_start_ts = int(time.time() - track["position"])
                 else:
