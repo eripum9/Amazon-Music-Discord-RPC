@@ -596,6 +596,30 @@ def _appx_aumid_candidates(entries):
     return [candidate for candidate in candidates if candidate]
 
 
+def _appx_exe_candidates(entries, exists_fn=os.path.exists):
+    """Direct package executables.
+
+    Newer Microsoft Store builds of Amazon Music ignore the arguments passed
+    through AUMID activation, so ``--remote-debugging-port`` never reaches the
+    app.  Starting the packaged ``amazon music.exe`` directly keeps the flag.
+    """
+    candidates = []
+    for entry in _json_items(entries):
+        location = _clean(entry.get("InstallLocation") or entry.get("installLocation"))
+        if not location:
+            continue
+        names = [_clean(entry.get("Executable") or entry.get("executable"))]
+        names.extend(sorted(AMAZON_EXECUTABLE_NAMES))
+        for name in names:
+            if not name or not name.lower().endswith(".exe"):
+                continue
+            path = os.path.join(location, name)
+            if _is_allowed_amazon_exe(path, exists_fn):
+                candidates.append(_launcher_candidate("exe", path, "auto-package-exe", "appx-manifest"))
+                break
+    return candidates
+
+
 def _dedupe_launcher_candidates(candidates):
     seen = set()
     unique = []
@@ -638,6 +662,8 @@ Get-AppxPackage *AmazonMusic* | ForEach-Object {
             $items += [PSCustomObject]@{
                 PackageFamilyName = $pkg.PackageFamilyName
                 AppId = $app.Id
+                InstallLocation = $pkg.InstallLocation
+                Executable = $app.Executable
             }
         }
     } catch {}
@@ -654,6 +680,7 @@ def _launcher_candidates(launcher_override=None, start_apps=None, appx_apps=None
         candidates.append(_launcher_candidate_from_value(override, "override-aumid", "override-exe", "override", exists_fn))
     start_entries = _get_start_app_entries() if start_apps is None else start_apps
     appx_entries = _get_appx_application_entries() if appx_apps is None else appx_apps
+    candidates.extend(_appx_exe_candidates(appx_entries, exists_fn))
     candidates.extend(_start_app_candidates(start_entries, exists_fn))
     candidates.extend(_appx_aumid_candidates(appx_entries))
     candidates.append(_launcher_candidate("aumid", APP_USER_MODEL_ID, "hardcoded-store", "hardcoded"))
