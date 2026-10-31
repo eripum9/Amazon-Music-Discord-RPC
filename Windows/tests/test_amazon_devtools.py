@@ -510,24 +510,117 @@ def test_devtools_owner_fails_closed_and_requires_exact_install_identity(monkeyp
     )
 
 
-def test_package_exe_is_tried_before_store_activation():
-    location = r"C:\Program Files\WindowsApps\AmazonMobileLLC.AmazonMusic_9.5.2.0_x86__kc6t79cpj4tp0"
-    exe_path = location + r"\amazon music.exe"
-    exists = lambda path: path.casefold() == exe_path.casefold()
-    appx_apps = [{
+GENUINE_LOCATION = r"C:\Program Files\WindowsApps\AmazonMobileLLC.AmazonMusic_9.5.2.0_x86__kc6t79cpj4tp0"
+GENUINE_EXE = GENUINE_LOCATION + r"\amazon music.exe"
+
+
+def _genuine_entry(**overrides):
+    entry = {
         "PackageFamilyName": "AmazonMobileLLC.AmazonMusic_kc6t79cpj4tp0",
+        "PackageFullName": "AmazonMobileLLC.AmazonMusic_9.5.2.0_x86__kc6t79cpj4tp0",
         "AppId": "AmazonMobileLLC.AmazonMusic",
-        "InstallLocation": location,
+        "InstallLocation": GENUINE_LOCATION,
         "Executable": "amazon music.exe",
-    }]
-    candidates = amazon_devtools._launcher_candidates("", [], appx_apps, exists)
+    }
+    entry.update(overrides)
+    return entry
+
+
+def _exists_only(*paths):
+    allowed = {path.casefold() for path in paths}
+    return lambda path: path.casefold() in allowed
+
+
+def test_genuine_package_exe_is_tried_before_store_activation():
+    candidates = amazon_devtools._launcher_candidates("", [], [_genuine_entry()], _exists_only(GENUINE_EXE))
     assert candidates[0]["kind"] == "exe"
     assert candidates[0]["method"] == "auto-package-exe"
-    assert candidates[0]["value"].casefold() == exe_path.casefold()
+    assert candidates[0]["value"].casefold() == GENUINE_EXE.casefold()
     assert candidates[1]["kind"] == "aumid"
 
 
-def test_package_exe_candidate_skipped_when_missing_or_outside_package():
-    appx_apps = [{"PackageFamilyName": "X", "AppId": "Y", "InstallLocation": r"C:\Temp\Fake", "Executable": "amazon music.exe"}]
-    candidates = amazon_devtools._launcher_candidates("", [], appx_apps, lambda path: True)
-    assert all(candidate["method"] != "auto-package-exe" for candidate in candidates)
+def test_explicit_override_stays_ahead_of_package_exe():
+    candidates = amazon_devtools._launcher_candidates("Override.Package!App", [], [_genuine_entry()], _exists_only(GENUINE_EXE))
+    assert [c["method"] for c in candidates[:2]] == ["override-aumid", "auto-package-exe"]
+
+
+def test_similarly_named_non_amazon_package_is_rejected():
+    evil = {
+        "PackageFamilyName": "EvilAmazonMusic_notamazon",
+        "PackageFullName": "EvilAmazonMusic_1.0.0.0_x64__other",
+        "InstallLocation": r"C:\Program Files\WindowsApps\EvilAmazonMusic_1.0.0.0_x64__other",
+        "Executable": r"Amazon Music\Amazon Music.exe",
+        "AppId": "App",
+    }
+    candidates = amazon_devtools._launcher_candidates("", [], [evil], lambda path: True)
+    assert all(c["method"] != "auto-package-exe" for c in candidates)
+
+
+def test_spoofed_family_or_location_is_rejected():
+    always = lambda path: True
+    cases = [
+        # right family name, but the folder is not the Amazon package folder
+        _genuine_entry(InstallLocation=r"C:\Program Files\WindowsApps\EvilAmazonMusic_1.0.0.0_x64__other"),
+        # Amazon-looking folder outside WindowsApps
+        _genuine_entry(InstallLocation=r"C:\Temp\AmazonMobileLLC.AmazonMusic_9.5.2.0_x86__kc6t79cpj4tp0"),
+        # folder does not match the reported full name
+        _genuine_entry(PackageFullName="AmazonMobileLLC.AmazonMusic_9.6.0.0_x86__kc6t79cpj4tp0"),
+        # wrong publisher id in the family name
+        _genuine_entry(PackageFamilyName="AmazonMobileLLC.AmazonMusic_otherpublisher"),
+        # network share
+        _genuine_entry(InstallLocation=r"\\server\WindowsApps\AmazonMobileLLC.AmazonMusic_9.5.2.0_x86__kc6t79cpj4tp0"),
+    ]
+    for entry in cases:
+        assert amazon_devtools._verified_package_executable(entry, always) == "", entry
+
+
+def test_absolute_or_traversing_manifest_paths_are_rejected():
+    outside = r"C:\Evil\amazon music.exe"
+    exists = _exists_only(outside, r"C:\Program Files\WindowsApps\amazon music.exe")
+    for executable in (outside, r"..\amazon music.exe", r"sub\..\..\amazon music.exe", r"\Evil\amazon music.exe", r"\\server\share\amazon music.exe"):
+        assert amazon_devtools._verified_package_executable(_genuine_entry(Executable=executable), exists) == "", executable
+
+
+def test_manifest_executable_must_have_an_amazon_name_and_exist():
+    other = GENUINE_LOCATION + r"\helper.exe"
+    assert amazon_devtools._verified_package_executable(_genuine_entry(Executable="helper.exe"), _exists_only(other)) == ""
+    assert amazon_devtools._verified_package_executable(_genuine_entry(), lambda path: False) == ""
+    nested = GENUINE_LOCATION + r"\app\Amazon Music.exe"
+    assert amazon_devtools._verified_package_executable(_genuine_entry(Executable=r"app\Amazon Music.exe"), _exists_only(nested)).casefold() == nested.casefold()
+
+
+def test_failed_package_exe_launch_falls_back_to_store_activation(monkeypatch):
+    class Reservation:
+        def close(self):
+            return None
+
+    amazon_devtools.set_devtools_port(52857)
+    monkeypatch.setattr(amazon_devtools, "_is_local_port_open", lambda port: False)
+    monkeypatch.setattr(amazon_devtools, "_prepare_amazon_launch", lambda: {"ok": True, "stale_helpers": []})
+    monkeypatch.setattr(amazon_devtools, "_reserve_devtools_port", lambda port=None: (52857, Reservation()))
+    monkeypatch.setattr(
+        amazon_devtools,
+        "_launcher_candidates",
+        lambda launcher_override=None: [
+            {"kind": "exe", "value": GENUINE_EXE, "method": "auto-package-exe"},
+            {"kind": "aumid", "value": amazon_devtools.APP_USER_MODEL_ID, "method": "auto-aumid"},
+        ],
+    )
+    launched = []
+
+    def fake_launch(candidate, port):
+        launched.append(candidate["method"])
+        if candidate["kind"] == "exe":
+            return {"ok": False, "error": "Access is denied"}
+        return {"ok": True, "pid": "55", "activation": "native"}
+
+    monkeypatch.setattr(amazon_devtools, "_launch_candidate", fake_launch)
+    monkeypatch.setattr(amazon_devtools, "_wait_for_page_target", lambda port: True)
+    monkeypatch.setattr(amazon_devtools, "_devtools_owner_trust", lambda *args, **kwargs: {"trusted": True})
+    monkeypatch.setattr(amazon_devtools, "_wait_for_app_ready", lambda port, timeout=amazon_devtools.LAUNCH_READY_TIMEOUT_SECONDS: {"ok": True})
+    monkeypatch.setattr(amazon_devtools, "_remember_launch", lambda *args, **kwargs: None)
+    result = amazon_devtools.launch_amazon_music_devtools()
+    assert launched == ["auto-package-exe", "auto-aumid"]
+    assert result["ok"] is True
+    assert result["method"] == "auto-aumid"
+    amazon_devtools.reset_devtools_port()
