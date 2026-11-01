@@ -12,6 +12,7 @@ import tempfile
 from media_reader import get_track_sync
 from notification_reader import get_notification_track_sync, is_new_notification
 from album_art import get_album_art, search_tracks
+from artwork_resolver import ArtworkResolver, lookup_key
 from amazon_devtools import get_devtools_track_sync, apply_devtools_to_track, launch_amazon_music_devtools, restart_amazon_music_devtools, amazon_music_is_running, devtools_environment, amazon_music_search_link
 from amazon_status_overlay import AmazonStatusOverlay
 from discord_rpc import DiscordRPC
@@ -627,6 +628,9 @@ def rpc_loop():
     last_art_url = None
     last_album_name = None
     last_art_fetch_key = None
+    # One artwork/album lookup per track, run off the playback loop.
+    art_resolver = ArtworkResolver(get_album_art)
+    art_pending_key = None
     last_start_ts = None
     last_amazon_track_link = None
     last_deezer_track_link = None
@@ -731,14 +735,25 @@ def rpc_loop():
             amazon_music_search_link,
         )
 
-    def _ensure_deezer_button_link(title, artist):
-        nonlocal last_deezer_track_link, last_deezer_duration
+    def _lookup_request(track, title, artist, album_hint):
+        """Start (or join) this track's single lookup; returns its key."""
+        key = lookup_key(title, artist, album_hint)
+        art_resolver.request(
+            key,
+            title=title,
+            artist=artist,
+            album=album_hint or "",
+            duration=track.get("duration") or 0,
+        )
+        return key
+
+    def _ensure_deezer_button_link(track, title, artist, album_hint=""):
+        # The Deezer button link comes from the same lookup as the artwork;
+        # it is applied when that lookup finishes.
+        nonlocal art_pending_key
         if not should_lookup_deezer_button(song_link_provider, last_deezer_track_link, title, artist):
             return
-        _, _, deezer_link, deezer_duration = get_album_art(title, artist)
-        last_deezer_track_link = deezer_link or ""
-        if deezer_duration:
-            last_deezer_duration = deezer_duration
+        art_pending_key = _lookup_request(track, title, artist, album_hint)
 
     def _update_state(track=None, presence=False, error="", privacy_reason=""):
         hidden = bool(privacy_reason)
@@ -942,7 +957,7 @@ def rpc_loop():
                         last_amazon_track_link = track.get("_amazon_track_link")
                     if track.get("duration"):
                         last_deezer_duration = track.get("duration")
-                    _ensure_deezer_button_link(track.get("title", ""), track.get("artist", ""))
+                    _ensure_deezer_button_link(track, track.get("title", ""), track.get("artist", ""), _notif_album or track.get("album", ""))
                 if show_paused and last_track_key:
                     if track.get("position") is not None:
                         try:
@@ -1065,24 +1080,26 @@ def rpc_loop():
                 last_deezer_track_link = None
 
                 resolved = _resolved_art(raw_key, title, artist, track.get("album", ""))
-                fetched = (
-                    None
-                    if privacy_reason or resolved or track.get("_amazon_art_url")
-                    else get_album_art(title, artist, album=track.get("album", ""), duration=track.get("duration") or 0)
-                )
-                art_state = apply_art_result(track, resolved, fetched, _notif_album, last_album_name)
+                # Publish what is known now; the network lookup runs in the
+                # background and is applied when it finishes for this track.
+                art_pending_key = None
+                if not (privacy_reason or resolved or track.get("_amazon_art_url")):
+                    art_pending_key = _lookup_request(track, title, artist, _notif_album or track.get("album", ""))
+                art_state = apply_art_result(track, resolved, None, _notif_album, "")
                 last_art_url = art_state["art_url"]
                 last_album_name = art_state["album"]
                 last_deezer_track_link = art_state["deezer_link"]
                 last_deezer_duration = art_state["duration"]
                 last_amazon_track_link = art_state["amazon_link"]
                 if not privacy_reason:
-                    _ensure_deezer_button_link(title, artist)
+                    _ensure_deezer_button_link(track, title, artist, _notif_album or track.get("album", ""))
                 last_art_url, last_album_name = _apply_custom_album_override(
                     config, last_art_url, last_album_name, _notif_album, track.get("album", "")
                 )
                 last_start_ts = _track_start_ts(track, raw_key)
-                if last_art_url:
+                if art_pending_key:
+                    print(f"[Art] Looking up artwork in the background for '{title}'")
+                elif last_art_url:
                     print(f"[Art] Found: '{last_album_name}' for '{title}'")
                 else:
                     print(f"[Art] No album art found for '{title}'")
@@ -1108,19 +1125,16 @@ def rpc_loop():
                                 pass
             elif raw_key in _resolved_cache and last_art_fetch_key != track_art_key:
                 resolved = _resolved_art(raw_key, title, artist, track.get("album", ""))
-                fetched = (
-                    None
-                    if privacy_reason or resolved or track.get("_amazon_art_url")
-                    else get_album_art(title, artist, album=track.get("album", ""), duration=track.get("duration") or 0)
-                )
-                art_state = apply_art_result(track, resolved, fetched, _notif_album, last_album_name)
+                if not (privacy_reason or resolved or track.get("_amazon_art_url")):
+                    art_pending_key = _lookup_request(track, title, artist, _notif_album or track.get("album", ""))
+                art_state = apply_art_result(track, resolved, None, _notif_album, last_album_name)
                 last_art_url = art_state["art_url"]
                 last_album_name = art_state["album"]
                 last_deezer_track_link = art_state["deezer_link"]
                 last_deezer_duration = art_state["duration"]
                 last_amazon_track_link = art_state["amazon_link"]
                 if not privacy_reason:
-                    _ensure_deezer_button_link(title, artist)
+                    _ensure_deezer_button_link(track, title, artist, _notif_album or track.get("album", ""))
                 last_art_url, last_album_name = _apply_custom_album_override(
                     config, last_art_url, last_album_name, _notif_album, track.get("album", "")
                 )
@@ -1158,15 +1172,32 @@ def rpc_loop():
                 last_album_name = _notif_album
                 notif_art_key = f"{title}|{artist}|{_notif_album}".lower()
                 if not privacy_reason and _notif_art_fetched_for != notif_art_key:
-                    _notif_art, _notif_aname, _notif_link, _notif_dur = get_album_art(title, artist, album=_notif_album, duration=track.get("duration") or 0)
-                    if _notif_art:
-                        last_art_url = _notif_art
-                        if _notif_link:
-                            last_deezer_track_link = _notif_link
-                        if _notif_dur:
-                            last_deezer_duration = _notif_dur
-                        print(f"[Art] Re-fetched art for notification album: '{_notif_album}'")
+                    if not track.get("_amazon_art_url") and raw_key not in _resolved_cache:
+                        art_pending_key = _lookup_request(track, title, artist, _notif_album)
                     _notif_art_fetched_for = notif_art_key
+
+            if art_pending_key:
+                fetched = art_resolver.result(art_pending_key)
+                if fetched is not None:
+                    art_pending_key = None
+                    art_state = apply_art_result(track, None, fetched, _notif_album, last_album_name)
+                    last_art_url = art_state["art_url"] or last_art_url
+                    last_album_name = art_state["album"]
+                    if art_state["deezer_link"]:
+                        last_deezer_track_link = art_state["deezer_link"]
+                    if art_state["duration"]:
+                        last_deezer_duration = art_state["duration"]
+                    if fetched[0] or fetched[1]:
+                        print(f"[Art] Found: '{last_album_name}' for '{title}'")
+                    else:
+                        print(f"[Art] No album art found for '{title}'")
+                    if (scrobbler or lb_scrobbler) and scrobble_start_time and not scrobbled:
+                        for service in (scrobbler, lb_scrobbler):
+                            if service:
+                                try:
+                                    service.update_now_playing(title, artist, last_album_name, scrobble_duration)
+                                except Exception:
+                                    pass
             last_art_url, last_album_name = _apply_custom_album_override(
                 config, last_art_url, last_album_name, _notif_album, track.get("album", "")
             )
@@ -1218,7 +1249,7 @@ def rpc_loop():
                 print(f"[RPC] Song ended, restarting: {title}")
 
             last_playback_status = "playing"
-            time.sleep(3)
+            time.sleep(1 if art_pending_key else 3)
 
         except Exception as e:
             print(f"[RPC] Loop error: {e}")

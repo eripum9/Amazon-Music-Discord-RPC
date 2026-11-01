@@ -1,5 +1,6 @@
 # MIT License - Copyright (c) 2026 eripum9
 
+import json
 import os
 import time
 import requests
@@ -174,7 +175,44 @@ GOOD_ALBUM_SCORE = 0.8
 ARTWORK_LOOKUP_BUDGET_SECONDS = 8.0
 PER_REQUEST_TIMEOUT_SECONDS = 5.0
 MIN_REQUEST_TIMEOUT_SECONDS = 0.5
+# Longest single socket wait.  The deadline is checked between reads, so a
+# slow trickle can overshoot the budget by at most about this much.
+READ_TIMEOUT_SECONDS = 2.0
+MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+# With both providers enabled Deezer may use this share of the budget; the rest
+# is reserved so an unreachable Deezer cannot starve the iTunes fallback.
+DEEZER_BUDGET_SHARE = 0.6
 _monotonic = time.monotonic
+
+
+def _get_json(url, deadline):
+    """GET ``url`` and decode JSON, giving up once ``deadline`` (monotonic) passes.
+
+    ``timeout`` alone only bounds individual socket waits, so the body is
+    streamed and the deadline is re-checked after every chunk.
+    """
+    remaining = deadline - _monotonic()
+    if remaining < MIN_REQUEST_TIMEOUT_SECONDS:
+        raise requests.Timeout("artwork lookup budget exhausted")
+    timeout = (min(PER_REQUEST_TIMEOUT_SECONDS, remaining), min(READ_TIMEOUT_SECONDS, remaining))
+    resp = requests.get(url, timeout=timeout, stream=True)
+    try:
+        resp.raise_for_status()
+        if not hasattr(resp, "iter_content"):
+            return resp.json()
+        body, size = [], 0
+        for chunk in resp.iter_content(16384):
+            if _monotonic() > deadline:
+                raise requests.Timeout("artwork lookup deadline passed while downloading")
+            size += len(chunk)
+            if size > MAX_RESPONSE_BYTES:
+                raise ValueError("artwork lookup response too large")
+            body.append(chunk)
+        return json.loads(b"".join(body).decode("utf-8"))
+    finally:
+        close = getattr(resp, "close", None)
+        if close:
+            close()
 
 
 def _fold(value):
@@ -277,12 +315,12 @@ def score_candidate(candidate, title, artist, album="", duration=0):
     return max(0.0, min(1.0, score))
 
 
-def _deezer_candidates(query, limit=10, timeout=PER_REQUEST_TIMEOUT_SECONDS):
+def _deezer_candidates(query, limit=10, deadline=None):
     url = f"https://api.deezer.com/search?q={quote(query)}&limit={limit}"
+    if deadline is None:
+        deadline = _monotonic() + PER_REQUEST_TIMEOUT_SECONDS
     try:
-        resp = requests.get(url, timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
+        data = _get_json(url, deadline)
     except (requests.RequestException, ValueError) as error:
         _network_event("deezer", "artwork-lookup", "error", type(error).__name__)
         return []
@@ -302,12 +340,12 @@ def _deezer_candidates(query, limit=10, timeout=PER_REQUEST_TIMEOUT_SECONDS):
     return candidates
 
 
-def _itunes_candidates(query, limit=15, timeout=PER_REQUEST_TIMEOUT_SECONDS):
+def _itunes_candidates(query, limit=15, deadline=None):
     url = f"https://itunes.apple.com/search?term={quote(query)}&media=music&entity=song&limit={limit}"
+    if deadline is None:
+        deadline = _monotonic() + PER_REQUEST_TIMEOUT_SECONDS
     try:
-        resp = requests.get(url, timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
+        data = _get_json(url, deadline)
     except (requests.RequestException, ValueError) as error:
         _network_event("itunes", "artwork-lookup", "error", type(error).__name__)
         return []
@@ -361,14 +399,19 @@ def find_best_match(title, artist, album="", duration=0, deezer_enabled=None, it
         if core != _fold(plain_title):
             queries.append(("itunes", f"{core} {primary}"))
 
-    deadline = _monotonic() + max(0.0, float(budget))
+    start = _monotonic()
+    budget = max(0.0, float(budget))
+    deadline = start + budget
+    # Deezer queries come first; when iTunes is also enabled it keeps a reserved
+    # slice of the budget, so a Deezer outage cannot use up the whole lookup.
+    deezer_deadline = start + budget * DEEZER_BUDGET_SHARE if use_itunes else deadline
     best, best_score, seen = None, 0.0, set()
     for source, query in queries:
-        remaining = deadline - _monotonic()
-        if remaining < MIN_REQUEST_TIMEOUT_SECONDS:
-            break
+        source_deadline = deezer_deadline if source == "deezer" else deadline
+        if source_deadline - _monotonic() < MIN_REQUEST_TIMEOUT_SECONDS:
+            continue
         fetch = _deezer_candidates if source == "deezer" else _itunes_candidates
-        for candidate in fetch(query, timeout=min(PER_REQUEST_TIMEOUT_SECONDS, remaining)):
+        for candidate in fetch(query, deadline=source_deadline):
             key = (candidate["source"], candidate["title"], candidate["artist"], candidate["album"])
             if key in seen:
                 continue
