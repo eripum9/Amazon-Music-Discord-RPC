@@ -133,6 +133,26 @@ class GameModeState:
         return True
 
 
+class ListeningTimeState:
+    """Count only intervals bounded by consecutive playing observations."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.elapsed = 0.0
+        self.suspend()
+
+    def suspend(self):
+        self._observed_at = None
+
+    def observe(self):
+        now = time.monotonic()
+        if self._observed_at is not None:
+            self.elapsed += max(0.0, now - self._observed_at)
+        self._observed_at = now
+
+
 class TrackTimingState:
     def __init__(self):
         self.cache = {}
