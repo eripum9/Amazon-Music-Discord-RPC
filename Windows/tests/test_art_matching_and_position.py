@@ -31,7 +31,7 @@ def _deezer(title, artist, album, duration, cover="deezer"):
 
 
 def _fake_get(deezer_results, itunes_results=()):
-    def fake(url, timeout=5):
+    def fake(url, timeout=5, **kwargs):
         if "deezer" in url:
             return _Response({"data": list(deezer_results)})
         return _Response({"results": list(itunes_results)})
@@ -190,7 +190,7 @@ def test_known_album_is_checked_before_an_early_exit(monkeypatch):
     album_art._cache.clear()
     calls = []
 
-    def fake(url, timeout=5):
+    def fake(url, timeout=5, **kwargs):
         calls.append(_query_of(url))
         if "deezer" not in url:
             return _Response({"results": []})
@@ -218,16 +218,16 @@ def test_lookup_respects_the_total_time_budget(monkeypatch):
     timeouts = []
     monkeypatch.setattr(album_art, "_monotonic", lambda: clock["t"])
 
-    def slow(url, timeout=5):
+    def slow(url, timeout=(5, 5), **kwargs):
         timeouts.append(timeout)
-        clock["t"] += timeout          # every request times out
+        clock["t"] += timeout[0]       # every request times out while connecting
         raise requests.Timeout()
 
     monkeypatch.setattr(album_art.requests, "get", slow)
     result = album_art.get_album_art("Song", "Artist", deezer_enabled=True, itunes_enabled=True, album="Album")
     assert result == (None, "", "", 0)
     assert clock["t"] <= album_art.ARTWORK_LOOKUP_BUDGET_SECONDS
-    assert all(t <= album_art.PER_REQUEST_TIMEOUT_SECONDS for t in timeouts)
+    assert all(max(t) <= album_art.PER_REQUEST_TIMEOUT_SECONDS for t in timeouts)
     assert len(timeouts) < 5
 
 
@@ -257,3 +257,76 @@ def test_every_contacted_provider_is_recorded(monkeypatch):
     itunes_calls = [e for e in events if e[0] == "itunes" and e[1] == "artwork-lookup"]
     assert len(deezer_calls) >= 2 and itunes_calls
     assert all(status == "success" for _, _, status in deezer_calls + itunes_calls)
+
+
+# --- review follow-ups, round 2 (#62) ---------------------------------------
+
+def test_deezer_outage_still_leaves_time_for_itunes(monkeypatch):
+    album_art._cache.clear()
+    clock = {"t": 0.0}
+    monkeypatch.setattr(album_art, "_monotonic", lambda: clock["t"])
+    contacted = []
+    itunes = [{
+        "trackName": "La Bachata", "artistName": "Manuel Turizo", "collectionName": "2000",
+        "artworkUrl100": "https://itunes/100x100bb.jpg", "trackTimeMillis": 162000,
+    }]
+
+    def fake(url, timeout=(5, 5), **kwargs):
+        if "deezer" in url:
+            contacted.append("deezer")
+            clock["t"] += timeout[0]   # Deezer never answers
+            raise requests.Timeout()
+        contacted.append("itunes")
+        clock["t"] += 0.3
+        return _Response({"results": itunes})
+
+    monkeypatch.setattr(album_art.requests, "get", fake)
+    art, album, _, _ = album_art.get_album_art("La Bachata", "Manuel Turizo", deezer_enabled=True, itunes_enabled=True)
+    assert album == "2000" and art
+    assert "itunes" in contacted
+    assert clock["t"] <= album_art.ARTWORK_LOOKUP_BUDGET_SECONDS
+
+
+class _SlowBody:
+    """A response whose headers arrive quickly but whose body trickles in."""
+
+    def __init__(self, clock, chunks, step):
+        self.clock, self.chunks, self.step = clock, chunks, step
+
+    def raise_for_status(self):
+        pass
+
+    def iter_content(self, size):
+        for chunk in self.chunks:
+            self.clock["t"] += self.step
+            yield chunk
+
+    def close(self):
+        pass
+
+
+def test_slow_download_is_cut_off_at_the_deadline(monkeypatch):
+    album_art._cache.clear()
+    clock = {"t": 0.0}
+    monkeypatch.setattr(album_art, "_monotonic", lambda: clock["t"])
+    reads = []
+
+    def fake(url, timeout=(5, 5), **kwargs):
+        assert kwargs.get("stream") is True
+        reads.append(timeout)
+        return _SlowBody(clock, [b"{"] * 1000, step=1.5)   # never finishes in time
+
+    monkeypatch.setattr(album_art.requests, "get", fake)
+    result = album_art.get_album_art("Song", "Artist", deezer_enabled=True, itunes_enabled=False)
+    assert result == (None, "", "", 0)
+    # The deadline is checked between reads, so the overshoot is at most one read.
+    assert clock["t"] <= album_art.ARTWORK_LOOKUP_BUDGET_SECONDS + 1.5
+    assert all(t[1] <= album_art.READ_TIMEOUT_SECONDS for t in reads)
+
+
+def test_streamed_json_body_is_decoded(monkeypatch):
+    clock = {"t": 0.0}
+    monkeypatch.setattr(album_art, "_monotonic", lambda: clock["t"])
+    body = _SlowBody(clock, [b'{"data": [', b'{"title": "x"}', b"]}"], step=0.01)
+    monkeypatch.setattr(album_art.requests, "get", lambda url, **kwargs: body)
+    assert album_art._get_json("https://api.deezer.com/search?q=x", deadline=5.0) == {"data": [{"title": "x"}]}

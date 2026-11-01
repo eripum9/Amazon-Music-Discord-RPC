@@ -57,5 +57,41 @@ def test_link_buttons_and_art_state_are_provider_aware():
     assert amazon_buttons == [{"label": "Listen on Amazon Music", "url": "https://music.amazon.de/search/Noid-Tyler"}]
     assert deezer_buttons == [{"label": "Listen on Deezer", "url": "https://deezer.example/track"}]
     assert art_state["art_url"] == "https://amazon.example/art.jpg"
-    assert art_state["album"] == "Amazon Album"
+    assert art_state["album"] == "Deezer Album"
     assert art_state["amazon_link"] == "https://music.amazon.com/tracks/1"
+
+
+def test_player_bar_label_is_only_an_album_hint():
+    assert metadata_pipeline.album_from_player_label("Reproducci\u00f3n autom\u00e1tica: El Viejo") == ""
+    assert metadata_pipeline.album_from_player_label("Autoplay: Pompeii") == ""
+    assert metadata_pipeline.album_from_player_label("11: 59") == "11: 59"
+    assert metadata_pipeline.album_from_player_label("Radio") == "Radio"
+
+
+def test_album_comes_from_the_track_match_not_the_play_context():
+    amazon = {"album": "Pompeii", "_amazon_art_url": "https://amazon.example/illuminate.jpg", "duration": 187}
+    state = metadata_pipeline.apply_art_result(
+        amazon,
+        fetched=("https://deezer.example/illuminate.jpg", "Illuminate", "https://deezer.example/t", 187),
+        previous_album="",
+    )
+    assert state["album"] == "Illuminate"
+    assert state["art_url"] == "https://amazon.example/illuminate.jpg"
+
+
+def test_player_spelling_kept_when_it_is_the_same_album():
+    state = metadata_pipeline.apply_art_result(
+        {"album": "11: 59", "_amazon_art_url": "https://amazon.example/a.jpg"},
+        fetched=("https://deezer.example/a.jpg", "11:59", "", 200),
+    )
+    assert state["album"] == "11: 59"
+
+
+def test_new_track_never_inherits_the_previous_album():
+    autoplay = {"album": "Reproducci\u00f3n autom\u00e1tica: El Viejo", "_amazon_art_url": "https://amazon.example/b.jpg"}
+    state = metadata_pipeline.apply_art_result(autoplay, fetched=(None, "", "", 0), previous_album="")
+    assert state["album"] == ""
+    resolved = metadata_pipeline.apply_art_result(
+        {"album": "Pompeii"}, resolved=("https://x/r.jpg", "Chosen Album", "", 180), previous_album="Bad Blood",
+    )
+    assert resolved["album"] == "Chosen Album"
