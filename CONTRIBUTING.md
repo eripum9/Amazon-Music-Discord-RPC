@@ -100,13 +100,71 @@ Discord was not installed during the first macOS development build. Automated RP
 
 ## Pull Requests
 
-Keep pull requests focused. A good pull request includes:
+Keep each pull request focused on one behavior or fix. Do not add unrelated
+features during review; open another PR instead. Use the
+[pull request template](.github/PULL_REQUEST_TEMPLATE.md) and include:
 
-- The problem being fixed
-- The behavior change
-- Screenshots for UI changes
-- Test output
-- Any compatibility notes for enhanced metadata or fallback mode
+- Scope: the problem, intended behavior, and what must remain unchanged.
+- Validation: the exact tested head commit, commands, and their results.
+- Regression Evidence: how a test fails before the fix and passes afterward.
+- Platform Checks: OS, architecture, Amazon Music version/source, and the
+  native checks actually performed. Include screenshots or recordings when
+  they clarify a UI or playback change, with private information removed.
+- Untested / Limitations: explicit gaps, including stubbed native APIs,
+  installer checks, and live Discord, scrobbling, or playback checks not run.
+
+The required `contribution-evidence` check rejects missing or placeholder
+evidence and stale tested-commit references. Runtime source changes also need
+added or modified tests for the affected platform/shared implementation.
+Documentation and workflow-only changes may explain why a behavioral
+regression test is not applicable. Dependency-manifest-only Dependabot PRs
+use CI evidence instead of a manually completed template; they do not bypass
+required CI or review.
+
+### Workflow-Level Regression Tests
+
+Changing a helper or passing a source-shape assertion is not enough to
+demonstrate that a playback workflow works. Exercise the real runtime path
+with controlled metadata, Discord, HTTP, and clocks. Cover the affected
+transitions, including:
+
+- Song skips before and after a lookup completes, and correction while a
+  lookup is pending.
+- Paused lookup completion, missing native duration, and duration backfill.
+- Stop/restart, privacy activation, provider changes, and stale results.
+- Missing responses, socket timeouts, redirects, and slow/trickling HTTP
+  responses using a controlled local server where buffering matters.
+
+Tests must isolate configuration paths, credential stores, filesystem writes,
+and external services. Never use a developer's actual tokens or settings.
+Run the dedicated Windows gate with:
+
+```powershell
+python -m pytest Windows/tests/integration -q
+```
+
+Keep suitable platform-neutral tests in `Shared/tests` and native macOS
+tests in `MacOS/tests`. Disclose platform stubs rather than reporting them
+as native validation.
+
+### Merge Gates
+
+`master` requires a PR, current-branch CI results, and resolved review
+conversations. Required checks include Windows/macOS tests, dependency and
+CodeQL checks, `runtime-integration`, and `contribution-evidence`. Failed
+or missing required CI cannot be bypassed by the owner.
+
+Contributor PRs need an approving review of the latest reviewable push; new
+commits dismiss stale approvals. The sole owner may use the separate
+review-only bypass for owner-authored PRs, but still needs all required CI.
+This is an actor-based GitHub permission, not an automatic determination of
+the PR author's identity. Do not use it to skip review of contributor PRs.
+Force pushes and deletion of `master` are blocked.
+
+The evidence check verifies that a report is present and consistent, not
+that its claims are true or that a PR has only one purpose. Reviewers must
+still assess scope, test quality, compatibility, and disclosed limitations.
+These standards apply to maintainer and AI-assisted changes as well.
 
 For Windows releases, follow [docs/release-checklist.md](docs/release-checklist.md).
 

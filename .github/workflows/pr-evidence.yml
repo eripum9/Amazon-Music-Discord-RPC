@@ -1,0 +1,61 @@
+name: PR Evidence
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  contribution-evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Check bootstrap eligibility
+        id: bootstrap
+        env:
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          if [ -f .github/scripts/check_pr_evidence.py ]; then
+            echo 'checkout_head=false' >> "$GITHUB_OUTPUT"
+          elif [ "$HEAD_REPOSITORY" = "$REPOSITORY" ] && [ "$PR_AUTHOR" = "$REPOSITORY_OWNER" ]; then
+            echo 'checkout_head=true' >> "$GITHUB_OUTPUT"
+          else
+            echo '::error::Base validator is missing; bootstrap requires a PR authored by the repository owner from the same repository.'
+            exit 1
+          fi
+      - name: Check out owner bootstrap head
+        if: steps.bootstrap.outputs.checkout_head == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12.10"
+      - name: Check out candidate policy tests
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: policy-candidate
+          persist-credentials: false
+      - name: Test contribution policies
+        working-directory: policy-candidate
+        run: python -m unittest discover -s .github/scripts/tests -p 'test_*.py'
+      - name: Fetch changed files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh api --paginate --slurp "repos/$REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" > "$RUNNER_TEMP/pr-files.json"
+      - name: Check contribution evidence
+        run: python .github/scripts/check_pr_evidence.py --event "$GITHUB_EVENT_PATH" --files "$RUNNER_TEMP/pr-files.json"

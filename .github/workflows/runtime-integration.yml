@@ -1,0 +1,37 @@
+# MIT License - Copyright (c) 2026 eripum9
+
+name: Runtime Integration
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+      - "chore/**"
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-integration:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12.10"
+          cache: pip
+          cache-dependency-path: |
+            Windows/requirements.txt
+            Windows/requirements-dev.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --only-binary=winsdk -r Windows/requirements-dev.txt
+      - name: Runtime integration tests
+        run: python -m pytest Windows/tests/integration -q
