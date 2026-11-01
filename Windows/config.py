@@ -261,35 +261,68 @@ def _exclusive_config_lock(timeout=10):
                 msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def _read_secret_config():
+def _decode_secret_config(data):
+    stored = {key: value for key, value in data.items() if key in SENSITIVE_CONFIG_KEYS}
+    if any(not isinstance(value, str) for value in stored.values()):
+        raise OSError("Secure configuration contains an invalid credential value")
+    decoded = unprotect_sensitive_config(stored)
+    for key, value in stored.items():
+        if value and (not decoded.get(key) or (value.startswith(DPAPI_PREFIX) and decoded.get(key) == value)):
+            raise OSError(f"Could not decrypt secure storage for {key}")
+    return decoded
+
+
+def _read_fallback_secrets():
     path = _secret_path()
-    fallback = {}
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
-            fallback = unprotect_sensitive_config(data)
+            return _decode_secret_config(data)
+        raise OSError("Secure configuration must be a JSON object")
+    return {}
+
+
+def _read_secret_config():
+    fallback = _read_fallback_secrets()
     store = _credential_store()
     secrets = dict(fallback)
     if store.available:
         for key in SENSITIVE_CONFIG_KEYS:
+            # Pending replacements and deletions take precedence until the store recovers.
+            if key in fallback:
+                continue
             value = store.read(key)
             if value:
                 secrets[key] = value
     return secrets
 
 
-def _write_secret_config(secrets):
+def _write_secret_config(secrets, fields=None):
     secrets = {key: value for key, value in (secrets or {}).items() if key in SENSITIVE_CONFIG_KEYS and str(value or "")}
+    requested = set(SENSITIVE_CONFIG_KEYS if fields is None else fields)
+    if requested.difference(SENSITIVE_CONFIG_KEYS):
+        raise KeyError("Secure storage updates must name known credential fields")
+    targets = [key for key in SENSITIVE_CONFIG_KEYS if key in requested]
+    if not targets:
+        return
     store = _credential_store()
-    fallback = {}
-    for key in SENSITIVE_CONFIG_KEYS:
+    fallback = _read_fallback_secrets()
+    for key in targets:
         value = str(secrets.get(key, "") or "")
         if value:
             if not store.write(key, value):
                 fallback[key] = value
+            else:
+                fallback.pop(key, None)
+        elif store.available and not store.delete(key):
+            raise OSError(f"Could not delete secure storage for {key}")
+        elif not store.available:
+            fallback[key] = ""
         else:
-            store.delete(key)
+            if store.read(key):
+                raise OSError(f"Could not verify secure storage deletion for {key}")
+            fallback.pop(key, None)
     path = _secret_path()
     if fallback:
         _atomic_write_json(path, protect_sensitive_config(fallback))
@@ -299,8 +332,8 @@ def _write_secret_config(secrets):
         except FileNotFoundError:
             pass
     verified = _read_secret_config()
-    for key, value in secrets.items():
-        if verified.get(key) != value:
+    for key in targets:
+        if str(verified.get(key, "") or "") != str(secrets.get(key, "") or ""):
             raise OSError(f"Could not verify secure storage for {key}")
 
 
@@ -318,33 +351,22 @@ def credential_storage_status():
             fallback = {}
     credential_keys = []
     if store.available:
-        credential_keys = [key for key in sorted(SENSITIVE_CONFIG_KEYS) if store.read(key)]
+        credential_keys = [key for key in sorted(SENSITIVE_CONFIG_KEYS) if (key not in fallback or fallback[key]) and store.read(key)]
     return {
         "credential_manager_available": store.available,
         "credential_manager_keys": credential_keys,
-        "dpapi_fallback_keys": sorted(key for key in fallback if key in SENSITIVE_CONFIG_KEYS),
+        "dpapi_fallback_keys": sorted(key for key in fallback if key in SENSITIVE_CONFIG_KEYS and fallback[key]),
     }
 
 
 def clear_sensitive_credentials():
     with _exclusive_config_lock():
-        store = _credential_store()
-        removed = True
-        for key in SENSITIVE_CONFIG_KEYS:
-            if store.available and not store.delete(key):
-                removed = False
+        saved = _public_config(_read_saved_config()) if os.path.exists(CONFIG_PATH) else {}
         try:
-            os.remove(_secret_path())
-        except FileNotFoundError:
-            pass
+            _persist_config_locked(saved, _stored_revision(saved) + 1)
         except OSError:
-            removed = False
-        if os.path.exists(CONFIG_PATH):
-            saved = _read_saved_config()
-            saved = _public_config(saved)
-            saved[CONFIG_REVISION_KEY] = _stored_revision(saved) + 1
-            _atomic_write_json(CONFIG_PATH, saved)
-        return removed
+            return False
+        return _credential_store().available
 
 
 def _public_config(config):
@@ -359,17 +381,21 @@ def _load_public_and_secret_config():
     saved = _read_saved_config()
     secrets = _read_secret_config()
     if os.path.exists(_secret_path()) and secrets:
-        _write_secret_config(secrets)
+        try:
+            _write_secret_config(secrets, fields=set(secrets))
+        except OSError as error:
+            print(f"[Config] Secure storage repair remains pending: {error}")
     moved = _config_secret_values(saved)
     if moved:
+        moved = _decode_secret_config(moved)
         for key, value in moved.items():
             if str(value or ""):
-                secrets[key] = _dpapi_unprotect_text(value)
+                secrets[key] = value
             else:
                 secrets.pop(key, None)
         saved = _public_config(saved)
         saved[CONFIG_REVISION_KEY] = _stored_revision(saved) + 1
-        _write_secret_config(secrets)
+        _write_secret_config(secrets, fields=set(secrets) | set(moved))
         _atomic_write_json(CONFIG_PATH, saved)
     return {**saved, **secrets}
 
@@ -426,8 +452,11 @@ def load_config():
             try:
                 saved = _load_public_and_secret_config()
             except (OSError, json.JSONDecodeError, TypeError) as e:
-                print(f"[Config] Could not read config, using defaults: {e}")
-                saved = {}
+                print(f"[Config] Secure settings unavailable; retaining public settings: {e}")
+                try:
+                    saved = _public_config(_read_saved_config())
+                except (OSError, json.JSONDecodeError, TypeError):
+                    saved = {**DEFAULTS, "privacy_private_session": True, "privacy_disable_scrobbling": True}
             return _complete_config(saved)
         return _complete_config({})
 
@@ -452,7 +481,7 @@ def _current_config_locked():
     return _complete_config({})
 
 
-def _persist_config_locked(config, revision):
+def _persist_config_locked(config, revision, secret_fields=None):
     persisted = dict(config or {})
     persisted[CONFIG_REVISION_KEY] = int(revision)
     secrets = {
@@ -460,7 +489,11 @@ def _persist_config_locked(config, revision):
         for key, value in _config_secret_values(persisted).items()
         if str(value or "")
     }
-    _write_secret_config(secrets)
+    previous_public = _public_config(_read_saved_config()) if os.path.exists(CONFIG_PATH) else {}
+    previous_public[CONFIG_REVISION_KEY] = int(revision)
+    # A partial credential failure must still invalidate stale settings windows.
+    _atomic_write_json(CONFIG_PATH, previous_public)
+    _write_secret_config(secrets, fields=secret_fields)
     _atomic_write_json(CONFIG_PATH, _public_config(persisted))
     return _complete_config(persisted)
 
@@ -476,7 +509,12 @@ def save_config(config):
             raise ConfigConflictError(
                 f"Configuration changed from revision {expected} to {current_revision}"
             )
-        return _persist_config_locked(config, current_revision + 1)
+        if os.path.exists(CONFIG_PATH) and not _credential_store().available:
+            unknown = set(SENSITIVE_CONFIG_KEYS).difference(_read_fallback_secrets())
+            if unknown.intersection(config or {}):
+                raise OSError("Credential storage is unavailable; use field-specific updates until it recovers")
+        desired = {**current, **dict(config or {})}
+        return _persist_config_locked(desired, current_revision + 1, secret_fields=set(config or {}).intersection(SENSITIVE_CONFIG_KEYS))
 
 
 def update_config_fields(updates, expected_revision=None):
@@ -491,7 +529,7 @@ def update_config_fields(updates, expected_revision=None):
         if expected_revision is not None and int(expected_revision) > current_revision:
             raise ConfigConflictError("Configuration revision is newer than the stored revision")
         current.update(updates)
-        return _persist_config_locked(current, current_revision + 1)
+        return _persist_config_locked(current, current_revision + 1, secret_fields=set(updates).intersection(SENSITIVE_CONFIG_KEYS))
 
 
 def mutate_config_fields(fields, transform):
@@ -504,7 +542,7 @@ def mutate_config_fields(fields, transform):
         if not isinstance(proposed, dict) or set(proposed).difference(allowed):
             raise ValueError("Configuration mutation changed fields outside its declared scope")
         current.update(proposed)
-        return _persist_config_locked(current, _stored_revision(current) + 1)
+        return _persist_config_locked(current, _stored_revision(current) + 1, secret_fields=set(proposed).intersection(SENSITIVE_CONFIG_KEYS))
 
 
 def get_exe_path():

@@ -142,6 +142,22 @@ def test_official_release_workflow_keeps_trust_guards():
     assert workflow_pillow.specifier == declared_pillow.specifier
 
 
+def test_release_inputs_are_data_and_target_guard_runs_before_mutation():
+    workflow = (ROOT / ".github/workflows/release-draft.yml").read_text(encoding="utf-8")
+    ci = (ROOT / ".github/workflows/windows-tests.yml").read_text(encoding="utf-8")
+    assert "INPUT_VERSION: ${{ inputs.version }}" in workflow
+    assert "INPUT_SUMMARY: ${{ inputs.summary }}" in workflow
+    assert "-Summary $env:INPUT_SUMMARY" in workflow
+    assert "'${{ inputs.version }}'" not in workflow
+    assert "'${{ inputs.summary }}'" not in workflow
+    guard = workflow.index("& .github/scripts/test-release-target.ps1")
+    assert guard < workflow.index("gh release edit") < workflow.index("gh release upload")
+    assert guard < workflow.index("gh release create")
+    assert "- Installer SHA256: $($hash)" in workflow
+    assert "test-release-target-offline.ps1" in ci
+    assert (ROOT / ".github/scripts/test-release-target.ps1").is_file()
+
+
 def test_release_lock_matches_all_declared_dependency_pins():
     lock = (ROOT / "Windows/requirements-release.lock").read_text(encoding="utf-8")
     locked = {
