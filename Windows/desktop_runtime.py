@@ -341,6 +341,9 @@ def _store_resolved_track(raw_key, track):
     _resolved_store.store_track(raw_key, track)
 
 
+ART_RESULT_GRACE_SECONDS = 1.5
+
+
 def _apply_custom_album_override(config, art_url, album_name, *album_names):
     custom = find_custom_album_art(config, album_name, *album_names)
     if custom:
@@ -631,6 +634,9 @@ def rpc_loop():
     # One artwork/album lookup per track, run off the playback loop.
     art_resolver = ArtworkResolver(get_album_art)
     art_pending_key = None
+    # When a new song's lookup started; its presence waits briefly for the
+    # result so a skip costs Discord one update instead of two.
+    art_pending_since = None
     # Set when a new song is first seen paused, so its lookup still runs on play.
     metadata_pending_key = None
     last_start_ts = None
@@ -1092,10 +1098,12 @@ def rpc_loop():
                 # Publish what is known now; the network lookup runs in the
                 # background and is applied when it finishes for this track.
                 art_pending_key = None
+                art_pending_since = None
                 if not (privacy_reason or resolved):
                     # Amazon's artwork is kept, but its player bar only names the
                     # playback source, so the album still comes from the lookup.
                     art_pending_key = _lookup_request(track, title, artist, _notif_album or album_from_player_label(track.get("album", "")))
+                    art_pending_since = time.time()
                 art_state = apply_art_result(track, resolved, None, _notif_album, "")
                 last_art_url = art_state["art_url"]
                 last_album_name = art_state["album"]
@@ -1197,6 +1205,7 @@ def rpc_loop():
                 fetched = art_resolver.result(art_pending_key)
                 if fetched is not None:
                     art_pending_key = None
+                    art_pending_since = None
                     art_state = apply_art_result(track, None, fetched, _notif_album, last_album_name)
                     last_art_url = art_state["art_url"] or last_art_url
                     last_album_name = art_state["album"]
@@ -1232,7 +1241,11 @@ def rpc_loop():
             if privacy_reason:
                 hidden_track = hidden_privacy_track(track)
                 _update_state(track=hidden_track, presence=False, privacy_reason=privacy_reason)
+            elif art_pending_since and time.time() - art_pending_since < ART_RESULT_GRACE_SECONDS:
+                # Hold the new song briefly for its lookup (usually < 1 s).
+                _update_state(track=state_track, presence=presence_visible)
             else:
+                art_pending_since = None
                 rpc.update(
                     title=title,
                     artist=artist,
