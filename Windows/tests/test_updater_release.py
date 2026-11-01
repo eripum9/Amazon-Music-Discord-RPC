@@ -1,6 +1,7 @@
 # MIT License - Copyright (c) 2026 eripum9
 
 import hashlib
+import json
 import os
 
 import pytest
@@ -11,11 +12,12 @@ import updater
 class FakeResponse:
     def __init__(self, data=None, content=b"", status_code=200, headers=None, chunks=None):
         self._data = data
-        self.content = content
-        self.text = content.decode("utf-8", errors="replace")
+        self.content = json.dumps(data).encode("utf-8") if data is not None and not content else content
+        self.text = self.content.decode("utf-8", errors="replace")
         self.status_code = status_code
         self.headers = headers or {}
         self._chunks = chunks
+        self.closed = False
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -31,7 +33,7 @@ class FakeResponse:
             yield self.content
 
     def close(self):
-        return None
+        self.closed = True
 
 
 def release_asset_url(name):
@@ -87,6 +89,8 @@ def test_update_prefers_trusted_installer_checksum_asset(monkeypatch):
     }
 
     def fake_get(url, **kwargs):
+        assert kwargs["stream"] is True
+        assert kwargs["allow_redirects"] is False
         if url == updater.RELEASES_URL:
             return FakeResponse(data=release)
         if url == checksum_url:
@@ -156,3 +160,90 @@ def test_download_enforces_redirect_and_size_boundaries(monkeypatch):
     monkeypatch.setattr(updater.requests, "get", lambda *args, **kwargs: oversized)
     with pytest.raises(ValueError):
         updater.download_installer(initial, digest)
+
+
+@pytest.mark.parametrize("headers", [{}, {"Content-Length": "1"}, {"Content-Length": "invalid"}])
+@pytest.mark.parametrize("kind", ["metadata", "checksum"])
+def test_small_release_responses_enforce_streamed_limit(monkeypatch, headers, kind):
+    seen = []
+
+    class StreamingResponse(FakeResponse):
+        def __init__(self, headers):
+            self.status_code = 200
+            self.headers = headers
+            self.closed = False
+
+        @property
+        def content(self):
+            raise AssertionError("Response must not be buffered before checking its size")
+
+        def iter_content(self, chunk_size=65536):
+            for chunk in (b"123456", b"789", b"must not be read"):
+                seen.append(chunk)
+                yield chunk
+
+    response = StreamingResponse(headers=headers)
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return response
+
+    monkeypatch.setattr(updater.requests, "get", fake_get)
+    monkeypatch.setattr(updater, "_network_event", lambda *args: None)
+    if kind == "metadata":
+        monkeypatch.setattr(updater, "MAX_RELEASE_BYTES", 8)
+        result = updater.check_for_update()
+        assert not result.available
+        assert "allowed size" in result.error
+    else:
+        monkeypatch.setattr(updater, "MAX_CHECKSUM_BYTES", 8)
+        asset = {"browser_download_url": release_asset_url(updater.CHECKSUM_NAME)}
+        with pytest.raises(ValueError, match="allowed size"):
+            updater._download_checksum_asset(asset, updater.INSTALLER_NAME)
+    assert calls[0][1]["stream"] is True
+    assert seen == [b"123456", b"789"]
+    assert response.closed
+
+
+def test_bounded_response_reader_closes_on_success_and_error():
+    response = FakeResponse(chunks=[b"12", b"", b"345"])
+    assert updater._read_response_bytes(response, 5) == b"12345"
+    assert response.closed
+
+    class BrokenResponse(FakeResponse):
+        def iter_content(self, chunk_size=65536):
+            yield b"12"
+            raise updater.requests.ConnectionError("stream interrupted")
+
+    broken = BrokenResponse()
+    with pytest.raises(updater.requests.ConnectionError):
+        updater._read_response_bytes(broken, 5)
+    assert broken.closed
+
+
+def test_release_response_redirects_and_http_errors_close(monkeypatch):
+    url = release_asset_url(updater.CHECKSUM_NAME)
+    redirect = FakeResponse(status_code=302, headers={"Location": "https://example.test/checksum"})
+    monkeypatch.setattr(updater.requests, "get", lambda *args, **kwargs: redirect)
+    with pytest.raises(ValueError, match="trusted GitHub"):
+        updater._download_checksum_asset({"browser_download_url": url}, updater.INSTALLER_NAME)
+    assert redirect.closed
+
+    failed = FakeResponse(status_code=500)
+    monkeypatch.setattr(updater.requests, "get", lambda *args, **kwargs: failed)
+    with pytest.raises(updater.requests.HTTPError):
+        updater._download_checksum_asset({"browser_download_url": url}, updater.INSTALLER_NAME)
+    assert failed.closed
+
+
+def test_installer_response_closes_when_temp_directory_creation_fails(monkeypatch):
+    response = FakeResponse()
+    monkeypatch.setattr(updater.requests, "get", lambda *args, **kwargs: response)
+    monkeypatch.setattr(updater, "_network_event", lambda *args: None)
+    def fail(*args, **kwargs):
+        raise OSError("temporary directory unavailable")
+    monkeypatch.setattr(updater.tempfile, "mkdtemp", fail)
+    with pytest.raises(OSError, match="temporary directory unavailable"):
+        updater.download_installer(release_asset_url(updater.INSTALLER_NAME), "a" * 64)
+    assert response.closed

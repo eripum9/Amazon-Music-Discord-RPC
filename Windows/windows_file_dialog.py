@@ -31,6 +31,7 @@ def _run_dialog(script):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
         creationflags=0x08000000 if os.name == "nt" else 0,
     )
     if completed.returncode != 0:
