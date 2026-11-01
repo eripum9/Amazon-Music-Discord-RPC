@@ -1,6 +1,7 @@
 # MIT License - Copyright (c) 2026 eripum9
 
 import hashlib
+import json
 import os
 from types import SimpleNamespace
 
@@ -12,10 +13,10 @@ from MacOS import updater
 class Response:
     def __init__(self, *, data=None, content=b"", status=200, headers=None, chunks=None):
         self._data = data
-        self.content = content
+        self.content = json.dumps(data).encode("utf-8") if data is not None else content
         self.status_code = status
         self.headers = headers or {}
-        self._chunks = chunks if chunks is not None else [content]
+        self._chunks = chunks if chunks is not None else [self.content]
         self.closed = False
 
     def json(self):
@@ -65,6 +66,7 @@ def test_check_for_update_requires_exact_dmg_and_reads_checksum(monkeypatch):
     ]
 
     def request_get(*args, **kwargs):
+        assert kwargs["stream"] is True
         return responses.pop(0)
 
     monkeypatch.setattr(updater, "_network_event", lambda *args: None)
@@ -142,3 +144,70 @@ def test_asset_validation_rejects_lookalike_hosts_and_names():
     assert not updater._valid_asset(
         asset_url("Not-The-App.dmg"), updater.DMG_NAME
     )
+
+
+@pytest.mark.parametrize("headers", [{}, {"Content-Length": "1"}])
+@pytest.mark.parametrize("kind", ["metadata", "checksum"])
+def test_small_release_responses_are_bounded_while_streaming(monkeypatch, headers, kind):
+    consumed = []
+
+    class StreamOnlyResponse(Response):
+        def __init__(self):
+            self.status_code = 200
+            self.headers = headers
+            self.closed = False
+
+        @property
+        def content(self):
+            raise AssertionError("Body must be read through the bounded reader")
+
+        def iter_content(self, chunk_size):
+            for chunk in (b"123456", b"789", b"must not be read"):
+                consumed.append(chunk)
+                yield chunk
+
+    response = StreamOnlyResponse()
+
+    def request_get(*args, **kwargs):
+        assert kwargs["stream"] is True
+        return response
+
+    monkeypatch.setattr(updater, "_network_event", lambda *args: None)
+    if kind == "metadata":
+        monkeypatch.setattr(updater, "MAX_RELEASE_BYTES", 8)
+        result = updater.check_for_update(request_get=request_get)
+        assert "allowed size" in result.error
+    else:
+        monkeypatch.setattr(updater, "MAX_CHECKSUM_BYTES", 8)
+        data = release_data("a" * 64)
+        data["assets"][1]["size"] = 1
+        release = Response(data=data)
+        def routed_get(url, **kwargs):
+            return release if url == updater.RELEASES_URL else request_get(url, **kwargs)
+        result = updater.check_for_update(request_get=routed_get)
+        assert "allowed size" in result.error
+        assert release.closed
+    assert consumed == [b"123456", b"789"]
+    assert response.closed
+
+
+def test_bounded_response_closes_after_success_and_http_failure():
+    success = Response(chunks=[b"12", b"", b"345"])
+    assert updater._read_response_bytes(success, 5) == b"12345"
+    assert success.closed
+    failed = Response(status=500)
+    with pytest.raises(RuntimeError, match="HTTP 500"):
+        updater._bounded_request(updater.RELEASES_URL, updater._valid_release_api, 8, request_get=lambda *args, **kwargs: failed)
+    assert failed.closed
+
+
+def test_dmg_response_closes_when_temp_directory_creation_fails(monkeypatch):
+    response = Response()
+    update = updater.UpdateInfo(available=True, dmg_url=asset_url(updater.DMG_NAME), expected_sha256="a" * 64)
+    monkeypatch.setattr(updater, "_network_event", lambda *args: None)
+    def fail(*args, **kwargs):
+        raise OSError("temporary directory unavailable")
+    monkeypatch.setattr(updater.tempfile, "mkdtemp", fail)
+    with pytest.raises(OSError, match="temporary directory unavailable"):
+        updater.download_dmg(update, request_get=lambda *args, **kwargs: response)
+    assert response.closed
