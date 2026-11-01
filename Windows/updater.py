@@ -2,6 +2,7 @@
 
 import ctypes
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -193,12 +194,12 @@ def _response_length(response):
         return 0
 
 
-def _request_following_redirects(url, validator, max_bytes, timeout, stream=False):
+def _request_following_redirects(url, validator, max_bytes, timeout):
     current = str(url or "")
     for redirect_count in range(MAX_REDIRECTS + 1):
         if not validator(current, redirect_count > 0):
             raise ValueError("Download URL is outside the trusted GitHub release boundary")
-        response = requests.get(current, timeout=timeout, stream=stream, allow_redirects=False)
+        response = requests.get(current, timeout=timeout, stream=True, allow_redirects=False)
         status = int(getattr(response, "status_code", 200) or 200)
         if status in REDIRECT_CODES:
             location = (getattr(response, "headers", {}) or {}).get("Location", "")
@@ -210,15 +211,32 @@ def _request_following_redirects(url, validator, max_bytes, timeout, stream=Fals
                 raise ValueError("GitHub release download redirected too many times")
             current = urljoin(current, location)
             continue
-        response.raise_for_status()
-        if _response_length(response) > max_bytes:
+        try:
+            response.raise_for_status()
+            if _response_length(response) > max_bytes:
+                raise ValueError("GitHub release response exceeds the allowed size")
+        except Exception:
             try:
                 response.close()
             except Exception:
                 pass
-            raise ValueError("GitHub release response exceeds the allowed size")
+            raise
         return response, current
     raise ValueError("GitHub release download redirected too many times")
+
+
+def _read_response_bytes(response, max_bytes):
+    body = bytearray()
+    try:
+        for chunk in response.iter_content(chunk_size=min(65536, max_bytes + 1)):
+            if not chunk:
+                continue
+            if len(body) + len(chunk) > max_bytes:
+                raise ValueError("GitHub release response exceeds the allowed size")
+            body.extend(chunk)
+        return bytes(body)
+    finally:
+        response.close()
 
 
 def _release_url(data):
@@ -263,11 +281,7 @@ def _checksum_asset(data, installer_asset):
 def _download_checksum_asset(asset, installer_name):
     url = str((asset or {}).get("browser_download_url", "") or "")
     response, _ = _request_following_redirects(url, lambda value, redirected: _valid_asset_url(value, CHECKSUM_NAME, redirected), MAX_CHECKSUM_BYTES, 10)
-    raw = getattr(response, "content", None)
-    if raw is None:
-        raw = str(getattr(response, "text", "") or "").encode("utf-8")
-    if len(raw) > MAX_CHECKSUM_BYTES:
-        return ""
+    raw = _read_response_bytes(response, MAX_CHECKSUM_BYTES)
     return _extract_sha256(raw.decode("utf-8", errors="replace"), installer_name)
 
 
@@ -292,10 +306,8 @@ def verify_file_sha256(path, expected_sha256):
 def check_for_update():
     try:
         response, _ = _request_following_redirects(RELEASES_URL, _valid_release_api_url, MAX_RELEASE_BYTES, 10)
-        raw = getattr(response, "content", b"")
-        if raw and len(raw) > MAX_RELEASE_BYTES:
-            raise ValueError("GitHub release metadata exceeds the allowed size")
-        data = response.json()
+        raw = _read_response_bytes(response, MAX_RELEASE_BYTES)
+        data = json.loads(raw)
         if not isinstance(data, dict):
             raise ValueError("GitHub release metadata is invalid")
         latest_tag = str(data.get("tag_name", "") or "")
@@ -348,13 +360,13 @@ def download_installer(url, expected_sha256=""):
         lambda value, redirected: _valid_asset_url(value, INSTALLER_NAME, redirected),
         MAX_INSTALLER_BYTES,
         (10, 60),
-        stream=True,
     )
-    temp_dir = tempfile.mkdtemp(prefix="AmazonMusicRPC_Update_")
-    installer_path = os.path.join(temp_dir, INSTALLER_NAME)
-    digest = hashlib.sha256()
-    size = 0
+    temp_dir = None
     try:
+        temp_dir = tempfile.mkdtemp(prefix="AmazonMusicRPC_Update_")
+        installer_path = os.path.join(temp_dir, INSTALLER_NAME)
+        digest = hashlib.sha256()
+        size = 0
         with open(installer_path, "wb") as handle:
             for chunk in response.iter_content(chunk_size=65536):
                 if not chunk:
@@ -370,7 +382,8 @@ def download_installer(url, expected_sha256=""):
         _network_event("installer-download", "success", f"{size} bytes")
         return DownloadedInstaller(installer_path, actual, size, final_url)
     except Exception as error:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        if temp_dir is not None:
+            shutil.rmtree(temp_dir, ignore_errors=True)
         _network_event("installer-download", "error", type(error).__name__)
         raise
     finally:
