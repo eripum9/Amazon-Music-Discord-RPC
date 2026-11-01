@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -122,15 +123,15 @@ def _valid_asset(url, name, redirected=False):
     )
 
 
-def _bounded_request(url, validator, max_bytes, *, stream=False, request_get=requests.get):
+def _bounded_request(url, validator, max_bytes, *, timeout=10, request_get=requests.get):
     current = str(url or "")
     for redirect_count in range(MAX_REDIRECTS + 1):
         if not validator(current, redirect_count > 0):
             raise ValueError("URL is outside the trusted GitHub release boundary")
         response = request_get(
             current,
-            timeout=(10, 60) if stream else 10,
-            stream=stream,
+            timeout=timeout,
+            stream=True,
             allow_redirects=False,
             headers={"Accept": "application/vnd.github+json", "User-Agent": "AmazonMusicRPC-macOS"},
         )
@@ -142,16 +143,33 @@ def _bounded_request(url, validator, max_bytes, *, stream=False, request_get=req
                 raise ValueError("GitHub release download redirected too many times")
             current = urljoin(current, location)
             continue
-        response.raise_for_status()
         try:
-            length = int((getattr(response, "headers", {}) or {}).get("Content-Length", 0) or 0)
-        except (TypeError, ValueError):
-            length = 0
-        if length > max_bytes:
+            response.raise_for_status()
+            try:
+                length = int((getattr(response, "headers", {}) or {}).get("Content-Length", 0) or 0)
+            except (TypeError, ValueError):
+                length = 0
+            if length > max_bytes:
+                raise ValueError("GitHub response exceeds the allowed size")
+        except Exception:
             response.close()
-            raise ValueError("GitHub response exceeds the allowed size")
+            raise
         return response, current
     raise ValueError("GitHub release download redirected too many times")
+
+
+def _read_response_bytes(response, max_bytes):
+    body = bytearray()
+    try:
+        for chunk in response.iter_content(chunk_size=min(65536, max_bytes + 1)):
+            if not chunk:
+                continue
+            if len(body) + len(chunk) > max_bytes:
+                raise ValueError("GitHub response exceeds the allowed size")
+            body.extend(chunk)
+        return bytes(body)
+    finally:
+        response.close()
 
 
 def _asset(data, name, maximum):
@@ -205,11 +223,8 @@ def check_for_update(*, request_get=requests.get):
             MAX_RELEASE_BYTES,
             request_get=request_get,
         )
-        raw = getattr(response, "content", b"") or b""
-        if len(raw) > MAX_RELEASE_BYTES:
-            raise ValueError("GitHub release metadata exceeds the allowed size")
-        data = response.json()
-        response.close()
+        raw = _read_response_bytes(response, MAX_RELEASE_BYTES)
+        data = json.loads(raw)
         if not isinstance(data, dict) or _version(data.get("tag_name")) == (0, 0, 0):
             raise ValueError("GitHub release metadata is invalid")
         if _version(data.get("tag_name")) <= _version(config.APP_VERSION):
@@ -225,10 +240,8 @@ def check_for_update(*, request_get=requests.get):
                 MAX_CHECKSUM_BYTES,
                 request_get=request_get,
             )
-            checksum_bytes = getattr(checksum_response, "content", b"") or b""
-            checksum_response.close()
-            if len(checksum_bytes) <= MAX_CHECKSUM_BYTES:
-                expected = _checksum_from_text(checksum_bytes.decode("utf-8", errors="replace"))
+            checksum_bytes = _read_response_bytes(checksum_response, MAX_CHECKSUM_BYTES)
+            expected = _checksum_from_text(checksum_bytes.decode("utf-8", errors="replace"))
         if not expected:
             expected = _checksum_from_text(data.get("body"))
         version = str(data.get("tag_name") or "").lstrip("v")
@@ -267,14 +280,15 @@ def download_dmg(update, *, request_get=requests.get):
         update.dmg_url,
         lambda value, redirected: _valid_asset(value, DMG_NAME, redirected),
         MAX_DMG_BYTES,
-        stream=True,
+        timeout=(10, 60),
         request_get=request_get,
     )
-    directory = tempfile.mkdtemp(prefix="AmazonMusicRPC_Update_")
-    path = os.path.join(directory, DMG_NAME)
-    size = 0
-    digest = hashlib.sha256()
+    directory = None
     try:
+        directory = tempfile.mkdtemp(prefix="AmazonMusicRPC_Update_")
+        path = os.path.join(directory, DMG_NAME)
+        size = 0
+        digest = hashlib.sha256()
         with open(path, "wb") as handle:
             os.chmod(path, 0o600)
             for chunk in response.iter_content(chunk_size=1024 * 1024):
@@ -291,7 +305,8 @@ def download_dmg(update, *, request_get=requests.get):
         _network_event("dmg-download", "success", f"{size} bytes")
         return DownloadedDMG(path, actual, size, source_url)
     except Exception as error:
-        shutil.rmtree(directory, ignore_errors=True)
+        if directory is not None:
+            shutil.rmtree(directory, ignore_errors=True)
         _network_event("dmg-download", "error", type(error).__name__)
         raise
     finally:
