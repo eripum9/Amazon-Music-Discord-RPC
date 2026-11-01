@@ -4,6 +4,7 @@ import base64
 import ctypes
 import hashlib
 import json
+import ntpath
 import os
 import random
 import re
@@ -596,6 +597,73 @@ def _appx_aumid_candidates(entries):
     return [candidate for candidate in candidates if candidate]
 
 
+AMAZON_PACKAGE_FAMILY_NAME = f"{AMAZON_PACKAGE_NAME}_{AMAZON_PACKAGE_PUBLISHER_ID}"
+
+
+def _verified_package_executable(entry, exists_fn=os.path.exists):
+    """Return the Amazon Music executable inside a verified Store installation.
+
+    Newer Microsoft Store builds of Amazon Music ignore the arguments passed
+    through AUMID activation, so ``--remote-debugging-port`` never reaches the
+    app.  Starting the packaged ``amazon music.exe`` directly keeps the flag,
+    but only when every part of the path is tied to the genuine package:
+
+    * the package family must be exactly ``AmazonMobileLLC.AmazonMusic_<publisher id>``;
+    * the install folder must be ``...\\WindowsApps\\<full name>`` where the
+      full name matches the Amazon package name and publisher id (and the
+      reported ``PackageFullName`` when present);
+    * the manifest executable must be a relative path that stays inside that
+      folder and names a known Amazon Music executable that exists.
+    """
+    family = _clean(entry.get("PackageFamilyName") or entry.get("packageFamilyName"))
+    if family.casefold() != AMAZON_PACKAGE_FAMILY_NAME.casefold():
+        return ""
+    location = _clean(entry.get("InstallLocation") or entry.get("installLocation"))
+    if not location or location.startswith(("\\\\", "//")) or not ntpath.splitdrive(location)[0] or not ntpath.isabs(location):
+        return ""
+    location = ntpath.normpath(location)
+    folder = ntpath.basename(location)
+    if not _STORE_PACKAGE_FULL_NAME_RE.fullmatch(folder):
+        return ""
+    full_name = _clean(entry.get("PackageFullName") or entry.get("packageFullName"))
+    if full_name and full_name.casefold() != folder.casefold():
+        return ""
+    if ntpath.basename(ntpath.dirname(location)).casefold() != "windowsapps":
+        return ""
+
+    names = []
+    manifest_exe = _clean(entry.get("Executable") or entry.get("executable")).replace("/", "\\")
+    if manifest_exe:
+        names.append(manifest_exe)
+    names.extend(sorted(AMAZON_EXECUTABLE_NAMES))
+    for name in names:
+        drive, _ = ntpath.splitdrive(name)
+        if drive or name.startswith("\\") or ".." in name.split("\\"):
+            continue
+        candidate = ntpath.normpath(ntpath.join(location, name))
+        try:
+            inside = ntpath.commonpath([candidate.casefold(), location.casefold()]) == location.casefold()
+        except ValueError:
+            inside = False
+        if not inside or candidate.casefold() == location.casefold():
+            continue
+        if ntpath.basename(candidate).casefold() not in AMAZON_EXECUTABLE_NAMES:
+            continue
+        if not exists_fn(candidate):
+            continue
+        return candidate
+    return ""
+
+
+def _appx_exe_candidates(entries, exists_fn=os.path.exists):
+    candidates = []
+    for entry in _json_items(entries):
+        path = _verified_package_executable(entry, exists_fn)
+        if path:
+            candidates.append(_launcher_candidate("exe", path, "auto-package-exe", "appx-manifest"))
+    return candidates
+
+
 def _dedupe_launcher_candidates(candidates):
     seen = set()
     unique = []
@@ -637,7 +705,10 @@ Get-AppxPackage *AmazonMusic* | ForEach-Object {
         foreach ($app in @($manifest.Package.Applications.Application)) {
             $items += [PSCustomObject]@{
                 PackageFamilyName = $pkg.PackageFamilyName
+                PackageFullName = $pkg.PackageFullName
                 AppId = $app.Id
+                InstallLocation = $pkg.InstallLocation
+                Executable = $app.Executable
             }
         }
     } catch {}
@@ -654,6 +725,7 @@ def _launcher_candidates(launcher_override=None, start_apps=None, appx_apps=None
         candidates.append(_launcher_candidate_from_value(override, "override-aumid", "override-exe", "override", exists_fn))
     start_entries = _get_start_app_entries() if start_apps is None else start_apps
     appx_entries = _get_appx_application_entries() if appx_apps is None else appx_apps
+    candidates.extend(_appx_exe_candidates(appx_entries, exists_fn))
     candidates.extend(_start_app_candidates(start_entries, exists_fn))
     candidates.extend(_appx_aumid_candidates(appx_entries))
     candidates.append(_launcher_candidate("aumid", APP_USER_MODEL_ID, "hardcoded-store", "hardcoded"))
