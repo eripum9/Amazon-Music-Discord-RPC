@@ -127,6 +127,7 @@ def test_cancel_during_dns_return_opens_no_socket(monkeypatch):
 
 @pytest.mark.parametrize("cancel", [False, True])
 def test_real_tls_stall_is_interrupted_by_deadline_and_cancellation(monkeypatch, cancel):
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(TLS_CERT))
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
