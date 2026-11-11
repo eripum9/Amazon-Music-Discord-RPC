@@ -1,5 +1,6 @@
 # MIT License - Copyright (c) 2026 eripum9
 
+import ast
 import plistlib
 import runpy
 import subprocess
@@ -13,6 +14,18 @@ PROJECT_DIR = MACOS_DIR.parent
 def _read_plist(path):
     with path.open("rb") as plist_file:
         return plistlib.load(plist_file)
+
+
+def test_macos_beta_version_tracks_the_windows_source_release():
+    versions = []
+    for platform in ("Windows", "MacOS"):
+        tree = ast.parse((PROJECT_DIR / platform / "config.py").read_text(encoding="utf-8"))
+        value = next(node.value for node in tree.body if isinstance(node, ast.Assign)
+                     and any(isinstance(target, ast.Name) and target.id == "APP_VERSION" for target in node.targets))
+        versions.append(ast.literal_eval(value))
+    windows_version, macos_version = versions
+    assert macos_version.startswith(windows_version + "-macos-beta.")
+    assert _read_plist(MACOS_DIR / "Info.plist")["CFBundleShortVersionString"] == windows_version
 
 
 def test_info_plist_has_stable_identity_and_no_unneeded_privacy_prompts():

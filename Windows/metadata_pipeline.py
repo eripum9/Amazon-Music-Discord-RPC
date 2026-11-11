@@ -1,5 +1,21 @@
 # MIT License - Copyright (c) 2026 eripum9
 
+import unicodedata
+
+
+def album_from_player_label(label):
+    text = str(label or "").strip()
+    folded = unicodedata.normalize("NFKD", text).casefold()
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    prefixes = (
+        "reproduccion automatica", "autoplay", "auto play", "lecture automatique",
+        "riproduzione automatica", "reproducao automatica", "automatische wiedergabe",
+    )
+    if ":" in text and any(folded.startswith(prefix) for prefix in prefixes):
+        return ""
+    return text
+
+
 def base_track_for_devtools():
     return {
         "title": "",
@@ -91,18 +107,18 @@ def apply_art_result(track, resolved=None, fetched=None, notification_album=None
     amazon_link = ""
     if resolved:
         art_url, album, deezer_link, duration = resolved
-    elif track.get("_amazon_art_url"):
+    elif track.get("_amazon_art_url") and not fetched:
         art_url = track.get("_amazon_art_url")
         album = track.get("album", "")
         amazon_link = track.get("_amazon_track_link", "")
         duration = track.get("duration") or 0
     elif fetched:
         art_url, album, deezer_link, duration = fetched
-    if notification_album:
+    if notification_album and not resolved:
         album = notification_album
-    elif not album and track.get("album"):
-        album = track.get("album")
-    if track.get("_amazon_art_url"):
+    elif not album and track.get("album") and not resolved:
+        album = album_from_player_label(track.get("album"))
+    if track.get("_amazon_art_url") and not resolved:
         art_url = track.get("_amazon_art_url")
         album = track.get("album", "") or album
         duration = track.get("duration") or duration

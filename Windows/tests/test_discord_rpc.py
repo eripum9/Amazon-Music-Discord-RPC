@@ -1,5 +1,7 @@
 # MIT License - Copyright (c) 2026 eripum9
 
+import threading
+
 import discord_rpc
 from discord_rpc import DiscordRPC, _button_signature, _discord_asset_text
 
@@ -29,6 +31,7 @@ def make_rpc(fake):
     rpc._backoff = 3
     rpc._next_retry = 0
     rpc._closed = False
+    rpc._shutdown_lock = threading.Lock()
     return rpc
 
 
@@ -125,3 +128,90 @@ def test_shutdown_attempts_clear_after_update_marked_transport_disconnected():
     rpc.connected = False
     rpc.shutdown()
     assert [call[0] for call in fake.calls] == ["clear", "close"]
+
+
+def test_shutdown_does_not_clear_an_already_closed_transport():
+    fake = FakePresence()
+    rpc = make_rpc(fake)
+    rpc.shutdown()
+    rpc.shutdown()
+    assert [call[0] for call in fake.calls] == ["clear", "close"]
+
+
+def test_concurrent_shutdown_calls_clear_and_close_only_once():
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingPresence(FakePresence):
+        def clear(self):
+            self.calls.append(("clear", None))
+            entered.set()
+            assert release.wait(2)
+
+    fake = BlockingPresence()
+    rpc = make_rpc(fake)
+    first = threading.Thread(target=rpc.shutdown)
+    second = threading.Thread(target=rpc.shutdown)
+    try:
+        first.start()
+        assert entered.wait(2)
+        second.start()
+    finally:
+        release.set()
+        first.join(2)
+        if second.ident is not None:
+            second.join(2)
+    assert not first.is_alive() and not second.is_alive()
+    assert [call[0] for call in fake.calls] == ["clear", "close"]
+
+
+def test_activity_dedupe_keepalive_and_clear_use_monotonic_time(monkeypatch):
+    clock = [0]
+    monkeypatch.setattr(discord_rpc.time, "monotonic", lambda: clock[0])
+    fake = FakePresence()
+    rpc = make_rpc(fake)
+    for at in (0, 3, 59, 60):
+        clock[0] = at
+        rpc.update("Song", "Artist", start_ts=1000, duration=200)
+    assert [call[0] for call in fake.calls] == ["update", "update"]
+    rpc.clear()
+    rpc.update("Song", "Artist", start_ts=1000, duration=200)
+    assert [call[0] for call in fake.calls] == ["update", "update", "clear", "update"]
+
+
+def test_dedupe_sends_metadata_timing_pause_and_button_changes(monkeypatch):
+    monkeypatch.setattr(discord_rpc.time, "sleep", lambda _: None)
+    fake = FakePresence()
+    rpc = make_rpc(fake)
+    base = {"title": "Song", "artist": "Artist", "start_ts": 1000, "duration": 200}
+    changes = [
+        {}, {"duration": 201}, {"start_ts": 1003}, {"album_name": "Canonical"},
+        {"album_art_url": "https://art.test/image"}, {"small_image": "pause", "small_text": "Paused"},
+        {"buttons": [{"label": "Listen", "url": "https://deezer.test/1"}]},
+        {"buttons": [{"label": "Listen", "url": "https://deezer.test/2"}]},
+        {}, {},
+    ]
+    for delta in changes:
+        rpc.update(**{**base, **delta})
+    assert sum(call[0] == "update" for call in fake.calls) == len(changes) - 1
+
+
+def test_reconnection_republishes_identical_activity(monkeypatch):
+    fake = FakePresence()
+    fake.connect = lambda: None
+    rpc = make_rpc(fake)
+    rpc.update("Song", "Artist")
+    rpc.connected = False
+    rpc.update("Song", "Artist")
+    assert sum(call[0] == "update" for call in fake.calls) == 2
+
+
+def test_failed_send_does_not_commit_dedupe_signature():
+    class FailingPresence(FakePresence):
+        def update(self, payload_override=None):
+            raise RuntimeError("transport closed")
+
+    rpc = make_rpc(FailingPresence())
+    rpc.update("Song", "Artist")
+    assert not rpc.connected
+    assert getattr(rpc, "_last_activity_signature", None) is None

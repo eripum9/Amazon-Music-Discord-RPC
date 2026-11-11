@@ -10,6 +10,11 @@ import pytest
 from MacOS import updater
 
 
+@pytest.fixture(autouse=True)
+def fixed_installed_version(monkeypatch):
+    monkeypatch.setattr(updater.config, "APP_VERSION", "5.0.0-macos-beta.1")
+
+
 class Response:
     def __init__(self, *, data=None, content=b"", status=200, headers=None, chunks=None):
         self._data = data
@@ -91,6 +96,22 @@ def test_check_for_update_reports_up_to_date(monkeypatch):
     update = updater.check_for_update(request_get=lambda *args, **kwargs: response)
     assert update.available is False
     assert update.error == ""
+
+
+def test_same_release_version_does_not_download_checksum(monkeypatch):
+    monkeypatch.setattr(updater.config, "APP_VERSION", "5.1.0-macos-beta.1")
+    monkeypatch.setattr(updater, "_network_event", lambda *args: None)
+    calls = []
+
+    def request_get(url, **kwargs):
+        calls.append(url)
+        assert len(calls) == 1
+        return Response(data=release_data("a" * 64))
+
+    update = updater.check_for_update(request_get=request_get)
+    assert not update.available
+    assert not update.error
+    assert len(calls) == 1
 
 
 def test_check_for_update_rejects_untrusted_release_metadata(monkeypatch):

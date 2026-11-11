@@ -59,3 +59,21 @@ def test_link_buttons_and_art_state_are_provider_aware():
     assert art_state["art_url"] == "https://amazon.example/art.jpg"
     assert art_state["album"] == "Amazon Album"
     assert art_state["amazon_link"] == "https://music.amazon.com/tracks/1"
+
+
+def test_autoplay_labels_are_not_album_hints():
+    for label in ("Autoplay: Song", "Reproducci\u00f3n autom\u00e1tica: Song",
+                  "Automatische Wiedergabe: Song", "Lecture automatique: Song"):
+        assert metadata_pipeline.album_from_player_label(label) == ""
+    assert metadata_pipeline.album_from_player_label("Selected Album") == "Selected Album"
+
+
+def test_manual_art_album_and_duration_win_over_native_and_notification():
+    state = metadata_pipeline.apply_art_result(
+        {"album": "Native", "_amazon_art_url": "https://art.test/native", "duration": 200},
+        resolved=("https://art.test/chosen", "Chosen", "https://deezer.test/chosen", 210),
+        fetched=("https://art.test/obsolete", "Obsolete", "", 180), notification_album="Notification",
+    )
+    assert (state["art_url"], state["album"], state["deezer_link"], state["duration"]) == (
+        "https://art.test/chosen", "Chosen", "https://deezer.test/chosen", 210,
+    )

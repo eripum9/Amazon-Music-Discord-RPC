@@ -42,8 +42,15 @@ async def _get_media_info(session):
     status = PLAYBACK_STATUS_MAP.get(playback.playback_status, "stopped")
 
     timeline = session.get_timeline_properties()
-    position = timeline.position.total_seconds() if timeline.position else 0
-    end_time = timeline.end_time.total_seconds() if timeline.end_time else 0
+    reported_position = getattr(timeline, "position", None)
+    reported_end = getattr(timeline, "end_time", None)
+    position = reported_position.total_seconds() if reported_position else 0
+    end_time = reported_end.total_seconds() if reported_end else 0
+    # An empty SMTC timeline is not evidence that the listener sought to zero.
+    if not any(getattr(timeline, field, None) for field in (
+        "position", "start_time", "end_time", "min_seek_time", "max_seek_time"
+    )):
+        position = None
 
     return {
         "title": title,
