@@ -28,13 +28,13 @@ $generatedText
 
 ## Installation
 
-Download `AmazonMusicRPC_Setup.exe` and `AmazonMusicRPC_Setup.exe.sha256` from the assets below, verify the checksum, then run the installer. No Python installation is required.
+Download ``AmazonMusicRPC_Setup.exe`` and ``AmazonMusicRPC_Setup.exe.sha256`` from the assets below, verify the checksum, then run the installer. No Python installation is required.
 
 This installer is not Authenticode signed, so Windows SmartScreen may display a warning. Verify the SHA256 checksum and GitHub build provenance before running it.
 
 ## Build Provenance
 
-This draft was built from the current `master` commit by the manually triggered GitHub release workflow. Verify the installer with `gh attestation verify AmazonMusicRPC_Setup.exe -R eripum9/Amazon-Music-Discord-RPC`.
+This draft was built from the current ``master`` commit by the manually triggered GitHub release workflow. Verify the installer with ``gh attestation verify AmazonMusicRPC_Setup.exe -R eripum9/Amazon-Music-Discord-RPC``.
 
 ## Requirements
 

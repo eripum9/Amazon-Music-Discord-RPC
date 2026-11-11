@@ -19,7 +19,7 @@ from config import load_config, update_config_fields, mutate_config_fields, DEFA
 from amazify_compat import amazify_compat_state, ensure_amazify_compat, push_rpc_state_to_amazify
 from amazify_rpc_bridge import start_amazify_rpc_bridge
 from metadata_pipeline import apply_art_result, apply_devtools_source, base_track_for_devtools, diagnostics_track_link, link_buttons, merge_notification_metadata, should_lookup_deezer_button
-from rpc_state import GameModeState, ResolvedTrackStore, TrackTimingState, apply_track_mapping, configured_game_mode_processes, devtools_no_track_state, duration_value, find_custom_album_art, game_mode_matches_processes, hidden_privacy_track, normalise_process_name, normalise_track, normalised_text, privacy_keywords, privacy_match, remembered_track_mapping, running_process_names, same_track_field, scrobble_eligible, track_info_payload, track_position
+from rpc_state import GameModeState, ListeningTimeState, ResolvedTrackStore, TrackTimingState, apply_track_mapping, configured_game_mode_processes, devtools_no_track_state, duration_value, find_custom_album_art, game_mode_matches_processes, hidden_privacy_track, normalise_process_name, normalise_track, normalised_text, privacy_keywords, privacy_match, remembered_track_mapping, running_process_names, same_track_field, scrobble_eligible, track_info_payload, track_position
 from status_summary import metadata_source_summary
 from tray_state import build_snapshot as build_tray_snapshot, icon_title as _tray_icon_title, signature as _tray_signature
 from updater import check_for_update, prompt_for_update, run_update_helper
@@ -592,11 +592,10 @@ def _resolve_missing_title(title, artist, raw_key):
     return title, artist
 
 
-def _try_scrobble(scrobbler, lb_scrobbler, title, artist, start_time, album, duration):
+def _try_scrobble(scrobbler, lb_scrobbler, title, artist, start_time, album, duration, listened):
     if not title or not start_time:
         return False
-    elapsed = time.time() - start_time
-    if not scrobble_eligible(elapsed, duration):
+    if not scrobble_eligible(listened, duration):
         return False
     if scrobbler:
         try:
@@ -633,6 +632,8 @@ def rpc_loop():
     presence_visible = False
     paused_position = None
     last_playback_status = None
+    last_native_enrichment = None
+    last_source_album = None
 
     song_link_enabled = config.get("song_link_enabled", False)
     song_link_provider = config.get("song_link_provider", "amazon")
@@ -699,9 +700,11 @@ def rpc_loop():
         listenbrainz_state = "missing_token"
 
     scrobble_track_key = None
+    scrobble_raw_key = None
     scrobble_start_time = None
     scrobble_duration = 0
     scrobbled = False
+    listening = ListeningTimeState()
     last_deezer_duration = 0
     scrobbling_state = {
         "lastfm": lastfm_state,
@@ -774,6 +777,8 @@ def rpc_loop():
 
     while rpc_running and not tasks.stopping:
         try:
+            if not rpc.connected:
+                listening.suspend()
             track = None
 
             devtools_found = False
@@ -883,7 +888,11 @@ def rpc_loop():
                     if not keep_notification:
                         _current_notif_data = None
 
+            if track and str(track.get("status") or "").strip().casefold() in {"stopped", "closed", "opened"}:
+                track = None
+
             if track is None:
+                listening.suspend()
                 _current_amazon_devtools = _devtools_no_track_state(amazon_devtools_enabled, _current_amazon_devtools)
                 if presence_visible:
                     rpc.clear()
@@ -899,19 +908,19 @@ def rpc_loop():
                 _notif_art_fetched_for = None
                 paused_position = None
                 last_playback_status = None
+                last_native_enrichment = None
+                last_source_album = None
                 _update_state(track=None, presence=False)
                 time.sleep(3)
                 continue
 
-            # Native sources keep their private enrichment fields, while the
-            # common playback fields follow the same normalization rules as
-            # the macOS runtime.
             normalised_track = normalise_track(track)
             if normalised_track:
                 for field in ("title", "artist", "album", "status", "position", "duration"):
                     track[field] = normalised_track[field]
 
             if track["status"] == "paused":
+                listening.suspend()
                 last_playback_status = "paused"
                 privacy_reason = _privacy_match(config, track.get("title", ""), track.get("artist", ""), track.get("album", ""))
                 if privacy_reason:
@@ -919,6 +928,7 @@ def rpc_loop():
                         rpc.clear()
                         presence_visible = False
                     if privacy_disable_scrobbling:
+                        listening.reset()
                         scrobble_track_key = None
                         scrobble_start_time = None
                         scrobbled = True
@@ -933,6 +943,8 @@ def rpc_loop():
                     continue
                 paused_key = f"{track.get('title', '')}|{track.get('artist', '')}"
                 if paused_key != "|":
+                    if paused_key != last_track_key:
+                        last_native_enrichment = None
                     last_track_key = paused_key
                     if not last_album_name and track.get("album"):
                         last_album_name = track.get("album")
@@ -943,16 +955,19 @@ def rpc_loop():
                     if track.get("duration"):
                         last_deezer_duration = track.get("duration")
                     _ensure_deezer_button_link(track.get("title", ""), track.get("artist", ""))
-                if show_paused and last_track_key:
-                    if track.get("position") is not None:
-                        try:
-                            paused_position = float(track.get("position"))
-                            last_start_ts = None
-                        except (TypeError, ValueError):
-                            paused_position = None
-                    elif last_start_ts is not None:
-                        paused_position = time.time() - last_start_ts
+                    last_art_url, last_album_name = _apply_custom_album_override(
+                        config, last_art_url, last_album_name, track.get("album", "")
+                    )
+                if track.get("position") is not None:
+                    try:
+                        paused_position = float(track.get("position"))
                         last_start_ts = None
+                    except (TypeError, ValueError):
+                        paused_position = None
+                elif last_start_ts is not None:
+                    paused_position = time.time() - last_start_ts
+                    last_start_ts = None
+                if show_paused and last_track_key:
                     title_parts = last_track_key.split("|", 1)
                     paused_title = title_parts[0]
                     paused_artist = title_parts[1] if len(title_parts) > 1 else ""
@@ -1005,6 +1020,7 @@ def rpc_loop():
                 title, artist = _resolve_missing_title(title, artist, raw_key)
 
             if not title and not artist:
+                listening.suspend()
                 if presence_visible:
                     rpc.clear()
                     presence_visible = False
@@ -1028,6 +1044,7 @@ def rpc_loop():
                     rpc.clear()
                     presence_visible = False
                 if privacy_disable_scrobbling:
+                    listening.reset()
                     last_start_ts = private_start_ts
                     last_track_key = raw_key
                     last_album_name = track.get("album", "")
@@ -1050,19 +1067,21 @@ def rpc_loop():
 
             track_art_key = f"{title}|{artist}"
 
-            if raw_key != last_track_key:
+            if raw_key != last_track_key or ((scrobbler or lb_scrobbler) and (raw_key != scrobble_raw_key or scrobble_track_key is None)):
                 if (scrobbler or lb_scrobbler) and not scrobbled and scrobble_track_key and scrobble_start_time:
                     prev_title, prev_artist = scrobble_track_key.split("|", 1)
-                    if _try_scrobble(scrobbler, lb_scrobbler, prev_title, prev_artist, scrobble_start_time, last_album_name, scrobble_duration):
+                    if _try_scrobble(scrobbler, lb_scrobbler, prev_title, prev_artist, scrobble_start_time, last_album_name, scrobble_duration, listening.elapsed):
                         scrobbled = True
                     else:
-                        elapsed = time.time() - scrobble_start_time
-                        print(f"[Scrobble] Previous track not eligible: {elapsed:.0f}s elapsed, {scrobble_duration:.0f}s duration")
+                        print(f"[Scrobble] Previous track not eligible: {listening.elapsed:.0f}s listened, {scrobble_duration:.0f}s duration")
 
                 _current_notif_data = None
                 _notif_art_fetched_for = None
                 last_amazon_track_link = None
                 last_deezer_track_link = None
+                last_native_enrichment = None
+                last_source_album = track.get("album", "")
+                last_album_name = None
 
                 resolved = _resolved_art(raw_key, title, artist, track.get("album", ""))
                 fetched = (
@@ -1091,7 +1110,9 @@ def rpc_loop():
 
                 if scrobbler or lb_scrobbler:
                     scrobble_track_key = track_art_key
+                    scrobble_raw_key = raw_key
                     scrobble_start_time = time.time()
+                    listening.reset()
                     scrobbled = False
                     scrobble_duration = last_deezer_duration or track["duration"] or 0
                     print(f"[Scrobble] Track duration: {scrobble_duration:.0f}s (deezer={last_deezer_duration}, smtc={track['duration']})")
@@ -1167,6 +1188,35 @@ def rpc_loop():
                             last_deezer_duration = _notif_dur
                         print(f"[Art] Re-fetched art for notification album: '{_notif_album}'")
                     _notif_art_fetched_for = notif_art_key
+            native_enrichment = (
+                track.get("album", ""),
+                track.get("_amazon_art_url", ""),
+                track.get("_amazon_track_link", ""),
+                track.get("duration") or 0,
+            ) if devtools_found or track.get("_amazon_art_url") or track.get("_amazon_track_link") else None
+            if native_enrichment is not None and native_enrichment != last_native_enrichment:
+                native_album, native_art, native_link, native_duration = native_enrichment
+                previous_native_album = (
+                    last_native_enrichment[0]
+                    if last_native_enrichment and last_native_enrichment[1]
+                    else last_album_name
+                )
+                # A playback hint is not a canonical lookup album. Promote it
+                # only with native art or an observed source-album change.
+                if native_album and (native_art or native_album != last_source_album) and not resolved_applied:
+                    if native_album != previous_native_album:
+                        last_art_url = ""
+                        last_deezer_track_link = ""
+                    last_album_name = native_album
+                if not resolved_applied and (native_art or (last_native_enrichment and last_native_enrichment[1])):
+                    last_art_url = native_art
+                last_amazon_track_link = native_link
+                if native_duration and not resolved_applied:
+                    last_deezer_duration = native_duration
+                    scrobble_duration = native_duration
+                last_native_enrichment = native_enrichment
+            last_source_album = track.get("album", "")
+
             last_art_url, last_album_name = _apply_custom_album_override(
                 config, last_art_url, last_album_name, _notif_album, track.get("album", "")
             )
@@ -1198,9 +1248,14 @@ def rpc_loop():
                 presence_visible = True
                 _update_state(track=state_track, presence=True)
 
+            if rpc.connected:
+                listening.observe()
+            else:
+                listening.suspend()
+
             if (scrobbler or lb_scrobbler) and not scrobbled and scrobble_track_key and scrobble_start_time:
                 scrobble_title, scrobble_artist = scrobble_track_key.split("|", 1)
-                if _try_scrobble(scrobbler, lb_scrobbler, scrobble_title, scrobble_artist, scrobble_start_time, last_album_name, scrobble_duration):
+                if _try_scrobble(scrobbler, lb_scrobbler, scrobble_title, scrobble_artist, scrobble_start_time, last_album_name, scrobble_duration, listening.elapsed):
                     scrobbled = True
 
             song_duration = last_deezer_duration or (track["duration"] if track["duration"] else 0)
@@ -1211,6 +1266,9 @@ def rpc_loop():
                     last_start_ts = int(time.time())
                 if scrobbler or lb_scrobbler:
                     scrobble_start_time = time.time()
+                    listening.reset()
+                    if rpc.connected:
+                        listening.observe()
                     scrobbled = False
                 print(f"[RPC] Song ended, restarting: {title}")
 
@@ -1218,6 +1276,7 @@ def rpc_loop():
             time.sleep(3)
 
         except Exception as e:
+            listening.suspend()
             print(f"[RPC] Loop error: {e}")
             _update_state(error=str(e))
             time.sleep(3)
