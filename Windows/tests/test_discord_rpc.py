@@ -1,5 +1,7 @@
 # MIT License - Copyright (c) 2026 eripum9
 
+import threading
+
 import discord_rpc
 from discord_rpc import DiscordRPC, _button_signature, _discord_asset_text
 
@@ -29,6 +31,7 @@ def make_rpc(fake):
     rpc._backoff = 3
     rpc._next_retry = 0
     rpc._closed = False
+    rpc._shutdown_lock = threading.Lock()
     return rpc
 
 
@@ -124,6 +127,41 @@ def test_shutdown_attempts_clear_after_update_marked_transport_disconnected():
     rpc = make_rpc(fake)
     rpc.connected = False
     rpc.shutdown()
+    assert [call[0] for call in fake.calls] == ["clear", "close"]
+
+
+def test_shutdown_does_not_clear_an_already_closed_transport():
+    fake = FakePresence()
+    rpc = make_rpc(fake)
+    rpc.shutdown()
+    rpc.shutdown()
+    assert [call[0] for call in fake.calls] == ["clear", "close"]
+
+
+def test_concurrent_shutdown_calls_clear_and_close_only_once():
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingPresence(FakePresence):
+        def clear(self):
+            self.calls.append(("clear", None))
+            entered.set()
+            assert release.wait(2)
+
+    fake = BlockingPresence()
+    rpc = make_rpc(fake)
+    first = threading.Thread(target=rpc.shutdown)
+    second = threading.Thread(target=rpc.shutdown)
+    try:
+        first.start()
+        assert entered.wait(2)
+        second.start()
+    finally:
+        release.set()
+        first.join(2)
+        if second.ident is not None:
+            second.join(2)
+    assert not first.is_alive() and not second.is_alive()
     assert [call[0] for call in fake.calls] == ["clear", "close"]
 
 

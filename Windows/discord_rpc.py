@@ -2,6 +2,7 @@
 
 import json
 import os
+import threading
 import time
 import traceback
 from pypresence import Presence
@@ -93,6 +94,7 @@ class DiscordRPC:
         self._backoff = 3
         self._next_retry = 0
         self._closed = False
+        self._shutdown_lock = threading.Lock()
 
     def connect(self):
         try:
@@ -119,15 +121,18 @@ class DiscordRPC:
         self.connected = False
 
     def shutdown(self):
-        try:
-            self.rpc.clear()
-        except Exception as e:
-            print(f"[RPC] Shutdown clear failed: {e}")
-        finally:
-            self._last_track_key = None
-            self._last_button_signature = None
-            self._last_activity_signature = None
-            self.disconnect()
+        with self._shutdown_lock:
+            if self._closed:
+                return
+            try:
+                self.rpc.clear()
+            except Exception as e:
+                print(f"[RPC] Shutdown clear failed: {e}")
+            finally:
+                self._last_track_key = None
+                self._last_button_signature = None
+                self._last_activity_signature = None
+                self.disconnect()
 
     def _ensure_connected(self):
         if not self.connected:
