@@ -5,13 +5,29 @@ import socket
 import subprocess
 import sys
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import ANY, Mock
 
 import pytest
 import requests
 
 import desktop_runtime as main
 import rpc_state
+from artwork_resolver import ArtworkResolver
+
+
+class ImmediateResolver(ArtworkResolver):
+    def __init__(self, lookup):
+        super().__init__(lookup, start_thread=False)
+
+    def request(self, key, **context):
+        queued = super().request(key, **context)
+        self.process_pending()
+        return queued
+
+
+def assert_lookup_once(lookup, title="Song", album="Album", duration=180):
+    lookup.assert_called_once_with(title=title, artist="Artist", album=album, duration=duration,
+                                   deezer_enabled=True, itunes_enabled=True, cancel_event=ANY)
 
 
 def poll(at, status="playing", *, native=False, connected=True, missing=False, error=False, wall=None, **fields):
@@ -130,6 +146,7 @@ def run_runtime(monkeypatch, isolated_environment):
         if art_results is not None:
             art_lookup.side_effect = art_results
         monkeypatch.setattr(main, "get_album_art", art_lookup)
+        monkeypatch.setattr(main, "ArtworkResolver", ImmediateResolver)
         monkeypatch.setitem(sys.modules, "lastfm", SimpleNamespace(LastFMScrobbler=Mock(return_value=lastfm)))
         monkeypatch.setitem(sys.modules, "listenbrainz_scrobbler", SimpleNamespace(ListenBrainzScrobbler=Mock(return_value=listenbrainz)))
         monkeypatch.setattr(main, "current_config", {
@@ -292,7 +309,7 @@ def test_same_track_late_native_enrichment_refreshes_without_lookup(run_runtime,
     assert updates[6]["buttons"] == [{"label": "Listen on Amazon Music", "url": "https://music.amazon.com/new"}]
     assert updates[3]["duration"] == 200
     assert updates[3]["start_ts"] == updates[0]["start_ts"] == 1000
-    result.art_lookup.assert_called_once_with("Song", "Artist")
+    assert_lookup_once(result.art_lookup)
     result.lastfm.update_now_playing.assert_called_once()
     assert [(at, args[2:]) for at, _, args in result.submissions] == [
         (100, (1000, "Custom" if custom else "Canonical", 200)),
@@ -326,7 +343,7 @@ def test_late_native_album_without_art_clears_mismatched_deezer_art_and_link_wit
     assert updates[3]["album_art_url"] == ""
     assert updates[3]["buttons"] is None
     assert updates[6]["album_art_url"] == "https://art.test/native"
-    result.art_lookup.assert_called_once_with("Song", "Artist")
+    assert_lookup_once(result.art_lookup)
 
 
 def test_new_track_does_not_inherit_native_album_art_or_links(run_runtime):
@@ -339,7 +356,7 @@ def test_new_track_does_not_inherit_native_album_art_or_links(run_runtime):
     assert replacement["album_name"] == ""
     assert replacement["album_art_url"] == ""
     assert all(button["url"] != "https://music.amazon.com/old" for button in replacement["buttons"])
-    result.art_lookup.assert_called_once_with("Other", "Artist")
+    assert_lookup_once(result.art_lookup, title="Other", album="")
 
 
 @pytest.mark.parametrize("initial_native", [False, True])
@@ -365,7 +382,7 @@ def test_unchanged_source_hint_preserves_lookup_album_art_and_link(run_runtime, 
     assert [(at, args[2:]) for at, _, args in result.submissions] == [
         (100, (1000, album, 200)), (100, (1000, album, 200)),
     ]
-    result.art_lookup.assert_called_once_with("Song", "Artist")
+    assert_lookup_once(result.art_lookup, album="Player hint", duration=0)
 
 
 def test_late_native_art_promotes_hint_without_retaining_lookup_album_link(run_runtime):
@@ -380,7 +397,7 @@ def test_late_native_art_promotes_hint_without_retaining_lookup_album_link(run_r
         assert updates[at]["album_name"] == "Player hint"
         assert updates[at]["album_art_url"] == f"https://art.test/{art}"
         assert updates[at]["buttons"] is None
-    result.art_lookup.assert_called_once_with("Song", "Artist")
+    assert_lookup_once(result.art_lookup, album="Player hint")
 
 
 def test_manual_correction_survives_subsequent_native_refresh(run_runtime):
@@ -410,4 +427,4 @@ def test_manual_correction_survives_subsequent_native_refresh(run_runtime):
         (105, ("Chosen song", "Chosen artist", 1000, "Chosen album", 210)),
         (105, ("Chosen song", "Chosen artist", 1000, "Chosen album", 210)),
     ]
-    result.art_lookup.assert_called_once_with("Song", "Artist")
+    assert_lookup_once(result.art_lookup)

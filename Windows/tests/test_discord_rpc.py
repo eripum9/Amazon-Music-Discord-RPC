@@ -125,3 +125,55 @@ def test_shutdown_attempts_clear_after_update_marked_transport_disconnected():
     rpc.connected = False
     rpc.shutdown()
     assert [call[0] for call in fake.calls] == ["clear", "close"]
+
+
+def test_activity_dedupe_keepalive_and_clear_use_monotonic_time(monkeypatch):
+    clock = [0]
+    monkeypatch.setattr(discord_rpc.time, "monotonic", lambda: clock[0])
+    fake = FakePresence()
+    rpc = make_rpc(fake)
+    for at in (0, 3, 59, 60):
+        clock[0] = at
+        rpc.update("Song", "Artist", start_ts=1000, duration=200)
+    assert [call[0] for call in fake.calls] == ["update", "update"]
+    rpc.clear()
+    rpc.update("Song", "Artist", start_ts=1000, duration=200)
+    assert [call[0] for call in fake.calls] == ["update", "update", "clear", "update"]
+
+
+def test_dedupe_sends_metadata_timing_pause_and_button_changes(monkeypatch):
+    monkeypatch.setattr(discord_rpc.time, "sleep", lambda _: None)
+    fake = FakePresence()
+    rpc = make_rpc(fake)
+    base = {"title": "Song", "artist": "Artist", "start_ts": 1000, "duration": 200}
+    changes = [
+        {}, {"duration": 201}, {"start_ts": 1003}, {"album_name": "Canonical"},
+        {"album_art_url": "https://art.test/image"}, {"small_image": "pause", "small_text": "Paused"},
+        {"buttons": [{"label": "Listen", "url": "https://deezer.test/1"}]},
+        {"buttons": [{"label": "Listen", "url": "https://deezer.test/2"}]},
+        {}, {},
+    ]
+    for delta in changes:
+        rpc.update(**{**base, **delta})
+    assert sum(call[0] == "update" for call in fake.calls) == len(changes) - 1
+
+
+def test_reconnection_republishes_identical_activity(monkeypatch):
+    fake = FakePresence()
+    fake.connect = lambda: None
+    rpc = make_rpc(fake)
+    rpc.update("Song", "Artist")
+    rpc.connected = False
+    rpc.update("Song", "Artist")
+    assert sum(call[0] == "update" for call in fake.calls) == 2
+
+
+def test_failed_send_does_not_commit_dedupe_signature():
+    class FailingPresence(FakePresence):
+        def update(self, payload_override=None):
+            raise RuntimeError("transport closed")
+
+    rpc = make_rpc(FailingPresence())
+    rpc.update("Song", "Artist")
+    assert not rpc.connected
+    assert getattr(rpc, "_last_activity_signature", None) is None

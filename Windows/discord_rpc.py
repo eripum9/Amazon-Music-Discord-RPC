@@ -1,10 +1,13 @@
 # MIT License - Copyright (c) 2026 eripum9
 
+import json
 import os
 import time
 import traceback
 from pypresence import Presence
 from pypresence.types import ActivityType
+
+UNCHANGED_ACTIVITY_RESEND_SECONDS = 60
 
 STATUS_DISPLAY_TYPES = {
     "application": 0,
@@ -85,6 +88,8 @@ class DiscordRPC:
         self.connected = False
         self._last_track_key = None
         self._last_button_signature = None
+        self._last_activity_signature = None
+        self._last_activity_sent = 0.0
         self._backoff = 3
         self._next_retry = 0
         self._closed = False
@@ -94,6 +99,7 @@ class DiscordRPC:
             self.rpc.connect()
             self._closed = False
             self.connected = True
+            self._last_activity_signature = None
             self._backoff = 3
             self._next_retry = 0
             print("[RPC] Connected to Discord.")
@@ -120,6 +126,7 @@ class DiscordRPC:
         finally:
             self._last_track_key = None
             self._last_button_signature = None
+            self._last_activity_signature = None
             self.disconnect()
 
     def _ensure_connected(self):
@@ -174,6 +181,12 @@ class DiscordRPC:
         elif self._last_button_signature:
             activity["buttons"] = []
 
+        signature = json.dumps({**activity, "buttons": buttons or []}, sort_keys=True, default=str)
+        now = time.monotonic()
+        if (signature == getattr(self, "_last_activity_signature", None)
+                and now - getattr(self, "_last_activity_sent", 0.0) < UNCHANGED_ACTIVITY_RESEND_SECONDS):
+            return
+
         payload = {
             "cmd": "SET_ACTIVITY",
             "args": {
@@ -190,6 +203,8 @@ class DiscordRPC:
                 print(f"[RPC] Response: {resp}")
                 self._last_track_key = track_key
             self._last_button_signature = button_signature
+            self._last_activity_signature = signature
+            self._last_activity_sent = now
         except Exception as e:
             print(f"[RPC] Update failed: {e}")
             traceback.print_exc()
@@ -202,6 +217,7 @@ class DiscordRPC:
             self.rpc.clear()
             self._last_track_key = None
             self._last_button_signature = None
+            self._last_activity_signature = None
             print("[RPC] Presence cleared.")
         except Exception as e:
             print(f"[RPC] Clear failed: {e}")

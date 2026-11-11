@@ -67,7 +67,7 @@ def run_runtime(monkeypatch, tmp_path, isolated_environment):
     real_discord = main.DiscordRPC
 
     def run(samples, *, lookup=None, lookup_delay=0, before_sample=None,
-            stop_via_tasks=False, **overrides):
+            stop_via_tasks=False, resolver_factory=None, **overrides):
         cursor = 0
         updates, diagnostics, submissions, events, resolvers = [], [], [], [], []
 
@@ -155,7 +155,8 @@ def run_runtime(monkeypatch, tmp_path, isolated_environment):
             if before_sample:
                 before_sample(current(), main)
             for resolver in resolvers:
-                resolver.complete()
+                if hasattr(resolver, "complete"):
+                    resolver.complete()
 
         def read_track():
             return dict(current().track) if current().track else None
@@ -202,7 +203,14 @@ def run_runtime(monkeypatch, tmp_path, isolated_environment):
         monkeypatch.setattr(main, "get_album_art", art_lookup)
         has_resolver = hasattr(main, "ArtworkResolver")
         if has_resolver:
-            monkeypatch.setattr(main, "ArtworkResolver", ScheduledResolver)
+            if resolver_factory is None:
+                monkeypatch.setattr(main, "ArtworkResolver", ScheduledResolver)
+            else:
+                def make_resolver(lookup):
+                    resolver = resolver_factory(lookup)
+                    resolvers.append(resolver)
+                    return resolver
+                monkeypatch.setattr(main, "ArtworkResolver", make_resolver)
 
         services = {}
         for module, factory, name in (("lastfm", "LastFMScrobbler", "lastfm"),
