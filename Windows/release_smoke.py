@@ -6,6 +6,9 @@ import re
 import sys
 from pathlib import Path
 
+from packaging.requirements import Requirement
+from packaging.version import Version
+
 WINDOWS_DIR = Path(__file__).resolve().parent
 if str(WINDOWS_DIR) not in sys.path:
     sys.path.insert(0, str(WINDOWS_DIR))
@@ -16,6 +19,23 @@ from updater import _extract_sha256, file_sha256
 from release_artifact import embedded_pillow_version
 
 VERSION_RE = re.compile(r'#define\s+MyAppVersion\s+"([^"]+)"')
+
+
+def declared_pillow_version(path=None):
+    requirements = Path(path) if path is not None else WINDOWS_DIR / "requirements.txt"
+    matches = []
+    for line in requirements.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith(("#", "-")):
+            continue
+        requirement = Requirement(line)
+        if requirement.name.casefold() == "pillow":
+            matches.append(requirement)
+    if len(matches) != 1:
+        raise ValueError("Requirements must declare exactly one Pillow version")
+    pins = list(matches[0].specifier)
+    if len(pins) != 1 or pins[0].operator != "==" or "*" in pins[0].version:
+        raise ValueError("Requirements must pin an exact Pillow version")
+    return str(Version(pins[0].version))
 
 
 def installer_version():
@@ -64,6 +84,12 @@ def main():
         errors.append(f"Installer not found: {installer}")
 
     if args.executable:
+        expected_pillow = args.expected_pillow
+        if not expected_pillow:
+            try:
+                expected_pillow = declared_pillow_version()
+            except (OSError, ValueError) as error:
+                errors.append(f"Could not read required Pillow version: {error}")
         executable = Path(args.executable)
         if not executable.exists():
             errors.append(f"Executable not found: {executable}")
@@ -72,9 +98,9 @@ def main():
                 smoke["embedded_pillow"] = embedded_pillow_version(executable)
             except Exception as error:
                 errors.append(f"Could not inspect packaged Pillow: {error}")
-            if args.expected_pillow and smoke["embedded_pillow"] != args.expected_pillow:
+            if expected_pillow and smoke["embedded_pillow"] != expected_pillow:
                 errors.append(
-                    f"Packaged Pillow mismatch: expected {args.expected_pillow}, found {smoke['embedded_pillow'] or 'unknown'}"
+                    f"Packaged Pillow mismatch: expected {expected_pillow}, found {smoke['embedded_pillow'] or 'unknown'}"
                 )
 
     if args.release_notes:
