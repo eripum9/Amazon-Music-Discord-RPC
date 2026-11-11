@@ -5,6 +5,7 @@ import threading
 import pytest
 
 from artwork_resolver import ArtworkResolver
+from types import SimpleNamespace
 
 from .conftest import poll
 
@@ -288,3 +289,127 @@ def test_empty_paused_identity_clears_previous_metadata(run_runtime):
     result.art_lookup.assert_not_called()
     assert result.diagnostics[-2][1]["album_art_url"] == ""
     assert result.diagnostics[-2][1]["track_link"] == ""
+
+
+class ImmediateResolver(ArtworkResolver):
+    def __init__(self, lookup):
+        super().__init__(lookup, start_thread=False)
+
+    def request(self, key, **context):
+        queued = super().request(key, **context)
+        self.process_pending()
+        return queued
+
+
+@pytest.mark.parametrize("status", ["playing", "paused"])
+@pytest.mark.parametrize("boundary", ["private", "stop"])
+def test_gate_transition_before_first_registration_prevents_enqueue(
+        run_runtime, monkeypatch, status, boundary):
+    import desktop_runtime as runtime
+
+    original = runtime.lookup_key
+
+    def transition(*args):
+        assert runtime.active_art_resolver is None
+        if boundary == "private":
+            runtime.current_config = {**runtime.current_config, "privacy_private_session": True}
+            runtime.clear_current_presence("first-registration test")
+        else:
+            runtime._set_rpc_running(False)
+        return original(*args)
+
+    monkeypatch.setattr(runtime, "lookup_key", transition)
+    result = run_runtime([poll(0, status)], resolver_factory=ImmediateResolver)
+    result.art_lookup.assert_not_called()
+    assert not result.resolvers
+    assert not result.updates
+    for service in result.services.values():
+        service.update_now_playing.assert_not_called()
+
+
+def test_transition_inside_constructor_rejects_unregistered_resolver(run_runtime):
+    import desktop_runtime as runtime
+
+    def construct(lookup):
+        assert runtime.active_art_resolver is None
+        runtime.clear_current_presence("constructor interleaving")
+        return ImmediateResolver(lookup)
+
+    result = run_runtime([poll(0)], resolver_factory=construct)
+    result.art_lookup.assert_not_called()
+    assert result.resolvers[0]._closed
+    assert not result.updates
+
+
+def test_registration_and_enqueue_are_serialized_with_privacy_invalidation(run_runtime):
+    import desktop_runtime as runtime
+
+    attempting, completed = threading.Event(), threading.Event()
+    workers, calls = [], []
+
+    def transition():
+        attempting.set()
+        runtime.clear_current_presence("concurrent registration")
+        completed.set()
+
+    def construct(lookup):
+        worker = threading.Thread(target=transition, daemon=True)
+        workers.append(worker)
+        worker.start()
+        assert attempting.wait(1)
+        assert not completed.is_set(), "invalidation must not pass an unregistered resolver"
+        return ImmediateResolver(lookup)
+
+    def lookup(**_context):
+        calls.append(completed.is_set())
+        return (None, "", "", 0)
+
+    try:
+        run_runtime([poll(0)], resolver_factory=construct, lookup=lookup)
+    finally:
+        for worker in workers:
+            worker.join(timeout=1)
+    assert completed.is_set()
+    assert calls == [False]
+    assert not any(worker.is_alive() for worker in workers)
+
+
+def test_quit_closes_registered_worker_before_other_shutdown(monkeypatch):
+    import desktop_runtime as runtime
+
+    entered, release, stopping = threading.Event(), threading.Event(), threading.Event()
+    calls, tokens = [], []
+
+    def lookup(title, cancel_event):
+        calls.append(title)
+        tokens.append(cancel_event)
+        entered.set()
+        release.wait(2)
+        return (None, "", "", 0)
+
+    resolver = ArtworkResolver(lookup)
+    monkeypatch.setattr(runtime, "active_art_resolver", resolver)
+    monkeypatch.setattr(runtime, "rpc_running", True)
+    monkeypatch.setattr(runtime, "application_state", runtime.ApplicationState())
+
+    def request_stop():
+        assert resolver._closed
+        assert tokens[0].is_set()
+        stopping.set()
+
+    monkeypatch.setattr(runtime, "tasks", SimpleNamespace(request_stop=request_stop))
+    for name in ("active_rpc", "amazify_bridge", "status_overlay", "windows"):
+        monkeypatch.setattr(runtime, name, None)
+    try:
+        resolver.request("A", title="active")
+        assert entered.wait(1)
+        resolver.request("B", title="queued")
+        runtime.on_quit(None, None)
+        assert stopping.is_set()
+        assert not runtime.rpc_running
+    finally:
+        release.set()
+        resolver.close(timeout=1)
+    assert calls == ["active"]
+    assert resolver.result("B") is None
+    assert not resolver._thread.is_alive()

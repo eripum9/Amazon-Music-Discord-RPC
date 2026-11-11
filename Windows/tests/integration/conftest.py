@@ -6,6 +6,7 @@ import importlib
 import socket
 import subprocess
 import sys
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -78,6 +79,7 @@ def run_runtime(monkeypatch, tmp_path, isolated_environment):
             def __init__(self, _client_id):
                 self.connected = True
                 self._closed = False
+                self._shutdown_lock = threading.Lock()
                 self.rpc = SimpleNamespace(
                     clear=lambda: events.append("discord.clear"),
                     close=lambda: events.append("discord.close"),

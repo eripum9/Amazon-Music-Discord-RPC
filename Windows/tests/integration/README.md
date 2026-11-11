@@ -40,3 +40,16 @@ test, or the full unit suite. Loopback tests use real time with scheduling
 tolerance, including trickling headers and bodies, cancellation that frees
 the worker, size/redirect rejection, and a real slow provider followed by a
 successful fallback. Playback tests use fake time and no sleeps.
+
+The lifecycle regressions also interleave stop/privacy with the first
+resolver's construction and registration, and exercise quit with A running
+and B queued. Related `../test_artwork_http.py` tests bound multi-address TCP,
+TLS handshakes, and verified TLS bodies, including cancellation. Its public
+test certificate/key is used only on loopback; no credentials are needed.
+HTTP and HTTPS CONNECT proxies and both Requests CA-bundle environment
+variables have positive controls.
+
+OS DNS resolution remains synchronous and non-interruptible; cancellation
+and the absolute deadline are checked immediately when it returns, before
+opening a socket. No auxiliary DNS thread is created. SOCKS proxies are
+explicitly rejected rather than silently falling back to a direct connection.

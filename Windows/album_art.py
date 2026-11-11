@@ -1,16 +1,14 @@
 # MIT License - Copyright (c) 2026 eripum9
 
-import http.client
 import json
 import os
 import re
-import socket
-import threading
 import time
 import unicodedata
 from difflib import SequenceMatcher
 import requests
 from urllib.parse import quote, urlsplit
+from artwork_http import get_with_deadline
 
 _cache = {}
 
@@ -167,7 +165,7 @@ _monotonic = time.monotonic
 
 
 def _get_json(url, deadline, cancel_event=None):
-    """Bound response headers and body, including buffered trickling reads."""
+    """Bound TCP/TLS, headers and body; OS DNS resolution is not interruptible."""
     remaining = deadline - _monotonic()
     if remaining < MIN_REQUEST_TIMEOUT_SECONDS or (cancel_event and cancel_event.is_set()):
         raise requests.Timeout("artwork lookup budget exhausted")
@@ -178,57 +176,11 @@ def _get_json(url, deadline, cancel_event=None):
     ) or (target.scheme == "http" and target.hostname == "127.0.0.1")
     if not allowed or target.username or target.password or target.fragment:
         raise requests.RequestException("invalid artwork endpoint")
-    connection_type = http.client.HTTPSConnection if target.scheme == "https" else http.client.HTTPConnection
-    connection = connection_type(target.hostname, target.port, timeout=min(PER_REQUEST_TIMEOUT_SECONDS, remaining))
-    finished = threading.Event()
-    watcher = None
-    response = None
-    try:
-        connection.connect()
-        sock = connection.sock
-
-        def abort_at_deadline():
-            # Shutdown the captured socket even when HTTPResponse owns it after
-            # a Connection: close header; connection.close() alone cannot do that.
-            while not finished.is_set():
-                left = deadline - _monotonic()
-                if left <= 0 or (cancel_event and cancel_event.is_set()):
-                    try:
-                        sock.shutdown(socket.SHUT_RDWR)
-                    except OSError:
-                        pass
-                    return
-                finished.wait(min(left, 0.05))
-
-        watcher = threading.Thread(target=abort_at_deadline, name="artwork-http-deadline", daemon=True)
-        watcher.start()
-        if _monotonic() >= deadline or (cancel_event and cancel_event.is_set()):
-            raise requests.Timeout("artwork lookup budget exhausted")
-        connection.request("GET", target.path + ("?" + target.query if target.query else ""),
-                           headers={"Accept": "application/json", "Accept-Encoding": "identity"})
-        response = connection.getresponse()
-        if response.status != 200:
-            raise requests.HTTPError(f"artwork HTTP status {response.status}")
-        body = response.read(MAX_RESPONSE_BYTES + 1)
-        if _monotonic() >= deadline or (cancel_event and cancel_event.is_set()):
-            raise requests.Timeout("artwork lookup deadline passed")
-        if len(body) > MAX_RESPONSE_BYTES:
-            raise ValueError("artwork lookup response too large")
-        payload = json.loads(body.decode("utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError("artwork lookup response is not an object")
-        return payload
-    except requests.RequestException:
-        raise
-    except (OSError, http.client.HTTPException) as error:
-        raise requests.RequestException("artwork transport failed") from error
-    finally:
-        finished.set()
-        if response:
-            response.close()
-        connection.close()
-        if watcher:
-            watcher.join(timeout=0.2)
+    body = get_with_deadline(url, deadline, cancel_event, MAX_RESPONSE_BYTES)
+    payload = json.loads(body.decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("artwork lookup response is not an object")
+    return payload
 
 
 def _fold(value):
