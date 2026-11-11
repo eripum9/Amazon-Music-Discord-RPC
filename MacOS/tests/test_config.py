@@ -86,6 +86,50 @@ def test_plaintext_legacy_secret_is_migrated(isolated_config):
     )
 
 
+@pytest.mark.parametrize("failure", ["write", "readback"])
+def test_legacy_migration_failure_preserves_file(isolated_config, monkeypatch, failure):
+    config_dir, store = isolated_config
+    config_dir.mkdir(parents=True)
+    path = config_dir / "config.json"
+    original = json.dumps({"listenbrainz_token": "legacy-token", "show_paused": False,
+                           config.CONFIG_REVISION_KEY: 7})
+    path.write_text(original, encoding="utf-8")
+    if failure == "write":
+        monkeypatch.setattr(config, "_keychain_write", lambda key, value: False)
+    else:
+        monkeypatch.setattr(config, "_keychain_read", lambda key: "different-token")
+
+    with pytest.raises(OSError):
+        config.load_config()
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_partial_legacy_migration_retries_without_losing_values(isolated_config, monkeypatch):
+    config_dir, store = isolated_config
+    config_dir.mkdir(parents=True)
+    path = config_dir / "config.json"
+    keys = ("listenbrainz_token", "lastfm_session_key")
+    monkeypatch.setattr(config, "SENSITIVE_CONFIG_KEYS", keys)
+    original = json.dumps({keys[0]: "first", keys[1]: "second", "show_paused": False,
+                           config.CONFIG_REVISION_KEY: 9})
+    path.write_text(original, encoding="utf-8")
+    write = config._keychain_write
+    monkeypatch.setattr(config, "_keychain_write", lambda key, value: key != keys[1] and write(key, value))
+
+    with pytest.raises(OSError):
+        config.load_config()
+    assert path.read_text(encoding="utf-8") == original
+    assert store == {keys[0]: "first"}
+
+    monkeypatch.setattr(config, "_keychain_write", write)
+    loaded = config.load_config()
+    assert [loaded[key] for key in keys] == ["first", "second"]
+    assert store == {keys[0]: "first", keys[1]: "second"}
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "show_paused": False, config.CONFIG_REVISION_KEY: 9
+    }
+
+
 def test_redaction_removes_secret_values(isolated_config):
     payload = {
         "listenbrainz_token": "top-secret-token",
@@ -94,6 +138,66 @@ def test_redaction_removes_secret_values(isolated_config):
     redacted = config.redact_data(payload, payload)
     assert redacted["listenbrainz_token"] == config.REDACTION_TEXT
     assert "top-secret-token" not in redacted["message"]
+
+
+def test_partial_keychain_save_invalidates_stale_revision(isolated_config, monkeypatch):
+    config_dir, store = isolated_config
+    keys = ("listenbrainz_token", "lastfm_session_key")
+    monkeypatch.setattr(config, "SENSITIVE_CONFIG_KEYS", keys)
+    config.update_config_fields({keys[0]: "old-token", keys[1]: "old-session"})
+    stale = config.load_config()
+    write = config._keychain_write
+    monkeypatch.setattr(config, "_keychain_write", lambda key, value: key != keys[1] and write(key, value))
+    with pytest.raises(OSError):
+        config.update_config_fields({keys[0]: "new-token", keys[1]: "", "show_paused": False})
+    public = json.loads((config_dir / "config.json").read_text(encoding="utf-8"))
+    assert public[config.CONFIG_REVISION_KEY] == stale[config.CONFIG_REVISION_KEY] + 1
+    assert public["show_paused"] == stale["show_paused"]
+    assert store[keys[0]] == "new-token"
+    with pytest.raises(config.ConfigConflictError):
+        config.save_config(stale)
+
+
+@pytest.mark.parametrize("failure", [None, 1])
+def test_keychain_read_failure_preserves_secrets_and_public_settings(isolated_config, monkeypatch, failure):
+    config_dir, store = isolated_config
+    config.update_config_fields({"listenbrainz_token": "existing-token"})
+    original = (config_dir / "config.json").read_bytes()
+    security = config._security
+    def fail_read(args, **kwargs):
+        if args[0] == "find-generic-password":
+            return None if failure is None else SimpleNamespace(returncode=failure, stdout="", stderr="locked")
+        return security(args, **kwargs)
+    monkeypatch.setattr(config, "_security", fail_read)
+    with pytest.raises(OSError, match="Keychain"):
+        config.update_config_fields({"privacy_private_session": True})
+    assert store["listenbrainz_token"] == "existing-token"
+    assert (config_dir / "config.json").read_bytes() == original
+
+
+@pytest.mark.parametrize("code,expected", [(None, False), (1, False), (0, True), (44, True)])
+def test_keychain_deletion_requires_confirmed_result(isolated_config, monkeypatch, code, expected):
+    monkeypatch.setattr(config, "_security", lambda *args, **kwargs: None if code is None else SimpleNamespace(returncode=code))
+    assert config._keychain_delete("listenbrainz_token") is expected
+    assert config.clear_sensitive_credentials() is expected
+
+
+def test_public_update_does_not_rewrite_credentials(isolated_config, monkeypatch):
+    _, store = isolated_config
+    config.update_config_fields({"listenbrainz_token": "existing-token"})
+    monkeypatch.setattr(config, "_keychain_write", lambda *args: (_ for _ in ()).throw(AssertionError("unrelated credential write")))
+    config.update_config_fields({"privacy_private_session": True})
+    config.mutate_config_fields({"show_paused"}, lambda current: {"show_paused": not current["show_paused"]})
+    assert store["listenbrainz_token"] == "existing-token"
+
+
+def test_public_only_revisioned_save_preserves_privacy_and_secrets(isolated_config):
+    _, store = isolated_config
+    saved = config.update_config_fields({"privacy_private_session": True, "listenbrainz_token": "existing-token"})
+    result = config.save_config({config.CONFIG_REVISION_KEY: saved[config.CONFIG_REVISION_KEY], "show_paused": False})
+    assert result["privacy_private_session"] is True
+    assert result["listenbrainz_token"] == "existing-token"
+    assert store["listenbrainz_token"] == "existing-token"
 
 
 def test_startup_uses_launch_agent(isolated_config, monkeypatch):

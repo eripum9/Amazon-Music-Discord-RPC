@@ -197,8 +197,10 @@ def _keychain_read(key):
     result = _security(
         ["find-generic-password", "-a", str(key), "-s", KEYCHAIN_SERVICE, "-w"]
     )
-    if not result or result.returncode != 0:
+    if result and result.returncode == 44:
         return ""
+    if not result or result.returncode != 0:
+        raise OSError("Could not read macOS Keychain; unlock it or restore access and try again")
     return (result.stdout or "").rstrip("\r\n")
 
 
@@ -225,7 +227,7 @@ def _keychain_delete(key):
     result = _security(
         ["delete-generic-password", "-a", str(key), "-s", KEYCHAIN_SERVICE]
     )
-    return bool(result is None or result.returncode in (0, 44))
+    return bool(result and result.returncode in (0, 44))
 
 
 def _read_public_config():
@@ -250,11 +252,13 @@ def _load_config_locked():
     # Migrate any pre-Keychain prototype files without retaining plaintext secrets.
     migrated = False
     for key in SENSITIVE_CONFIG_KEYS:
-        legacy = str(public.pop(key, "") or "")
+        legacy = str(public.get(key, "") or "")
         if legacy:
-            _keychain_write(key, legacy)
+            if not _keychain_write(key, legacy) or _keychain_read(key) != legacy:
+                raise OSError(f"Could not migrate {key} to macOS Keychain")
             migrated = True
     if migrated:
+        public = _public_config(public)
         _atomic_write_json(CONFIG_PATH, public)
     secrets = {key: _keychain_read(key) for key in SENSITIVE_CONFIG_KEYS}
     return _complete_config({**public, **{k: v for k, v in secrets.items() if v}})
@@ -276,10 +280,16 @@ def _stored_revision(config):
         return 0
 
 
-def _persist_config_locked(config, revision):
+def _persist_config_locked(config, revision, secret_fields=None):
     persisted = _complete_config(config)
     persisted[CONFIG_REVISION_KEY] = int(revision)
+    previous_public = _public_config(_read_public_config())
+    previous_public[CONFIG_REVISION_KEY] = int(revision)
+    _atomic_write_json(CONFIG_PATH, previous_public)
+    requested = set(SENSITIVE_CONFIG_KEYS if secret_fields is None else secret_fields)
     for key in SENSITIVE_CONFIG_KEYS:
+        if key not in requested:
+            continue
         if key in persisted and not _keychain_write(key, persisted.get(key, "")):
             raise OSError(f"Could not store {key} in macOS Keychain")
     _atomic_write_json(CONFIG_PATH, _public_config(persisted))
@@ -297,7 +307,8 @@ def save_config(config):
             raise ConfigConflictError(
                 f"Configuration changed from revision {expected} to {current_revision}"
             )
-        return _persist_config_locked(config, current_revision + 1)
+        desired = {**current, **dict(config or {})}
+        return _persist_config_locked(desired, current_revision + 1, secret_fields=set(config or {}).intersection(SENSITIVE_CONFIG_KEYS))
 
 
 def update_config_fields(updates, expected_revision=None):
@@ -312,7 +323,7 @@ def update_config_fields(updates, expected_revision=None):
         if expected_revision is not None and int(expected_revision) > current_revision:
             raise ConfigConflictError("Configuration revision is newer than the stored revision")
         current.update(updates)
-        return _persist_config_locked(current, current_revision + 1)
+        return _persist_config_locked(current, current_revision + 1, secret_fields=set(updates).intersection(SENSITIVE_CONFIG_KEYS))
 
 
 def mutate_config_fields(fields, transform):
@@ -325,7 +336,7 @@ def mutate_config_fields(fields, transform):
         if not isinstance(proposed, dict) or set(proposed).difference(allowed):
             raise ValueError("Configuration mutation changed fields outside its declared scope")
         current.update(proposed)
-        return _persist_config_locked(current, _stored_revision(current) + 1)
+        return _persist_config_locked(current, _stored_revision(current) + 1, secret_fields=set(proposed).intersection(SENSITIVE_CONFIG_KEYS))
 
 
 def credential_storage_status():
