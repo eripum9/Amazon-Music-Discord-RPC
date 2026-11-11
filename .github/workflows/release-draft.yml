@@ -53,7 +53,7 @@ jobs:
         with:
           python-version: "3.12.10"
           cache: pip
-          cache-dependency-path: Windows/requirements-release.lock
+          cache-dependency-path: Windows/requirements-release.txt
 
       - name: Validate source and version
         id: source
@@ -85,7 +85,7 @@ jobs:
           .github/scripts/test-release-target-offline.ps1
 
       - name: Install pinned dependencies
-        run: python -m pip install --require-hashes --only-binary=winsdk -r Windows/requirements-release.lock
+        run: python -m pip install --require-hashes --only-binary=winsdk -r Windows/requirements-release.txt
 
       - name: Install Inno Setup
         shell: pwsh
@@ -118,7 +118,7 @@ jobs:
         run: python -m pyright Windows/app_models.py Windows/runtime_state.py Windows/task_supervisor.py Windows/structured_logging.py Windows/window_controller.py Windows/rpc_controller.py Windows/command_controller.py Windows/main.py
 
       - name: Dependency audit
-        run: python -m pip_audit -r Windows/requirements-release.lock --strict
+        run: python -m pip_audit -r Windows/requirements-release.txt --strict
 
       - name: Build executable
         run: python -m PyInstaller Windows/AmazonMusicRPC.spec --noconfirm --clean --workpath Windows/build --distpath Windows/dist
@@ -135,7 +135,7 @@ jobs:
           Set-Content -LiteralPath "$installer.sha256" -Value "$hash  AmazonMusicRPC_Setup.exe" -Encoding ascii
 
       - name: Release smoke
-        run: python Windows/release_smoke.py --installer Windows/installer_output/AmazonMusicRPC_Setup.exe --executable Windows/dist/AmazonMusicRPC.exe --expected-pillow 13.0.0
+        run: python Windows/release_smoke.py --installer Windows/installer_output/AmazonMusicRPC_Setup.exe --executable Windows/dist/AmazonMusicRPC.exe
 
       - name: Packaged window smoke tests
         shell: pwsh

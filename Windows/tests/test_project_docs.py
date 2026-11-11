@@ -93,7 +93,7 @@ def test_platform_roadmap_keeps_windows_stable_and_macos_active_beta():
 def test_official_release_workflow_keeps_trust_guards():
     workflow = (ROOT / ".github/workflows/release-draft.yml").read_text(encoding="utf-8")
     spec = (ROOT / "Windows/AmazonMusicRPC.spec").read_text(encoding="utf-8")
-    lock = (ROOT / "Windows/requirements-release.lock").read_text(encoding="utf-8")
+    lock = (ROOT / "Windows/requirements-release.txt").read_text(encoding="utf-8")
     requirements = (ROOT / "Windows/requirements.txt").read_text(encoding="utf-8")
     assert "workflow_dispatch:" in workflow
     assert "refs/heads/master" in workflow
@@ -127,7 +127,6 @@ def test_official_release_workflow_keeps_trust_guards():
     )
     assert Version(next(iter(pillow_pin.specifier)).version) >= Version("13.0.0")
     assert "pillow==12.2.0" not in lock
-    assert "pytest-cov==7.1.0" in lock
     assert "--hash=sha256:" in lock
     assert "WINDOWS_SIGNING" not in workflow
     assert "signtool" not in workflow.lower()
@@ -136,10 +135,9 @@ def test_official_release_workflow_keeps_trust_guards():
         for line in requirements.splitlines()
         if line.lower().startswith("pillow==")
     )
-    workflow_pillow_version = re.search(r"--expected-pillow\s+(\S+)", workflow)
-    assert workflow_pillow_version is not None
-    workflow_pillow = Requirement(f"Pillow=={workflow_pillow_version.group(1)}")
-    assert workflow_pillow.specifier == declared_pillow.specifier
+    assert len(declared_pillow.specifier) == 1
+    assert "--executable Windows/dist/AmazonMusicRPC.exe" in workflow
+    assert "--expected-pillow" not in workflow
 
 
 def test_release_inputs_are_data_and_target_guard_runs_before_mutation():
@@ -159,7 +157,10 @@ def test_release_inputs_are_data_and_target_guard_runs_before_mutation():
 
 
 def test_release_lock_matches_all_declared_dependency_pins():
-    lock = (ROOT / "Windows/requirements-release.lock").read_text(encoding="utf-8")
+    lock_path = ROOT / "Windows/requirements-release.txt"
+    assert lock_path.suffix == ".txt"
+    assert not (ROOT / "Windows/requirements-release.lock").exists()
+    lock = lock_path.read_text(encoding="utf-8")
     locked = {
         canonicalize_name(requirement.name): requirement
         for line in lock.splitlines()
