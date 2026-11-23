@@ -4,6 +4,6 @@ requests==2.34.2
 Pillow==13.0.0
 PySide6-Essentials==6.12.0
 pywebview==6.2.1
-pylast==7.2.0
+pylast==7.3.0
 liblistenbrainz==0.7.0
 cryptography==50.0.2
